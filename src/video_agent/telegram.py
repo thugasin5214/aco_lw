@@ -20,6 +20,7 @@ HELP = """aco_lw 命令（不唤醒 LLM）：
 /status 系统与队列状态
 /rounds 最近几轮
 /round 模板 [数量] [prompt]  直接出一轮候选
+/review 重新推送待审阅的候选
 /redo 最近一轮待审阅的整轮重做
 /pause /resume 暂停 / 恢复出图
 /cancel 取消排队中的任务（含正在跑的本系统任务）
@@ -169,7 +170,10 @@ class TelegramBot:
             if text.startswith("/whoami"):
                 self.api.send(chat, f"你的 chat_id：{chat}")
                 return
-            if chat not in self.allowed or not text:
+            if chat not in self.allowed:
+                log.info("忽略非白名单 chat_id=%s 的消息", chat)
+                return
+            if not text:
                 return
             reply = lambda m, b=None: self.api.send(chat, m, b)
             self.actions.inbound("telegram", text, reply)

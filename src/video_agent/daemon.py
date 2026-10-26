@@ -101,6 +101,7 @@ class Actions:
     def __init__(self, studio: Studio, planner: Planner, worker: Worker | None = None):
         self.studio, self.planner, self.worker = studio, planner, worker
         self.store = studio.store
+        self.push_round: Callable[[dict], None] | None = None  # 由 Daemon 注入（推送到 Telegram）
         self.jobs: queue.Queue[tuple[Callable[[], None], Reply]] = queue.Queue()
 
     # ---- 规划器队列（单线程，按需唤醒 LLM） ----
@@ -327,6 +328,16 @@ class Actions:
                 )
                 or "当前项目还没有轮次"
             )
+        elif cmd == "/review":
+            rows = store.rounds(s.current_project()["id"], "review")
+            if not rows:
+                say("当前项目没有待审阅的轮次")
+            elif not self.push_round:
+                say(f"有 {len(rows)} 轮待审阅；未配置 Telegram，请在控制台 #review 页审阅。")
+            else:
+                for r in reversed(rows):
+                    self.push_round(r)
+                say(f"已重新推送 {len(rows)} 轮待审阅候选。")
         elif cmd == "/redo":
             rows = store.rounds(s.current_project()["id"], "review")
             if not rows:
@@ -381,6 +392,9 @@ class Daemon:
         if cfg.telegram_token:
             self.bot = TelegramBot(
                 TelegramAPI(cfg.telegram_token), self.actions, cfg.telegram_chat_ids
+            )
+            self.actions.push_round = lambda r: self.bot.send_round(
+                r, self.orch.store.round_tasks(r["id"]), self.orch.store.task_dir
             )
 
     def notify_round(self, rnd: dict) -> None:
