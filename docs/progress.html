@@ -48,7 +48,7 @@ code{color:var(--accent);font-size:.92em;overflow-wrap:anywhere}
 <main>
 <div class="muted small">aco_lw · 轻量本地视频 Agent · 更新于 2026-10-26</div>
 <h1>项目进度</h1>
-<div class="lead">阶段 0 已完成，G0 已通过。阶段 1 已完成，G1 已通过：真机出图 21 s；生成中 <code>kill -9</code> 后 <code>va recover</code> 只对账，ComfyUI 中仅 1 次提交；Web 进度台可见 DAG 与产物。下一步：阶段 2（Telegram + 审阅）。</div>
+<div class="lead">阶段 0、1 已通过。阶段 2 代码完成：常驻服务 <code>va daemon</code>、控制台审阅（通过 / 重做 / 微调 / 打回+批注）、项目与对话历史、导演基准包、LLM 规划器（真机实测：理解需求 7–10 s，批注改写 7 s）。剩 G2：配置 Telegram bot 后在手机上完成一次选版。</div>
 
 <h2>阶段路线</h2>
 <div class="road">
@@ -56,12 +56,29 @@ code{color:var(--accent);font-size:.92em;overflow-wrap:anywhere}
     <div class="g">G0：视频冒烟通过，峰值内存与切换耗时已记录</div><span class="tag">已通过</span></div>
   <div class="ph done"><div class="n">阶段 1</div><div class="t">编排器 + 图片闭环 + Web 进度台</div>
     <div class="g">G1：CLI 图片闭环；重启不重复提交；Web 能看 DAG 与产物</div><span class="tag">已通过</span></div>
-  <div class="ph now"><div class="n">阶段 2 · 下一步</div><div class="t">Telegram + 审阅流程</div>
-    <div class="g">G2：手机上能完成选版；等待期间无 LLM 推理</div><span class="tag">待开始</span></div>
+  <div class="ph now"><div class="n">阶段 2 · 进行中</div><div class="t">Telegram + 审阅 + 项目历史</div>
+    <div class="g">G2：手机上能完成选版；等待期间无 LLM 推理</div><span class="tag">等 G2 验收</span></div>
   <div class="ph"><div class="n">阶段 3</div><div class="t">短视频闭环 + 有限探索</div>
     <div class="g">G3：遵守探索预算；未经选定不替换定妆</div><span class="tag">后续</span></div>
   <div class="ph"><div class="n">阶段 4</div><div class="t">扩展能力（OpenClaw 子 agent）</div>
     <div class="g">G4：按需启动、能退出、无孤儿进程</div><span class="tag">后续</span></div>
+</div>
+
+<h2>阶段 2 任务</h2>
+<div class="box">
+  <div class="bar"><i style="width:90%"></i></div><div class="muted small">9 / 10 完成</div>
+  <ul class="tasks">
+    <li class="d"><span class="ck">✓</span><span class="id">T2.1</span><span>候选轮：一次出 N 个候选（默认 4，可配置；视频默认 1），整轮跑完进入待审阅</span></li>
+    <li class="d"><span class="ck">✓</span><span class="id">T2.2</span><span>常驻服务 <code>va daemon</code>：Worker 串行出图 + 规划器队列 + Telegram + Web；启动先对账</span></li>
+    <li class="d"><span class="ck">✓</span><span class="id">T2.3</span><span>审阅动作：通过（可锁进基准包）/ 整轮重做 / 微调（保留种子）/ 打回+批注</span></li>
+    <li class="d"><span class="ck">✓</span><span class="id">T2.4</span><span>导演基准包：版本化，<code>@pack:角色</code> 引用</span></li>
+    <li class="d"><span class="ck">✓</span><span class="id">T2.5</span><span>Telegram：白名单、命令不唤醒 LLM、原图文件发送、内联按钮</span></li>
+    <li class="d"><span class="ck">✓</span><span class="id">T2.6</span><span>LLM 规划器：按需唤醒（TTL 5 min），输出经模板槽位校验；视频生成时排队</span></li>
+    <li class="d"><span class="ck">✓</span><span class="id">T2.7</span><span>控制台审阅页：候选并排、快捷键 1–9 / Enter / F / R / X / J / K</span></li>
+    <li class="d"><span class="ck">✓</span><span class="id">T2.8</span><span>驻留模式 <code>/mode</code>：按需 / 会话 / 常驻 / 纯命令</span></li>
+    <li class="d"><span class="ck">✓</span><span class="id">T2.10</span><span>项目与对话历史：历史项目永久保留，控制台可看已完成项目、轮次、基准包版本、完整对话</span></li>
+    <li class="w"><span class="ck">…</span><span class="id">T2.9</span><span>G2 验收：手机上收到 4 个候选 → 选中锁定 → 批注 → 新一轮；等待期间 LLM 已按 TTL 卸载</span></li>
+  </ul>
 </div>
 
 <h2>阶段 1 任务</h2>
@@ -91,6 +108,8 @@ code{color:var(--accent);font-size:.92em;overflow-wrap:anywhere}
 <tr><td>出图 1280×720</td><td>冷 23 s，热 11.4 s</td><td>图片审阅会话保留生成模型</td></tr>
 <tr><td>视频 640×384×3s（H3）</td><td>230–321 s，峰值 54 GiB</td><td>提交视频前卸载 LLM</td></tr>
 <tr><td>视频 + 27B 共存</td><td>压力警告档，swap +3.7 GiB</td><td>门控阈值 62 GiB</td></tr>
+<tr><td>图生视频（H3 I2V）</td><td>329 s，峰值 54.9 GiB，压力短暂警告</td><td><code>h3-i2v</code> smoke 档标为已实测</td></tr>
+<tr><td>LLM 规划（27B，结构化 JSON）</td><td>理解需求 7–10 s，批注改写 7 s</td><td>自由文本可接受；命令与按钮不走 LLM</td></tr>
 <tr><td>ComfyUI 进程 RSS</td><td>看不到 Metal 占用</td><td>门控看系统可用内存 + 压力等级</td></tr>
 </table></div>
 <p class="muted small">完整数据见 <code>docs/baseline.md</code>；计划与范围见 <code>PLAN.md</code>。</p>
@@ -100,6 +119,9 @@ code{color:var(--accent);font-size:.92em;overflow-wrap:anywhere}
   <p>2026-10-26 · 视频模型不固定（MiniMax H3 / LTX 2.5 / 更新的）→ 模板与模型注册表可插拔，新模型只加模板目录与一条实测记录。</p>
   <p>2026-10-26 · 用户会手动用 ComfyUI → 提交前要求队列空闲，释放前二次确认，不取消别人的任务。</p>
   <p>2026-10-26 · 第一版就要 Web 进度台（只读）：DAG、阶段流水线、产物预览。审阅操作仍在阶段 2。</p>
+  <p>2026-10-26 · 进度台端口改为 8790（8765 是用户另一个 server）。</p>
+  <p>2026-10-26 · 阶段 2：新建专用 Telegram bot；候选以原图文件发送；手机只用 Telegram；每轮候选数可配置，默认 4。</p>
+  <p>2026-10-26 · 阶段 2 加入“项目”与对话历史：历史项目永久保留，控制台可看已完成项目与完整对话。</p>
 </div>
 </main>
 </body>

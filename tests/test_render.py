@@ -13,9 +13,7 @@ OBJECT_INFO = json.loads((Path(__file__).parent / "object_info_min.json").read_t
 
 def test_all_templates_load_and_pass_object_info():
     for t in REG.templates.values():
-        _, p = resolve(
-            t, {"image": "up.png"} if "image" in t.slots else {}, allow_unverified=True
-        )
+        _, p = resolve(t, {"image": "up.png"} if "image" in t.slots else {}, allow_unverified=True)
         assert check_graph(render(t, p), OBJECT_INFO) == [], t.name
 
 

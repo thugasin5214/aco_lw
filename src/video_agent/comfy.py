@@ -73,6 +73,11 @@ class Comfy:
             raise ComfyBusy("ComfyUI 队列在确认间隙变为非空，拒绝释放")
         self.http.post("/free", json={"unload_models": True, "free_memory": True})
 
+    def interrupt(self, prompt_id: str) -> None:
+        """只中断 / 移除指定 prompt_id（我们自己的任务），不影响别人的任务。"""
+        self.http.post("/interrupt", json={"prompt_id": prompt_id})
+        self.http.post("/queue", json={"delete": [prompt_id]})
+
     def download(self, filename: str, subfolder: str, type_: str, dest: Path) -> Path:
         params = {"filename": filename, "subfolder": subfolder, "type": type_}
         with self.http.stream("GET", "/view", params=params, timeout=300) as r:

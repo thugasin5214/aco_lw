@@ -82,6 +82,9 @@ class Orchestrator:
         parent_id: str | None = None,
         allow_unverified: bool = False,
         allow_duplicate: bool = False,
+        project_id: str | None = None,
+        round_id: str | None = None,
+        idx: int | None = None,
     ) -> dict:
         t = self.registry.template(template)
         params = dict(params)
@@ -90,12 +93,15 @@ class Orchestrator:
             if parent is None:
                 raise KeyError(f"父任务 {parent_id} 不存在")
             self._inherit_image(t, params, parent)
+        for name, slot in t.slots.items():
+            if slot.type == "image" and isinstance(params.get(name), str):
+                params[name] = self.resolve_ref(params[name], project_id)
         tier, resolved = resolve(t, params, tier, allow_unverified)
         h = params_hash(t, resolved)
         dup = self.store.find_duplicate(h)
         if dup and not allow_duplicate:
             raise DuplicateTask(dup)
-        return self.store.create(
+        task = self.store.create(
             template=t.name,
             template_sha=t.sha,
             kind=t.kind,
@@ -104,7 +110,28 @@ class Orchestrator:
             params_hash=h,
             title=title,
             parent_id=parent_id,
+            project_id=project_id,
+            round_id=round_id,
+            idx=idx,
         )
+        self.store.touch_project(project_id)
+        return task
+
+    def resolve_ref(self, value: str, project_id: str | None) -> str:
+        """图片引用：`@pack:角色` → 项目基准包最新版本里的文件；`@task:ID` → 该任务第一张图。"""
+        if value.startswith("@pack:"):
+            role = value[len("@pack:") :]
+            pack = self.store.pack(project_id) if project_id else None
+            if not pack or role not in pack["assets"]:
+                raise ValueError(f"基准包里没有 {role}")
+            return pack["assets"][role]["file"]
+        if value.startswith("@task:"):
+            src = self.store.get(value[len("@task:") :])
+            img = src and next((o for o in src["outputs"] if o["kind"] == "image"), None)
+            if img is None:
+                raise ValueError(f"{value} 没有图片产物")
+            return str(self.store.task_dir(src["id"]) / img["file"])
+        return value
 
     def _inherit_image(self, t: Template, params: dict, parent: dict) -> None:
         """子任务未指定图片时，用父任务的第一张图片产物（例如定妆图 → 图生视频）。"""

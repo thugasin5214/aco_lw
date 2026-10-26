@@ -14,3 +14,4 @@
 - LM Studio: http://127.0.0.1:1234，CLI `lms`
 - 源 API 模板：`~/Documents/ChatGPT/jev/workflows/标准实验室/*-API.json`
 - 命令：`uv run pytest`，`uv run ruff check`，`uv run va ...`
+- Web 进度台默认端口 8790（8765 被用户另一个 server 使用，勿占用）

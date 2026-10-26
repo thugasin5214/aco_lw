@@ -21,6 +21,10 @@ class Settings:
     memory_wait_s: float = 600.0
     poll_interval_s: float = 2.0
     task_timeout_s: float = 5400.0
+    web_port: int = 8790  # 8765 是用户另一个 server
+    round_size: int = 4
+    telegram_token: str = ""
+    telegram_chat_ids: list[int] = field(default_factory=list)
     data_dir: Path = field(default_factory=lambda: ROOT / "data")
     templates_dir: Path = field(default_factory=lambda: ROOT / "templates")
 

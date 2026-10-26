@@ -14,7 +14,7 @@ slots:
   refine_steps: {node: "3", field: refine_steps, type: int, min: 0, max: 8}
   force_regenerate: {node: "3", field: force_regenerate, type: bool}
 tiers:
-  smoke: {width: 640, height: 384, seconds: 3, verified: false}   # 同引擎同档位，但 I2V 未实测
+  smoke: {width: 640, height: 384, seconds: 3, verified: true}    # 2026-10-26 实测 329 s，峰值 54.9 GiB
   hd:    {width: 1280, height: 736, seconds: 3, verified: false}
   portrait: {width: 576, height: 1024, seconds: 3, verified: false}
 default_tier: smoke
