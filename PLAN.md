@@ -134,7 +134,9 @@ G0 结论（详见 `docs/baseline.md`）：LLM 加载仅约 15 s；视频峰值�
 
 **目标**：在一台新的 Mac 上，按安装文档执行一条命令 → 打开浏览器里的配置向导 → 走完即可出图 / 出视频。
 
-**范围（待用户确认，见 §8 待决）**
+**已定（2026-10-26）**：只支持 Apple Silicon Mac；安装器只装 aco_lw，ComfyUI / FreeVideo / LM Studio / 模型由向导**检测 + 引导安装**（给命令或下载链接，装好自动识别）；形态为**一行命令 + launchd 后台服务**；配置向导为 **Web（首次进入 `/setup`，之后控制台“设置”页可改）**。
+
+**范围**
 - **安装器**：一条命令安装（`curl … | sh` → 检查 macOS / Apple Silicon / 内存 / 磁盘 → 安装 uv → 安装 aco_lw 到 `~/Applications/aco_lw` 或 `uv tool`）→ 注册 launchd 常驻（开机自启、崩溃重启）→ 打开向导。
 - **配置向导（Web，首次启动自动进入 `/setup`）**：
   1. 环境体检：内存、磁盘、芯片、端口占用（自动避开已占用端口）。
@@ -171,10 +173,10 @@ video-agent/
 2. 用户会在系统运行时手动使用 ComfyUI 网页 → 释放前二次确认队列，只释放本系统加载的模型。
 3. 视频模型不固定（MiniMax H3 / LTX 2.5 / 更新的）→ 注册表可插拔；本轮冒烟用当前装好的 FreeVideo（MiniMax H3，04 文生视频）。
 4. Web 进度台端口 8790（8765 是用户另一个 server）。
+6. 阶段 5：Apple Silicon only；安装器只装 aco_lw，重依赖由 Web 向导检测 + 引导；一行命令 + launchd；Web 向导 + 设置页。
 5. 阶段 2：用户新建专用 Telegram bot，token / chat_id 写进 gitignore 的 `config.toml`；**候选以原图文件发送**（角色虚构，可上云）；**手机只用 Telegram**，审阅台只在本机用（仍绑定 127.0.0.1）；每轮候选数可配置，默认 4。
 
 待决：
-- **阶段 5 范围**：目标机器类型、是否由安装器负责安装 ComfyUI / FreeVideo / LM Studio 与模型、安装形态（命令行脚本 / .app / Homebrew）、向导形态。
 - FreeVideo 自适应内存 → 内存门控判据要从“够不够”改成“可用内存 vs 耗时曲线”，由 T0.5/T0.6 的数据定。
 - 实测前 swap 已用 12.7 / 14.3 GB（2026-10-26），基线需注明。
 - 每日任务量、是否夜间批跑、是否需要 LLM —— G1 之后再定。
