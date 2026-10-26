@@ -1,0 +1,19 @@
+[project]
+name = "video-agent"
+version = "0.0.1"
+description = "轻量本地视频 Agent：确定性编排器 + ComfyUI + 可选 LLM 规划器"
+requires-python = ">=3.11"
+dependencies = ["httpx", "pydantic>=2", "typer", "psutil", "pyyaml"]
+
+[project.scripts]
+va = "video_agent.cli:app"
+
+[dependency-groups]
+dev = ["pytest", "ruff"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
