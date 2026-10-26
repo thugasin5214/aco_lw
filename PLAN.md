@@ -24,10 +24,11 @@
 | 释放策略 | 任务结束且队列空闲才 `/free`，释放前二次确认队列；`--keep-loaded` 保留同模型 |
 | 资源锁 | 单机串行锁（文件锁），与现有 `media_bridge.py` 语义一致 |
 | CLI | `va plan`（占位，阶段 2 接 LLM）、`va submit`、`va status`、`va release`，外加 `va run <taskfile>` 批量入口 |
+| **Web 进度台（只读，2026-10-26 加入）** | `va serve`：系统状态（可用内存、压力、队列、LLM 是否加载）；任务 DAG（按父子关系，例如定妆图 → 图生视频）；单任务阶段流水线（校验 → 门控 → 提交 → 生成 → 收集 → 待审阅）带耗时；产物画廊（图片 / 视频直接预览）；项目进度页 `docs/progress.html` |
 
 ### 明确不做（Out of scope，本轮）
 
-- Telegram、审阅网页、导演基准包 UI（阶段 2）
+- Telegram、审阅**操作**（网页选版 / 打回）、导演基准包 UI（阶段 2；本轮 Web 只读）
 - LLM 规划 / 自由文本理解 / 驻留模式切换（阶段 2）
 - 一致性评分（人脸、风格嵌入）、探索预算、L3–L5 探索（阶段 3）
 - OpenClaw 子 agent、搜索、Skills、MCP（阶段 4）
@@ -63,7 +64,7 @@
 | 阶段 | 内容 | 闸门（退出条件） | 本轮 |
 |---|---|---|---|
 | **0 接口与基线实测** | 见 §5 | **G0**：视频冒烟通过；峰值内存、切换耗时已记录 | ✅ **已通过 2026-10-26**，见 `docs/baseline.md` |
-| **1 调度器 + 图片闭环** | 见 §6 | **G1**：CLI 跑通图片闭环；中断重启后无重复提交 | ✅ |
+| **1 调度器 + 图片闭环 + Web 进度台** | 见 §6 | **G1**：CLI 跑通图片闭环；中断重启后无重复提交；Web 上能看到任务 DAG 与产物 | ✅ **已通过 2026-10-26**（出图 21 s；kill -9 后 recover 只对账，ComfyUI 中仅 1 次提交） |
 | 2 Telegram + 审阅 | 通知与按钮选版、本地审阅网页、导演基准包、LLM 规划（schema 校验） | G2：手机上能完成选版；等待期间无 LLM 推理 | 下一轮 |
 | 3 短视频闭环 + 有限探索 | 样片、一致性评分、预算内多候选、档位逐级上调 | G3：遵守探索预算；未经选定不替换定妆 | 后续 |
 | 4 扩展能力 | OpenClaw 子 agent：搜索、Skills、MCP | G4：按需启动、能退出、无孤儿进程 | 后续 |
@@ -82,17 +83,19 @@ G0 结论（详见 `docs/baseline.md`）：LLM 加载仅约 15 s；视频峰值�
 
 ## 6. 阶段 1 任务清单
 
-- [ ] **T1.1 项目骨架**：uv + Python 3.11；依赖 `httpx`、`pydantic`、`typer`、`psutil`；`ruff` + `pytest`。
-- [ ] **T1.2 ComfyUI 客户端** `comfy.py`：同步 httpx，超时与重试；单测用录制的响应。
-- [ ] **T1.3 模板注册表** `templates/<name>/{api.json, slots.yaml}` + `registry.py`：slot 定义（节点 ID、字段、类型、范围、默认值）；导入 01/03/04/Z-Image。
-- [ ] **T1.4 档位与 schema** `presets.py`、`schema.py`：pydantic 模型；拒绝越界与未知字段；`/object_info` 节点校验（缓存）。
-- [ ] **T1.5 渲染** `render.py`：模板 + 参数 → 可提交 prompt JSON（纯函数，可单测）。
-- [ ] **T1.6 存储** `store.py`：SQLite（tasks 表：id、state、template、params_hash、prompt_id、时间戳）+ 任务目录 `manifest.json`；状态迁移函数集中在一处并校验合法迁移。
-- [ ] **T1.7 内存门控** `memgate.py`：系统可用内存 + `kern.memorystatus_vm_pressure_level` vs 模型注册表峰值（G0：视频 54 GiB）+ 8 GiB 余量；不足时依次 `/free`（仅空闲）→ 卸载 LLM → 排队等待。
-- [ ] **T1.8 调度器** `scheduler.py`：文件锁 → 查重（params_hash + 未完成任务）→ 门控 → `/prompt` → 轮询 `/history`（超时）→ 下载产物 → 写 manifest → 释放策略。
-- [ ] **T1.9 恢复** `recover.py`：启动时扫描 `已提交/生成中` 任务，按 prompt_id 对账；`/history` 与 `/queue` 都找不到 → 标记失败，**不自动重提**。
-- [ ] **T1.10 CLI** `cli.py`：`va submit/status/release/run`；`plan` 先返回“未启用”。
-- [ ] **T1.11 G1 验收**：跑一张 1280×720 图；在“生成中”时 kill 进程 → 重启 → 只对账不重提；产物与 manifest 齐全。
+- [x] **T1.1 项目骨架**：uv + Python 3.11；依赖 `httpx`、`pydantic`、`typer`、`psutil`；`ruff` + `pytest`。
+- [x] **T1.2 ComfyUI 客户端** `comfy.py`：同步 httpx，超时与重试；单测用录制的响应。
+- [x] **T1.3 模板注册表** `templates/<name>/{api.json, slots.yaml}` + `registry.py`：slot 定义（节点 ID、字段、类型、范围、默认值）；导入 01/03/04/Z-Image。
+- [x] **T1.4 档位与 schema** `presets.py`、`schema.py`：pydantic 模型；拒绝越界与未知字段；`/object_info` 节点校验（缓存）。
+- [x] **T1.5 渲染** `render.py`：模板 + 参数 → 可提交 prompt JSON（纯函数，可单测）。
+- [x] **T1.6 存储** `store.py`：SQLite（tasks 表：id、state、template、params_hash、prompt_id、时间戳）+ 任务目录 `manifest.json`；状态迁移函数集中在一处并校验合法迁移。
+- [x] **T1.7 内存门控** `memgate.py`：系统可用内存 + `kern.memorystatus_vm_pressure_level` vs 模型注册表峰值（G0：视频 54 GiB）+ 8 GiB 余量；不足时依次 `/free`（仅空闲）→ 卸载 LLM → 排队等待。
+- [x] **T1.8 调度器** `scheduler.py`：文件锁 → 查重（params_hash + 未完成任务）→ 门控 → `/prompt` → 轮询 `/history`（超时）→ 下载产物 → 写 manifest → 释放策略。
+- [x] **T1.9 恢复** `recover.py`：启动时扫描 `已提交/生成中` 任务，按 prompt_id 对账；`/history` 与 `/queue` 都找不到 → 标记失败，**不自动重提**。
+- [x] **T1.10 CLI** `cli.py`：`va submit/status/release/run`；`plan` 先返回“未启用”。
+- [x] **T1.12 Web 进度台** `web/`：FastAPI 只读 API + 单页（原生 JS + SVG DAG），每 3 s 轮询；产物经本地路由预览。
+- [x] **T1.13 进度文档** `docs/progress.html`：阶段 / 任务 / 闸门状态，Web 进度台内可直接打开。
+- [x] **T1.11 G1 验收**：跑一张 1280×720 图；在“生成中”时 kill 进程 → 重启 → 只对账不重提；产物与 manifest 齐全。
 
 ## 7. 目录结构（目标）
 

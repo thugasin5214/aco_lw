@@ -1,0 +1,10 @@
+# 模型注册表：峰值为 G0 实测（docs/baseline.md）；新模型先实测再登记。
+flux2-klein-4b-q8:
+  kind: image
+  peak_gib: 16      # 冷启动 ComfyUI RSS 15.7 GiB
+  measured: true
+freevideo-h3:
+  kind: video
+  peak_gib: 54      # FreeVideo ram_peak_bytes（phys_footprint）53.4–54.2 GiB
+  measured: true
+  exclusive_llm: true   # 提交前卸载 LLM（G0：共存进入内存压力警告 + swap）

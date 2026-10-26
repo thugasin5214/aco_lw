@@ -1,0 +1,327 @@
+"""确定性编排器：所有 ComfyUI 副作用只在这里发生。
+
+一个任务：草稿 → 已校验 → 等待内存 → 已提交 → 生成中 → 待审阅 → 完成 / 打回 / 失败 / 超时。
+prompt_id 先落库再提交；重启后按 prompt_id 去 /history 与 /queue 对账，永不自动重提。
+"""
+
+from __future__ import annotations
+
+import contextlib
+import fcntl
+import json
+import time
+import uuid
+from collections.abc import Callable, Iterator
+from pathlib import Path
+
+from . import llm, memgate
+from .comfy import Comfy, ComfyBusy
+from .config import Settings
+from .memory import Sampler
+from .registry import Registry, Template
+from .render import check_graph, params_hash, render, resolve
+from .store import Store
+
+VIDEO_EXT = {".mp4", ".webm", ".mov", ".gif"}
+FREEVIDEO_KEYS = (
+    "sample_seconds",
+    "request_seconds",
+    "ram_peak_bytes",
+    "conditioning_cache_hit",
+    "result_cache_hit",
+    "low_memory",
+    "geometry",
+)
+
+
+class SchedulerBusy(RuntimeError):
+    pass
+
+
+class DuplicateTask(RuntimeError):
+    def __init__(self, existing: dict):
+        super().__init__(f"相同参数的任务已存在：{existing['id']}（{existing['state']}）")
+        self.existing = existing
+
+
+class Orchestrator:
+    def __init__(
+        self,
+        cfg: Settings,
+        comfy: Comfy | None = None,
+        store: Store | None = None,
+        registry: Registry | None = None,
+        log: Callable[[str], None] = print,
+        sleep: Callable[[float], None] = time.sleep,
+    ):
+        self.cfg = cfg
+        self.comfy = comfy or Comfy(cfg.comfy_url)
+        self.store = store or Store(cfg.db_path, cfg.jobs_dir)
+        self.registry = registry or Registry(cfg.templates_dir)
+        self.log = log
+        self.sleep = sleep
+        self._object_info: dict | None = None
+
+    # ---- 串行锁：同一时刻只有一个编排器进程在提交/对账 ----
+    @contextlib.contextmanager
+    def lock(self) -> Iterator[None]:
+        with self.cfg.lock_path.open("w") as f:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise SchedulerBusy("另一个编排器进程正在运行；未提交新任务") from None
+            yield
+
+    # ---- 创建 ----
+    def create(
+        self,
+        template: str,
+        params: dict,
+        tier: str | None = None,
+        title: str | None = None,
+        parent_id: str | None = None,
+        allow_unverified: bool = False,
+        allow_duplicate: bool = False,
+    ) -> dict:
+        t = self.registry.template(template)
+        params = dict(params)
+        if parent_id:
+            parent = self.store.get(parent_id)
+            if parent is None:
+                raise KeyError(f"父任务 {parent_id} 不存在")
+            self._inherit_image(t, params, parent)
+        tier, resolved = resolve(t, params, tier, allow_unverified)
+        h = params_hash(t, resolved)
+        dup = self.store.find_duplicate(h)
+        if dup and not allow_duplicate:
+            raise DuplicateTask(dup)
+        return self.store.create(
+            template=t.name,
+            template_sha=t.sha,
+            kind=t.kind,
+            tier=tier,
+            params=resolved,
+            params_hash=h,
+            title=title,
+            parent_id=parent_id,
+        )
+
+    def _inherit_image(self, t: Template, params: dict, parent: dict) -> None:
+        """子任务未指定图片时，用父任务的第一张图片产物（例如定妆图 → 图生视频）。"""
+        slot = next((n for n, s in t.slots.items() if s.type == "image"), None)
+        if slot is None or slot in params:
+            return
+        img = next((o for o in parent["outputs"] if o["kind"] == "image"), None)
+        if img is None:
+            raise ValueError(f"父任务 {parent['id']} 没有图片产物可用作 {slot}")
+        params[slot] = str(self.store.task_dir(parent["id"]) / img["file"])
+
+    # ---- 执行 ----
+    def execute(self, task_id: str) -> dict:
+        with self.lock():
+            return self._execute(task_id)
+
+    def _execute(self, task_id: str) -> dict:
+        task = self.store.get(task_id)
+        t = self.registry.template(task["template"])
+        model = self.registry.model_of(t)
+        tdir = self.store.task_dir(task_id)
+
+        try:
+            graph, uploads = self._prepare(t, task)
+        except Exception as e:  # noqa: BLE001 — 校验失败的任何原因都记录后终止
+            return self.store.transition(task_id, "failed", f"校验失败：{e}", error=str(e))
+        (tdir / "prompt.json").write_text(json.dumps(graph, ensure_ascii=False, indent=2))
+        self.store.transition(task_id, "validated", f"节点校验通过；上传 {len(uploads)} 张图")
+        self.store.update(task_id, metrics={"uploads": uploads})
+
+        self.store.transition(
+            task_id, "waiting_memory", f"需要 {model.peak_gib + self.cfg.memory_margin_gib} GiB"
+        )
+        gate = memgate.ensure(self.comfy, model, self.cfg, self.log, self.sleep)
+        metrics = {
+            **self.store.get(task_id)["metrics"],
+            "gate": {
+                "required_gib": gate.required_gib,
+                "actions": gate.actions,
+                "waited_s": gate.waited_s,
+                "at_submit": gate.last,
+            },
+        }
+        self.store.update(task_id, metrics=metrics)
+        try:
+            if not gate.ok:
+                return self.store.transition(
+                    task_id, "timeout", "内存门控等待超时，未提交", error="memory gate timeout"
+                )
+            prompt_id = str(uuid.uuid4())
+            self.store.update(task_id, prompt_id=prompt_id)  # 先落库再提交
+            try:
+                self.comfy.submit(graph, prompt_id)
+            except Exception as e:  # noqa: BLE001
+                return self.store.transition(task_id, "failed", f"提交失败：{e}", error=str(e))
+            self.store.transition(task_id, "submitted", f"prompt_id {prompt_id}")
+            return self._monitor(task_id)
+        finally:
+            self._after(t, gate.unloaded_llm)
+
+    def _prepare(self, t: Template, task: dict) -> tuple[dict, dict]:
+        params = dict(task["params"])
+        uploads = {}
+        for name, slot in t.slots.items():
+            if slot.type == "image" and name in params:
+                path = Path(params[name]).expanduser()
+                if not path.is_file():
+                    raise FileNotFoundError(f"{name}: 找不到图片 {path}")
+                params[name] = uploads[name] = self.comfy.upload_image(path)
+        graph = render(t, params, output_prefix=f"aco_lw/{task['id']}")
+        if self._object_info is None:
+            self._object_info = self.comfy.object_info()
+        problems = check_graph(graph, self._object_info)
+        if problems:
+            raise ValueError("；".join(problems))
+        return graph, uploads
+
+    def _monitor(self, task_id: str) -> dict:
+        task = self.store.get(task_id)
+        prompt_id = task["prompt_id"]
+        start = time.monotonic()
+        with Sampler() as sampler:
+            while True:
+                entry = self.comfy.history(prompt_id)
+                if entry and entry.get("status", {}).get("completed") is not None:
+                    break
+                task = self.store.get(task_id)
+                if task["state"] == "submitted" and self._is_running(prompt_id):
+                    self.store.transition(task_id, "running")
+                if time.monotonic() - start > self.cfg.task_timeout_s:
+                    entry = None
+                    break
+                self.sleep(self.cfg.poll_interval_s)
+        metrics = {
+            **self.store.get(task_id)["metrics"],
+            "memory": sampler.summary(),
+            "observed_s": round(time.monotonic() - start, 1),
+        }
+        self.store.update(task_id, metrics=metrics)
+        if entry is None:
+            return self.store.transition(
+                task_id,
+                "timeout",
+                "观察超时；任务未取消，可用 recover 继续对账",
+                error="monitor timeout",
+            )
+        return self._finish(task_id, entry)
+
+    def _is_running(self, prompt_id: str) -> bool:
+        q = self.comfy.queue()
+        return any(item[1] == prompt_id for item in q["queue_running"])
+
+    def _finish(self, task_id: str, entry: dict) -> dict:
+        status = entry.get("status", {})
+        msgs = {m[0]: m[1] for m in status.get("messages", [])}
+        task = self.store.get(task_id)
+        metrics = dict(task["metrics"])
+        if "execution_start" in msgs:
+            end = msgs.get("execution_success") or msgs.get("execution_error") or {}
+            if "timestamp" in end:
+                metrics["exec_s"] = round(
+                    (end["timestamp"] - msgs["execution_start"]["timestamp"]) / 1000, 1
+                )
+        if status.get("status_str") != "success":
+            err = msgs.get("execution_error", {})
+            detail = err.get("exception_message") or status.get("status_str") or "unknown"
+            self.store.update(task_id, metrics=metrics)
+            return self.store.transition(
+                task_id, "failed", f"ComfyUI 执行失败：{detail}", error=str(detail)[:2000]
+            )
+        outputs = self._collect(task_id, entry.get("outputs", {}), metrics)
+        self.store.update(task_id, metrics=metrics)
+        return self.store.transition(
+            task_id, "review", f"收集 {len(outputs)} 个产物", outputs=outputs
+        )
+
+    def _collect(self, task_id: str, node_outputs: dict, metrics: dict) -> list[dict]:
+        tdir = self.store.task_dir(task_id)
+        outputs = []
+        for node, out in node_outputs.items():
+            if out.get("freevideo_summary"):
+                fv = out["freevideo_summary"][0]
+                metrics["freevideo"] = {k: fv.get(k) for k in FREEVIDEO_KEYS}
+            for items in out.values():
+                if not isinstance(items, list):
+                    continue
+                for i, item in enumerate(items):
+                    if not (isinstance(item, dict) and "filename" in item):
+                        continue
+                    name = f"{node}_{i}_{item['filename']}"
+                    self.comfy.download(
+                        item["filename"],
+                        item.get("subfolder", ""),
+                        item.get("type", "output"),
+                        tdir / name,
+                    )
+                    kind = "video" if Path(name).suffix.lower() in VIDEO_EXT else "image"
+                    outputs.append({"file": name, "kind": kind, "node": node, "source": item})
+        return outputs
+
+    def _after(self, t: Template, unloaded_llm: bool) -> None:
+        if t.release_after == "free":
+            try:
+                self.comfy.free()
+                self.log("队列空闲，已请求 ComfyUI 释放模型")
+            except ComfyBusy:
+                self.log("队列有其他任务，跳过释放")
+        if unloaded_llm and self.cfg.llm_restore_after_video:
+            try:
+                llm.load(self.cfg.llm_model, self.cfg.llm_context, self.cfg.llm_idle_ttl_s)
+                self.log(f"已恢复 LLM（空闲 {self.cfg.llm_idle_ttl_s}s 后自动卸载）")
+            except Exception as e:  # noqa: BLE001 — 恢复失败不影响任务结果
+                self.log(f"恢复 LLM 失败：{e}")
+
+    # ---- 恢复 ----
+    def recover(self) -> list[tuple[str, str]]:
+        """进程重启后对账；只观察与收集，不重新提交。"""
+        results = []
+        with self.lock():
+            stuck = self.store.by_state(
+                "draft", "validated", "waiting_memory", "submitted", "running", "timeout"
+            )
+            for task in stuck:
+                results.append((task["id"], self._reconcile(task)))
+        return results
+
+    def _reconcile(self, task: dict) -> str:
+        tid, pid, state = task["id"], task["prompt_id"], task["state"]
+        if state in ("draft", "validated"):
+            self.store.transition(tid, "failed", "中断于提交前；可重新提交", error="interrupted")
+            return "failed（提交前中断）"
+        if not pid:
+            if state == "waiting_memory":
+                self.store.transition(tid, "failed", "中断于内存门控；未提交", error="interrupted")
+                return "failed（未提交）"
+            return f"跳过（{state} 无 prompt_id）"
+        entry = self.comfy.history(pid)
+        if entry and entry.get("status", {}).get("completed") is not None:
+            if state == "waiting_memory":
+                self.store.transition(tid, "submitted", "恢复：在 /history 中找到")
+            return self._finish(tid, entry)["state"]
+        if self.comfy.in_queue(pid):
+            if state == "waiting_memory":
+                self.store.transition(tid, "submitted", "恢复：在队列中找到")
+            if state == "timeout":
+                return "仍在运行（保持 timeout，稍后再 recover）"
+            return self._monitor(tid)["state"]
+        if state == "timeout":
+            return "timeout（ComfyUI 中找不到）"
+        self.store.transition(
+            tid, "failed", "ComfyUI 中找不到该 prompt_id；不自动重提", error="lost"
+        )
+        return "failed（找不到）"
+
+    # ---- 审阅与释放 ----
+    def review(self, task_id: str, accept: bool, note: str | None = None) -> dict:
+        return self.store.transition(task_id, "done" if accept else "rejected", note)
+
+    def release(self) -> None:
+        self.comfy.free()

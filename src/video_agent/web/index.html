@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aco_lw 进度台</title>
+<style>
+:root{
+  --bg:#f5f7fa;--card:#fff;--line:#d5dde8;--text:#14202e;--muted:#5a6879;--accent:#1f5f99;
+  --acc-tint:rgba(31,95,153,.10);--ok:#2f7d4f;--ok-tint:rgba(47,125,79,.12);--warn:#9a5b00;
+  --warn-tint:rgba(154,91,0,.12);--bad:#b3261e;--bad-tint:rgba(179,38,30,.10);--idle:#8a97a8;
+  color-scheme:light
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0f141c;--card:#18212e;--line:#2f3c50;--text:#e6edf6;--muted:#9fb0c5;--accent:#8ecbff;
+  --acc-tint:rgba(142,203,255,.12);--ok:#7fd3a0;--ok-tint:rgba(127,211,160,.12);--warn:#f0c27a;
+  --warn-tint:rgba(240,194,122,.12);--bad:#ff9a92;--bad-tint:rgba(255,154,146,.12);--idle:#6f819b;
+  color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#0f141c;--card:#18212e;--line:#2f3c50;--text:#e6edf6;--muted:#9fb0c5;--accent:#8ecbff;
+  --acc-tint:rgba(142,203,255,.12);--ok:#7fd3a0;--ok-tint:rgba(127,211,160,.12);--warn:#f0c27a;
+  --warn-tint:rgba(240,194,122,.12);--bad:#ff9a92;--bad-tint:rgba(255,154,146,.12);--idle:#6f819b;
+  color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:15px/1.6 system-ui,-apple-system,"PingFang SC","Hiragino Sans GB",sans-serif}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;padding:14px 20px;
+  border-bottom:1px solid var(--line);background:var(--card);position:sticky;top:0;z-index:5}
+h1{font-size:17px;margin:0;font-weight:650}
+.stat{display:flex;gap:6px;align-items:center;font-size:13px;color:var(--muted)}
+.stat b{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--idle);display:inline-block}
+.dot.ok{background:var(--ok)}.dot.warn{background:var(--warn)}.dot.bad{background:var(--bad)}
+nav{margin-left:auto;display:flex;gap:4px}
+nav button{border:1px solid var(--line);background:transparent;color:var(--muted);padding:5px 12px;
+  border-radius:8px;cursor:pointer;font:inherit;font-size:13px}
+nav button.on{background:var(--acc-tint);color:var(--accent);border-color:var(--accent)}
+main{padding:18px 20px 60px;max-width:1500px;margin:auto}
+.view{display:none}.view.on{display:block}
+.layout{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:18px}
+@media (max-width:980px){.layout{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+.card h2{font-size:14px;margin:0 0 12px;color:var(--muted);font-weight:600;letter-spacing:.02em}
+.empty{color:var(--muted);font-size:14px;padding:30px 4px;text-align:center}
+/* DAG */
+#dag{position:relative;overflow:auto;min-height:220px}
+#dag svg{position:absolute;left:0;top:0;pointer-events:none}
+.node{position:absolute;width:200px;background:var(--card);border:1px solid var(--line);
+  border-radius:10px;padding:8px 10px;cursor:pointer;display:flex;gap:9px;align-items:center}
+.node:hover{border-color:var(--accent)}
+.node.sel{outline:2px solid var(--accent);outline-offset:1px}
+.node .thumb{width:44px;height:44px;border-radius:6px;background:var(--bg);flex:none;
+  object-fit:cover;border:1px solid var(--line)}
+.node .t{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.node .s{font-size:12px;color:var(--muted)}
+.node .meta{min-width:0;flex:1}
+.badge{display:inline-block;font-size:11.5px;padding:1px 8px;border-radius:99px;
+  background:var(--acc-tint);color:var(--accent);white-space:nowrap}
+.badge.ok{background:var(--ok-tint);color:var(--ok)}.badge.warn{background:var(--warn-tint);color:var(--warn)}
+.badge.bad{background:var(--bad-tint);color:var(--bad)}.badge.idle{background:var(--bg);color:var(--muted)}
+.badge.live{animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.45}}
+@media (prefers-reduced-motion:reduce){.badge.live,.stage.active .ring{animation:none}}
+/* 阶段流水线 */
+.pipe{display:flex;align-items:flex-start;overflow-x:auto;padding:4px 2px 10px}
+.stage{display:flex;flex-direction:column;align-items:center;min-width:84px;flex:1;position:relative}
+.stage .ring{width:30px;height:30px;border-radius:50%;border:2px solid var(--idle);display:grid;
+  place-items:center;font-size:13px;font-weight:700;background:var(--card);color:var(--muted);z-index:1}
+.stage.done .ring{border-color:var(--ok);background:var(--ok-tint);color:var(--ok)}
+.stage.active .ring{border-color:var(--accent);background:var(--acc-tint);color:var(--accent);
+  animation:pulse 1.4s ease-in-out infinite}
+.stage.failed .ring{border-color:var(--bad);background:var(--bad-tint);color:var(--bad)}
+.stage .lbl{font-size:12.5px;margin-top:6px;font-weight:600}
+.stage .dur{font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.stage:not(:last-child)::after{content:"";position:absolute;top:15px;left:calc(50% + 17px);
+  right:calc(-50% + 17px);height:2px;background:var(--line)}
+.stage.done:not(:last-child)::after{background:var(--ok)}
+dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 14px;margin:12px 0;font-size:13.5px}
+dt{color:var(--muted)}dd{margin:0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.assets{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;margin-top:10px}
+.assets img,.assets video{width:100%;border-radius:8px;border:1px solid var(--line);background:#000;display:block}
+.asset a{font-size:12px;color:var(--muted);text-decoration:none;display:block;margin-top:3px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.events{font-size:12.5px;color:var(--muted);margin:10px 0 0;padding-left:16px}
+.events li{margin:2px 0}
+details{margin-top:10px}summary{cursor:pointer;color:var(--muted);font-size:13px}
+pre{font-size:12px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;
+  overflow:auto;max-height:320px;white-space:pre-wrap;overflow-wrap:anywhere}
+.err{color:var(--bad);font-size:13px;margin-top:8px;overflow-wrap:anywhere}
+/* 画廊 */
+.gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
+.gallery .item{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.gallery img,.gallery video{width:100%;display:block;background:#000;aspect-ratio:16/10;object-fit:contain}
+.gallery .cap{padding:8px 10px;font-size:12.5px;display:flex;justify-content:space-between;gap:8px}
+.gallery .cap span{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.filters{display:flex;gap:6px;margin-bottom:12px}
+iframe{width:100%;height:calc(100vh - 120px);border:1px solid var(--line);border-radius:12px;background:var(--card)}
+@media (max-width:600px){header{padding:12px 16px}main{padding:14px 16px 40px}nav{margin-left:0}}
+</style>
+</head>
+<body>
+<header>
+  <h1>aco_lw 进度台</h1>
+  <span class="stat"><span class="dot" id="d-mem"></span>可用内存 <b id="s-mem">–</b></span>
+  <span class="stat"><span class="dot" id="d-comfy"></span>ComfyUI <b id="s-comfy">–</b></span>
+  <span class="stat"><span class="dot" id="d-llm"></span>LLM <b id="s-llm">–</b></span>
+  <nav>
+    <button data-view="flow" class="on">任务流</button>
+    <button data-view="gallery">产物</button>
+    <button data-view="progress">项目进度</button>
+  </nav>
+</header>
+<main>
+  <section class="view on" id="v-flow">
+    <div class="layout">
+      <div class="card"><h2>任务 DAG（父 → 子，例如定妆图 → 图生视频）</h2><div id="dag"></div></div>
+      <div class="card"><h2>任务详情</h2><div id="detail"><div class="empty">点选左侧任务查看阶段流水线与产物</div></div></div>
+    </div>
+  </section>
+  <section class="view" id="v-gallery">
+    <div class="filters">
+      <nav style="margin:0">
+        <button data-kind="all" class="on">全部</button>
+        <button data-kind="image">图片</button>
+        <button data-kind="video">视频</button>
+      </nav>
+    </div>
+    <div class="gallery" id="gallery"></div>
+  </section>
+  <section class="view" id="v-progress"><iframe title="项目进度" data-src="/progress"></iframe></section>
+</main>
+<script>
+const STAGES = [
+  ["validated", "校验"], ["waiting_memory", "内存门控"], ["submitted", "提交"],
+  ["running", "生成"], ["review", "待审阅"], ["final", "审阅结果"],
+];
+const TONE = {done:"ok", review:"warn", running:"", submitted:"", waiting_memory:"",
+  validated:"idle", draft:"idle", failed:"bad", timeout:"bad", rejected:"bad"};
+const LIVE = new Set(["running", "submitted", "waiting_memory", "validated"]);
+let META = {states:{}, templates:{}}, TASKS = [], selected = null, lastDetailKey = "", galleryKind = "all";
+
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmtS = s => s == null ? "" : s < 60 ? `${s.toFixed(1)} s` : `${Math.floor(s/60)} 分 ${Math.round(s%60)} 秒`;
+const fmtT = ts => new Date(ts*1000).toLocaleString("zh-CN", {hour12:false, month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit", second:"2-digit"});
+const fileUrl = (id, f) => `/files/${encodeURIComponent(id)}/${encodeURIComponent(f)}`;
+const badge = st => `<span class="badge ${TONE[st] ?? ""} ${LIVE.has(st) ? "live" : ""}">${esc(META.states[st] || st)}</span>`;
+const label = t => t.title || (META.templates[t.template]?.title ?? t.template);
+
+async function getJSON(u){ const r = await fetch(u); if(!r.ok) throw new Error(r.status); return r.json(); }
+
+document.querySelectorAll("header nav button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("header nav button").forEach(x => x.classList.toggle("on", x === b));
+  document.querySelectorAll(".view").forEach(v => v.classList.toggle("on", v.id === "v-" + b.dataset.view));
+  const f = $("#v-progress iframe"); if (b.dataset.view === "progress" && !f.src) f.src = f.dataset.src;
+  if (b.dataset.view === "gallery") renderGallery();
+});
+document.querySelectorAll(".filters button").forEach(b => b.onclick = () => {
+  galleryKind = b.dataset.kind;
+  document.querySelectorAll(".filters button").forEach(x => x.classList.toggle("on", x === b));
+  renderGallery(true);
+});
+
+async function pollSystem(){
+  try {
+    const s = await getJSON("/api/system"), m = s.memory;
+    $("#s-mem").textContent = `${m.avail_gib.toFixed(1)} GiB · 压力 ${({1:"正常",2:"警告",4:"严重"})[m.pressure] ?? m.pressure}`;
+    $("#d-mem").className = "dot " + (m.pressure >= 4 ? "bad" : m.pressure >= 2 ? "warn" : "ok");
+    $("#s-comfy").textContent = s.comfy.online ? `运行 ${s.comfy.running} · 排队 ${s.comfy.pending}` : "离线";
+    $("#d-comfy").className = "dot " + (!s.comfy.online ? "bad" : s.comfy.running ? "warn" : "ok");
+    $("#s-llm").textContent = s.llm.loaded ? `已加载${s.llm.ttl_ms ? `（TTL ${Math.round(s.llm.ttl_ms/1000)}s）` : ""}` : "未加载";
+    $("#d-llm").className = "dot " + (s.llm.loaded ? "ok" : "");
+  } catch { $("#s-comfy").textContent = "进度台连接失败"; }
+}
+
+/* ---------- DAG：按父子关系分层，从左到右 ---------- */
+function renderDag(){
+  const box = $("#dag");
+  if (!TASKS.length){ box.innerHTML = `<div class="empty">还没有任务。用 <code>va submit</code> 或 <code>va run</code> 提交。</div>`; return; }
+  const byId = Object.fromEntries(TASKS.map(t => [t.id, t]));
+  const kids = {}; TASKS.forEach(t => { if (t.parent_id && byId[t.parent_id]) (kids[t.parent_id] ||= []).push(t); });
+  const roots = TASKS.filter(t => !t.parent_id || !byId[t.parent_id]).sort((a,b) => b.created - a.created);
+  const W = 200, H = 62, GX = 56, GY = 14, pos = {};
+  let row = 0;
+  const place = (t, depth) => {
+    const ch = (kids[t.id] || []).sort((a,b) => a.created - b.created);
+    if (!ch.length){ pos[t.id] = {x: depth*(W+GX), y: row*(H+GY)}; row++; return pos[t.id].y; }
+    const ys = ch.map(c => place(c, depth+1));
+    pos[t.id] = {x: depth*(W+GX), y: (ys[0] + ys[ys.length-1]) / 2};
+    return pos[t.id].y;
+  };
+  roots.forEach(r => place(r, 0));
+  const maxX = Math.max(...Object.values(pos).map(p => p.x)) + W + 4;
+  const maxY = Math.max(...Object.values(pos).map(p => p.y)) + H + 4;
+  let edges = "";
+  TASKS.forEach(t => {
+    const p = pos[t.parent_id], c = pos[t.id];
+    if (!p || !c || !byId[t.parent_id]) return;
+    const x1 = p.x + W, y1 = p.y + H/2, x2 = c.x, y2 = c.y + H/2, mx = (x1+x2)/2;
+    edges += `<path d="M${x1} ${y1} C${mx} ${y1},${mx} ${y2},${x2} ${y2}" fill="none" stroke="var(--idle)" stroke-width="1.6" marker-end="url(#arr)"/>`;
+  });
+  const nodes = TASKS.map(t => {
+    const p = pos[t.id], out = (t.outputs || [])[0];
+    const thumb = !out ? `<div class="thumb"></div>`
+      : out.kind === "video" ? `<video class="thumb" src="${fileUrl(t.id, out.file)}#t=0.5" muted preload="metadata"></video>`
+      : `<img class="thumb" src="${fileUrl(t.id, out.file)}" alt="" loading="lazy">`;
+    return `<div class="node ${t.id === selected ? "sel" : ""}" data-id="${esc(t.id)}" style="left:${p.x}px;top:${p.y}px;height:${H}px">
+      ${thumb}<div class="meta"><div class="t" title="${esc(label(t))}">${esc(label(t))}</div>
+      <div class="s">${badge(t.state)} ${esc(t.tier)}</div></div></div>`;
+  }).join("");
+  box.style.height = Math.min(maxY + 8, 640) + "px";
+  box.innerHTML = `<svg width="${maxX}" height="${maxY}"><defs><marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" fill="var(--idle)"/></marker></defs>${edges}</svg>
+    <div style="position:relative;width:${maxX}px;height:${maxY}px">${nodes}</div>`;
+  box.querySelectorAll(".node").forEach(n => n.onclick = () => { selected = n.dataset.id; lastDetailKey = ""; renderDag(); loadDetail(); });
+}
+
+/* ---------- 单任务阶段流水线 ---------- */
+function stagesOf(t){
+  const at = {}; t.events.forEach(e => { if (!(e.state in at)) at[e.state] = e.ts; });
+  if (at.done || at.rejected) at.final = at.done || at.rejected;
+  const terminalBad = ["failed", "timeout"].includes(t.state);
+  const reachedIdx = STAGES.map(([k]) => k in at);
+  const lastReached = reachedIdx.lastIndexOf(true);
+  return STAGES.map(([k, name], i) => {
+    let cls = "", dur = null;
+    const later = STAGES.slice(i+1).find(([k2]) => k2 in at);
+    if (k in at || i < lastReached) cls = "done";
+    if (k in at && later) dur = at[later[0]] - at[k];
+    if (i === lastReached && !terminalBad && !["done","rejected"].includes(t.state) && k !== "final") {
+      cls = "active"; dur = Date.now()/1000 - at[k];
+    }
+    if (terminalBad && i === lastReached + 1) cls = "failed";
+    if (k === "final" && t.state === "rejected") cls = "failed";
+    if (k === "review" && t.state === "review") dur = null;
+    return {k, name, cls, dur};
+  });
+}
+
+async function loadDetail(){
+  if (!selected) return;
+  let t; try { t = await getJSON(`/api/tasks/${encodeURIComponent(selected)}`); } catch { return; }
+  const key = t.updated + ":" + t.state;
+  const live = LIVE.has(t.state);
+  if (key === lastDetailKey && !live) return;
+  const mediaChanged = !lastDetailKey.startsWith(t.updated + ":") || !document.querySelector("#detail .assets");
+  lastDetailKey = key;
+  const st = stagesOf(t);
+  const pipe = st.map((s, i) => `<div class="stage ${s.cls}"><div class="ring">${s.cls === "failed" ? "!" : s.cls === "done" ? "✓" : i+1}</div>
+    <div class="lbl">${s.name}</div><div class="dur">${s.dur != null ? fmtS(s.dur) : ""}</div></div>`).join("");
+  const m = t.metrics || {}, fv = m.freevideo || {}, mem = m.memory || {}, gate = m.gate || {};
+  const rows = [
+    ["任务", t.id], ["模板", `${t.template}（${META.templates[t.template]?.title ?? ""}）`], ["档位", t.tier],
+    ["状态", badge(t.state)], ["父任务", t.parent_id || "—"], ["prompt_id", t.prompt_id || "—"],
+    ["执行耗时", m.exec_s != null ? fmtS(m.exec_s) : "—"],
+    ["内存门控", gate.required_gib ? `需要 ${gate.required_gib} GiB · 等待 ${fmtS(gate.waited_s)}${gate.actions?.length ? " · " + gate.actions.join("；") : ""}` : "—"],
+    ["生成期内存", mem.min_avail_gib != null ? `最低可用 ${mem.min_avail_gib} GiB · 压力 ${mem.max_pressure} · swap ${mem.swap_delta_gib >= 0 ? "+" : ""}${mem.swap_delta_gib} GiB` : "—"],
+  ];
+  if (fv.sample_seconds) rows.push(["FreeVideo", `采样 ${fmtS(fv.sample_seconds)} · 峰值 ${(fv.ram_peak_bytes/2**30).toFixed(1)} GiB`]);
+  const params = {...t.params}; if (params.prompt && params.prompt.length > 160) params.prompt = params.prompt.slice(0, 160) + "…";
+  const assets = (t.outputs || []).map(o => {
+    const u = fileUrl(t.id, o.file);
+    return `<div class="asset">${o.kind === "video" ? `<video src="${u}" controls preload="metadata"></video>` : `<a href="${u}" target="_blank"><img src="${u}" alt="${esc(o.file)}"></a>`}
+      <a href="${u}" target="_blank" title="${esc(o.file)}">${esc(o.file)}</a></div>`;
+  }).join("");
+  const html = `<div class="pipe">${pipe}</div>
+    ${t.error ? `<div class="err">错误：${esc(t.error)}</div>` : ""}
+    <dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${k === "状态" ? v : esc(v)}</dd>`).join("")}</dl>
+    <div class="assets">${assets || `<div class="empty" style="padding:10px 0">暂无产物</div>`}</div>
+    <details><summary>参数</summary><pre>${esc(JSON.stringify(params, null, 2))}</pre></details>
+    <details><summary>事件</summary><ol class="events">${t.events.map(e => `<li>${fmtT(e.ts)} · ${esc(META.states[e.state] || e.state)}${e.note ? " · " + esc(e.note) : ""}</li>`).join("")}</ol></details>`;
+  if (mediaChanged) { $("#detail").innerHTML = html; }
+  else { // 只更新流水线与字段，避免正在播放的视频被重置
+    $("#detail .pipe").innerHTML = pipe;
+    $("#detail dl").innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${k === "状态" ? v : esc(v)}</dd>`).join("");
+  }
+}
+
+/* ---------- 画廊 ---------- */
+let galleryKey = "";
+function renderGallery(force){
+  const items = TASKS.flatMap(t => (t.outputs || []).map(o => ({t, o}))).filter(x => galleryKind === "all" || x.o.kind === galleryKind);
+  const key = galleryKind + items.map(x => x.t.id + x.o.file).join("|");
+  if (!force && key === galleryKey) return;
+  galleryKey = key;
+  $("#gallery").innerHTML = items.length ? items.map(({t, o}) => {
+    const u = fileUrl(t.id, o.file);
+    return `<div class="item">${o.kind === "video" ? `<video src="${u}" controls preload="metadata"></video>` : `<a href="${u}" target="_blank"><img src="${u}" alt="" loading="lazy"></a>`}
+      <div class="cap"><span title="${esc(label(t))}">${esc(label(t))}</span>${badge(t.state)}</div></div>`;
+  }).join("") : `<div class="empty">还没有产物</div>`;
+}
+
+let tasksKey = "";
+async function pollTasks(){
+  try { TASKS = await getJSON("/api/tasks"); } catch { return; }
+  const key = TASKS.map(t => t.id + t.updated).join("|");
+  if (key !== tasksKey){ tasksKey = key; renderDag(); if ($("#v-gallery").classList.contains("on")) renderGallery(); }
+  if (!selected && TASKS.length){ selected = TASKS[0].id; renderDag(); }
+  loadDetail();
+}
+
+(async () => {
+  try { META = await getJSON("/api/meta"); } catch {}
+  pollSystem(); pollTasks();
+  setInterval(pollTasks, 3000); setInterval(pollSystem, 5000);
+})();
+</script>
+</body>
+</html>

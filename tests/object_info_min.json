@@ -1,0 +1,666 @@
+{
+ "BasicGuider": {
+  "input": {
+   "required": {
+    "model": [
+     "MODEL",
+     {}
+    ],
+    "conditioning": [
+     "CONDITIONING",
+     {}
+    ]
+   },
+   "optional": {}
+  }
+ },
+ "CLIPLoader": {
+  "input": {
+   "required": {
+    "clip_name": [
+     [
+      "qwen_3_4b.safetensors"
+     ]
+    ],
+    "type": [
+     [
+      "stable_diffusion",
+      "stable_cascade",
+      "sd3",
+      "stable_audio",
+      "mochi",
+      "ltxv",
+      "pixart",
+      "cosmos",
+      "lumina2",
+      "wan",
+      "hidream",
+      "chroma",
+      "ace",
+      "omnigen2",
+      "qwen_image",
+      "hunyuan_image",
+      "flux2",
+      "ovis",
+      "longcat_image",
+      "cogvideox",
+      "lens",
+      "pixeldit",
+      "ideogram4",
+      "boogu",
+      "krea2",
+      "joyimage",
+      "mage",
+      "minimax"
+     ]
+    ]
+   },
+   "optional": {
+    "device": [
+     [
+      "default",
+      "cpu"
+     ],
+     {
+      "advanced": true
+     }
+    ]
+   }
+  }
+ },
+ "CLIPTextEncode": {
+  "input": {
+   "required": {
+    "text": [
+     "STRING",
+     {
+      "multiline": true,
+      "dynamicPrompts": true,
+      "tooltip": "The text to be encoded."
+     }
+    ],
+    "clip": [
+     "CLIP",
+     {
+      "tooltip": "The CLIP model used for encoding the text."
+     }
+    ]
+   },
+   "optional": {}
+  }
+ },
+ "EmptyFlux2LatentImage": {
+  "input": {
+   "required": {
+    "width": [
+     "INT",
+     {
+      "default": 1024,
+      "min": 16,
+      "max": 16384,
+      "step": 16
+     }
+    ],
+    "height": [
+     "INT",
+     {
+      "default": 1024,
+      "min": 16,
+      "max": 16384,
+      "step": 16
+     }
+    ],
+    "batch_size": [
+     "INT",
+     {
+      "default": 1,
+      "min": 1,
+      "max": 4096
+     }
+    ]
+   },
+   "optional": {}
+  }
+ },
+ "Flux2Scheduler": {
+  "input": {
+   "required": {
+    "steps": [
+     "INT",
+     {
+      "default": 20,
+      "min": 1,
+      "max": 4096
+     }
+    ],
+    "width": [
+     "INT",
+     {
+      "default": 1024,
+      "min": 16,
+      "max": 16384,
+      "step": 1
+     }
+    ],
+    "height": [
+     "INT",
+     {
+      "default": 1024,
+      "min": 16,
+      "max": 16384,
+      "step": 1
+     }
+    ]
+   },
+   "optional": {}
+  }
+ },
+ "FreeVideoGenerate": {
+  "input": {
+   "required": {
+    "text": [
+     "STRING",
+     {
+      "display_name": "Prompt",
+      "tooltip": "Describe the scene, motion, dialogue, sound and music.",
+      "multiline": true
+     }
+    ],
+    "width": [
+     "INT",
+     {
+      "display_name": "Width",
+      "default": 1344,
+      "min": 256,
+      "max": 4096,
+      "step": 32
+     }
+    ],
+    "height": [
+     "INT",
+     {
+      "display_name": "Height",
+      "default": 768,
+      "min": 256,
+      "max": 4096,
+      "step": 32
+     }
+    ],
+    "seconds": [
+     "FLOAT",
+     {
+      "display_name": "Duration (s)",
+      "tooltip": "24 fps. The length is rounded up slightly to a length the model can generate; for example, 10 s becomes 10.125 s. Videos longer than 15 s are experimental.",
+      "default": 10.0,
+      "min": 1.625,
+      "max": 60.0,
+      "step": 0.1
+     }
+    ],
+    "seed": [
+     "INT",
+     {
+      "display_name": "Seed",
+      "default": 2026090903,
+      "min": 0,
+      "max": 9007199254740991,
+      "control_after_generate": true
+     }
+    ]
+   },
+   "optional": {
+    "first": [
+     "IMAGE",
+     {
+      "display_name": "First frame",
+      "tooltip": "One image. Center-cropped to the selected canvas; enables I2VA."
+     }
+    ],
+    "last": [
+     "IMAGE",
+     {
+      "display_name": "Last frame",
+      "tooltip": "One image. With first frame enables FL2VA; alone enables L2VA."
+     }
+    ],
+    "references": [
+     "FREEVIDEO_REFERENCES",
+     {
+      "tooltip": "Experimental Ref2VA. Use FreeVideo Reference nodes. VDN is not reference-trained."
+     }
+    ],
+    "loras": [
+     "FREEVIDEO_LORAS",
+     {
+      "display_name": "LoRAs"
+     }
+    ],
+    "conditioning": [
+     "CONDITIONING",
+     {
+      "tooltip": "Native MiniMax-H3 conditioning from a compatible community node, with keyframes or references. When it is connected, the prompt and media inputs are not used. Conditioning from generic CLIP nodes is rejected."
+     }
+    ],
+    "media": [
+     "FREEVIDEO_MEDIA",
+     {
+      "tooltip": "Unified Media panel: keyframes or ordered references."
+     }
+    ],
+    "two_pass": [
+     "BOOLEAN",
+     {
+      "display_name": "Two-pass acceleration",
+      "tooltip": "Usually faster: generate at a lower resolution, then upscale and finish sampling at the target size.",
+      "default": true
+     }
+    ],
+    "base_steps": [
+     "INT",
+     {
+      "display_name": "First-pass steps",
+      "tooltip": "Default: 8. Two-pass acceleration runs only with 8 first-pass steps; any other count generates in one pass of that many steps. Changing sampling steps may reduce generation quality.",
+      "default": 8,
+      "min": 1,
+      "max": 32
+     }
+    ],
+    "refine_steps": [
+     "INT",
+     {
+      "display_name": "Second-pass steps",
+      "tooltip": "Default: 3. Three steps use the independent refinement schedule. Changing sampling steps may reduce generation quality.",
+      "default": 3,
+      "min": 1,
+      "max": 31
+     }
+    ],
+    "force_regenerate": [
+     "BOOLEAN",
+     {
+      "display_name": "Force regeneration",
+      "tooltip": "Generate again even when an identical completed video is saved locally.",
+      "default": false
+     }
+    ],
+    "preview": [
+     "BOOLEAN",
+     {
+      "display_name": "Two-pass: preview first pass",
+      "tooltip": "Part of two-pass acceleration: pause after the half-resolution first pass and save it as a preview. Run the second pass from the result when it looks right; it continues from the same latents.",
+      "default": false
+     }
+    ],
+    "refine_from": [
+     "STRING",
+     {
+      "display_name": "Second pass of preview",
+      "tooltip": "Set by the Run second pass button: the preview video to continue. The second pass uses the preview's own prompt, seed, size and inputs.",
+      "advanced": true,
+      "default": "",
+      "socketless": true,
+      "multiline": false
+     }
+    ],
+    "continue_from": [
+     "STRING",
+     {
+      "display_name": "Continue from video",
+      "tooltip": "For long videos generated in segments: continue after this MP4. Use its ComfyUI output subfolder/filename or an absolute path inside ComfyUI output or input.",
+      "advanced": true,
+      "default": "",
+      "multiline": false
+     }
+    ],
+    "frames": [
+     "INT",
+     {
+      "display_name": "Total frames",
+      "tooltip": "For long videos generated in segments: 0 uses Duration; otherwise use 5 + 17n, at least 39. Includes the 22 overlap frames when continuing; the saved MP4 contains only new frames.",
+      "advanced": true,
+      "default": 0,
+      "min": 0,
+      "max": 2147483647
+     }
+    ],
+    "first_frame_reference": [
+     "BOOLEAN",
+     {
+      "display_name": "First-frame reference",
+      "tooltip": "Reduces drift.",
+      "advanced": true,
+      "default": false
+     }
+    ],
+    "voice_reference": [
+     "BOOLEAN",
+     {
+      "display_name": "Voice reference",
+      "tooltip": "Keeps the opening voice consistent in continued dialogue.",
+      "advanced": true,
+      "default": false
+     }
+    ],
+    "hide_tail": [
+     "BOOLEAN",
+     {
+      "display_name": "Hide dialogue tail",
+      "tooltip": "Generates and discards 17 extra frames to keep dialogue moving between parts.",
+      "advanced": true,
+      "default": false
+     }
+    ],
+    "step_cache": [
+     "COMBO",
+     {
+      "display_name": "Step cache",
+      "tooltip": "Reuses work between similar sampling steps to finish sooner, with a small change to the result.",
+      "advanced": true,
+      "default": "none",
+      "multiselect": false,
+      "options": [
+       "none",
+       "easycache-av",
+       "fbcache"
+      ]
+     }
+    ],
+    "upscale_factor": [
+     "COMBO",
+     {
+      "display_name": "Upscale factor",
+      "tooltip": "Two-pass only: a smaller factor starts from a larger first pass, for more detail and a longer run.",
+      "advanced": true,
+      "default": "2",
+      "multiselect": false,
+      "options": [
+       "2",
+       "1.5",
+       "1.2"
+      ]
+     }
+    ]
+   }
+  }
+ },
+ "ImageScaleToTotalPixels": {
+  "input": {
+   "required": {
+    "image": [
+     "IMAGE",
+     {}
+    ],
+    "upscale_method": [
+     "COMBO",
+     {
+      "multiselect": false,
+      "options": [
+       "nearest-exact",
+       "bilinear",
+       "area",
+       "bicubic",
+       "lanczos"
+      ]
+     }
+    ],
+    "megapixels": [
+     "FLOAT",
+     {
+      "default": 1.0,
+      "min": 0.01,
+      "max": 16.0,
+      "step": 0.01
+     }
+    ],
+    "resolution_steps": [
+     "INT",
+     {
+      "advanced": true,
+      "default": 1,
+      "min": 1,
+      "max": 256
+     }
+    ]
+   },
+   "optional": {}
+  }
+ },
+ "KSamplerSelect": {
+  "input": {
+   "required": {
+    "sampler_name": [
+     "COMBO",
+     {
+      "multiselect": false,
+      "options": [
+       "euler",
+       "euler_cfg_pp",
+       "euler_ancestral",
+       "euler_ancestral_cfg_pp",
+       "heun",
+       "heunpp2",
+       "exp_heun_2_x0",
+       "exp_heun_2_x0_sde",
+       "dpm_2",
+       "dpm_2_ancestral",
+       "lms",
+       "dpm_fast",
+       "dpm_adaptive",
+       "dpmpp_2s_ancestral",
+       "dpmpp_2s_ancestral_cfg_pp",
+       "dpmpp_sde",
+       "dpmpp_sde_gpu",
+       "dpmpp_2m",
+       "dpmpp_2m_cfg_pp",
+       "dpmpp_2m_sde",
+       "dpmpp_2m_sde_gpu",
+       "dpmpp_2m_sde_heun",
+       "dpmpp_2m_sde_heun_gpu",
+       "dpmpp_3m_sde",
+       "dpmpp_3m_sde_gpu",
+       "ddpm",
+       "lcm",
+       "ipndm",
+       "ipndm_v",
+       "deis",
+       "cfgpp_ud10_ab",
+       "res_multistep",
+       "res_multistep_cfg_pp",
+       "res_multistep_ancestral",
+       "res_multistep_ancestral_cfg_pp",
+       "gradient_estimation",
+       "gradient_estimation_cfg_pp",
+       "er_sde",
+       "seeds_2",
+       "seeds_3",
+       "sa_solver",
+       "sa_solver_pece",
+       "ddim",
+       "uni_pc",
+       "uni_pc_bh2"
+      ]
+     }
+    ]
+   },
+   "optional": {}
+  }
+ },
+ "LoadImage": {
+  "input": {
+   "required": {
+    "image": [
+     [
+      "up.png"
+     ],
+     {
+      "image_upload": true
+     }
+    ]
+   },
+   "optional": {}
+  }
+ },
+ "PreviewAny": {
+  "input": {
+   "required": {
+    "source": [
+     "*",
+     {}
+    ]
+   },
+   "optional": {}
+  }
+ },
+ "PrimitiveInt": {
+  "input": {
+   "required": {
+    "value": [
+     "INT",
+     {
+      "min": -9223372036854775807,
+      "max": 9223372036854775807,
+      "control_after_generate": "fixed"
+     }
+    ]
+   },
+   "optional": {}
+  }
+ },
+ "RandomNoise": {
+  "input": {
+   "required": {
+    "noise_seed": [
+     "INT",
+     {
+      "default": 0,
+      "min": 0,
+      "max": 18446744073709551615,
+      "control_after_generate": true
+     }
+    ]
+   },
+   "optional": {}
+  }
+ },
+ "ReferenceLatent": {
+  "input": {
+   "required": {
+    "conditioning": [
+     "CONDITIONING",
+     {}
+    ]
+   },
+   "optional": {
+    "latent": [
+     "LATENT",
+     {}
+    ]
+   }
+  }
+ },
+ "SamplerCustomAdvanced": {
+  "input": {
+   "required": {
+    "noise": [
+     "NOISE",
+     {}
+    ],
+    "guider": [
+     "GUIDER",
+     {}
+    ],
+    "sampler": [
+     "SAMPLER",
+     {}
+    ],
+    "sigmas": [
+     "SIGMAS",
+     {}
+    ],
+    "latent_image": [
+     "LATENT",
+     {}
+    ]
+   },
+   "optional": {}
+  }
+ },
+ "SaveImage": {
+  "input": {
+   "required": {
+    "images": [
+     "IMAGE",
+     {
+      "tooltip": "The images to save."
+     }
+    ],
+    "filename_prefix": [
+     "STRING",
+     {
+      "default": "ComfyUI",
+      "tooltip": "The prefix for the file to save. This may include formatting information such as %date:yyyy-MM-dd% or %Empty Latent Image.width% to include values from nodes."
+     }
+    ]
+   },
+   "optional": {}
+  }
+ },
+ "UnetLoaderGGUF": {
+  "input": {
+   "required": {
+    "unet_name": [
+     [
+      "flux-2-klein-4b-Q8_0.gguf"
+     ]
+    ]
+   },
+   "optional": {}
+  }
+ },
+ "VAEDecode": {
+  "input": {
+   "required": {
+    "samples": [
+     "LATENT",
+     {
+      "tooltip": "The latent to be decoded."
+     }
+    ],
+    "vae": [
+     "VAE",
+     {
+      "tooltip": "The VAE model used for decoding the latent."
+     }
+    ]
+   },
+   "optional": {}
+  }
+ },
+ "VAEEncode": {
+  "input": {
+   "required": {
+    "pixels": [
+     "IMAGE"
+    ],
+    "vae": [
+     "VAE"
+    ]
+   },
+   "optional": {}
+  }
+ },
+ "VAELoader": {
+  "input": {
+   "required": {
+    "vae_name": [
+     [
+      "ae.safetensors",
+      "flux2-vae.safetensors",
+      "pixel_space"
+     ]
+    ]
+   },
+   "optional": {}
+  }
+ }
+}

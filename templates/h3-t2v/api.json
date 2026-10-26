@@ -1,0 +1,34 @@
+{
+  "3": {
+    "class_type": "FreeVideoGenerate",
+    "inputs": {
+      "text": "integrated_multimodal_description: [Shot 1] A stylized semi-realistic fantasy-film schoolgirl with porcelain-white skin, large luminous grey-green eyes, a small mouth and delicate V-shaped face, long pale golden-blonde hair and a dark high-neck school robe stands in a softly lit magical school corridor. Chest-up composition. She breathes gently, blinks once, then lifts her chin slightly with a calm confident aloof expression. Her hair moves subtly. A nearly static camera. Consistent facial proportions and hairstyle throughout.\n\noverall_soundscape: Quiet corridor ambience and a faint fabric rustle. No speech.\n\nnon_diegetic_music: No music.",
+      "width": 640,
+      "height": 384,
+      "seconds": 3.0,
+      "seed": 2026102501,
+      "two_pass": true,
+      "base_steps": 8,
+      "refine_steps": 3,
+      "force_regenerate": false,
+      "preview": false,
+      "refine_from": "",
+      "continue_from": "",
+      "frames": 0,
+      "first_frame_reference": false,
+      "voice_reference": false,
+      "hide_tail": false,
+      "step_cache": "none",
+      "upscale_factor": "2"
+    }
+  },
+  "4": {
+    "class_type": "PreviewAny",
+    "inputs": {
+      "source": [
+        "3",
+        1
+      ]
+    }
+  }
+}

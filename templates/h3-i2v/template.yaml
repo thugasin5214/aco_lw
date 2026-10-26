@@ -1,0 +1,20 @@
+title: 图生视频 · FreeVideo / MiniMax H3
+kind: video
+model: freevideo-h3
+source: 标准实验室/03-图生视频-首帧驱动-API.json
+release_after: free        # 视频结束且队列空闲即 /free
+slots:
+  prompt:       {node: "3", field: text, type: str}
+  image:        {node: "1", field: image, type: image, required: true}
+  seed:         {node: "3", field: seed, type: int, min: 0}
+  width:        {node: "3", field: width, type: int, min: 256, max: 1920, multiple_of: 32}
+  height:       {node: "3", field: height, type: int, min: 256, max: 1920, multiple_of: 32}
+  seconds:      {node: "3", field: seconds, type: float, min: 1, max: 10}
+  base_steps:   {node: "3", field: base_steps, type: int, min: 4, max: 16}
+  refine_steps: {node: "3", field: refine_steps, type: int, min: 0, max: 8}
+  force_regenerate: {node: "3", field: force_regenerate, type: bool}
+tiers:
+  smoke: {width: 640, height: 384, seconds: 3, verified: false}   # 同引擎同档位，但 I2V 未实测
+  hd:    {width: 1280, height: 736, seconds: 3, verified: false}
+  portrait: {width: 576, height: 1024, seconds: 3, verified: false}
+default_tier: smoke

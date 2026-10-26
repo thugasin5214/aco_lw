@@ -1,0 +1,145 @@
+{
+  "1": {
+    "class_type": "UnetLoaderGGUF",
+    "inputs": {
+      "unet_name": "flux-2-klein-4b-Q8_0.gguf"
+    }
+  },
+  "2": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen_3_4b.safetensors",
+      "type": "flux2",
+      "device": "default"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "flux2-vae.safetensors"
+    }
+  },
+  "20": {
+    "class_type": "PrimitiveInt",
+    "inputs": {
+      "value": 896
+    }
+  },
+  "21": {
+    "class_type": "PrimitiveInt",
+    "inputs": {
+      "value": 1152
+    }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "2",
+        0
+      ],
+      "text": "[CHARACTER PROPORTIONS]\nA stylized hyperreal fantasy film portrait of a fictional sixteen-year-old European schoolgirl with refined doll-inspired facial proportions and delicately believable skin. Deliberately idealized youthful proportions: large expressive grey-green eyes with bright glossy catchlights, a petite delicate nose, a small softly defined mouth, a slim V-shaped face with a gently tapered chin. [SKIN MATERIAL] Fair ivory skin with subtle natural tonal variation, very fine restrained microtexture, soft matte cheeks and a delicate blush, gentle localized highlights and nuanced cinematic shading.\n[HAIR, EXPRESSION, SCENE]\nLong pale golden-blonde hair loose over both shoulders with fine wispy face-framing strands. Calm confident slightly aloof gaze, relaxed brows, lips closed. A dark high-neck school robe, silver earrings. Frontal head-and-shoulders composition, complete head visible, softly blurred cool-toned magical school corridor, cinematic soft window light and delicate warm highlights. High-end semi-realistic digital character rendering, expressive stylized facial design, delicate fantasy-film beauty."
+    }
+  },
+  "9": {
+    "class_type": "BasicGuider",
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "conditioning": [
+        "7",
+        0
+      ]
+    }
+  },
+  "10": {
+    "class_type": "RandomNoise",
+    "inputs": {
+      "noise_seed": 2026102501
+    }
+  },
+  "11": {
+    "class_type": "KSamplerSelect",
+    "inputs": {
+      "sampler_name": "euler"
+    }
+  },
+  "12": {
+    "class_type": "Flux2Scheduler",
+    "inputs": {
+      "steps": 4,
+      "width": [
+        "20",
+        0
+      ],
+      "height": [
+        "21",
+        0
+      ]
+    }
+  },
+  "13": {
+    "class_type": "EmptyFlux2LatentImage",
+    "inputs": {
+      "width": [
+        "20",
+        0
+      ],
+      "height": [
+        "21",
+        0
+      ],
+      "batch_size": 1
+    }
+  },
+  "14": {
+    "class_type": "SamplerCustomAdvanced",
+    "inputs": {
+      "noise": [
+        "10",
+        0
+      ],
+      "guider": [
+        "9",
+        0
+      ],
+      "sampler": [
+        "11",
+        0
+      ],
+      "sigmas": [
+        "12",
+        0
+      ],
+      "latent_image": [
+        "13",
+        0
+      ]
+    }
+  },
+  "15": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "14",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    }
+  },
+  "16": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "images": [
+        "15",
+        0
+      ],
+      "filename_prefix": "StandardLab/01-文生图-定妆选脸"
+    }
+  }
+}
