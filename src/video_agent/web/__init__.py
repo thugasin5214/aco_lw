@@ -22,6 +22,23 @@ from ..store import PROJECT_ZH, ROUND_ZH, STATE_ZH
 from ..studio import StudioError
 
 STATIC = Path(__file__).parent / "index.html"
+RUNBOOK_PAGE = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>aco_lw 运行手册</title>
+<style>
+:root{--bg:#f6f8fb;--card:#fff;--line:#c9d3e0;--text:#152030;--muted:#526175;--accent:#1f5f99;color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#10151e;--card:#1a2331;
+--line:#344258;--text:#e7edf7;--muted:#a9b8cc;--accent:#8ecbff;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#10151e;--card:#1a2331;--line:#344258;--text:#e7edf7;--muted:#a9b8cc;
+--accent:#8ecbff;color-scheme:dark}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);
+font:15.5px/1.75 system-ui,-apple-system,"PingFang SC",sans-serif}
+main{max-width:980px;margin:auto;padding:28px 20px 70px}h1{font-size:28px;margin:4px 0 8px}
+h2{font-size:20px;margin:36px 0 10px;padding-top:8px;border-top:1px solid var(--line)}h3{font-size:16.5px;margin:22px 0 6px}
+a{color:var(--accent)}hr{border:0}code{color:var(--accent);font-size:.92em;overflow-wrap:anywhere}
+pre{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;overflow:auto}
+pre code{color:var(--text)}table{width:100%;border-collapse:collapse;font-size:14.5px;display:block;overflow-x:auto}
+th,td{padding:7px 10px;border:1px solid var(--line);text-align:left;vertical-align:top}th{background:var(--card)}
+</style></head><body><main>{{body}}</main></body></html>"""
 TASK_KEYS = (
     "id",
     "created",
@@ -78,6 +95,15 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
     @app.get("/progress", response_class=HTMLResponse)
     def progress() -> str:
         return (ROOT / "docs" / "progress.html").read_text()
+
+    @app.get("/runbook", response_class=HTMLResponse)
+    def runbook() -> str:
+        import markdown
+
+        body = markdown.markdown(
+            (ROOT / "docs" / "runbook.md").read_text(), extensions=["tables", "fenced_code"]
+        )
+        return RUNBOOK_PAGE.replace("{{body}}", body)
 
     # ---- 状态 ----
     @app.get("/api/system")

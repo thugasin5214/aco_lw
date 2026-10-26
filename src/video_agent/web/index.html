@@ -163,6 +163,7 @@ kbd{font:11.5px ui-monospace,monospace;border:1px solid var(--line);border-radiu
     <button class="tab" data-view="projects">项目与对话</button>
     <button class="tab" data-view="gallery">产物</button>
     <button class="tab" data-view="progress">项目进度</button>
+    <button class="tab" data-view="runbook">手册</button>
   </nav>
 </header>
 <main>
@@ -211,6 +212,7 @@ kbd{font:11.5px ui-monospace,monospace;border:1px solid var(--line);border-radiu
   </section>
 
   <section class="view" id="v-progress"><iframe title="项目进度" data-src="/progress"></iframe></section>
+  <section class="view" id="v-runbook"><iframe title="运行手册" data-src="/runbook"></iframe></section>
 </main>
 <script>
 const STAGES = [["validated","校验"],["waiting_memory","内存门控"],["submitted","提交"],["running","生成"],["review","待审阅"],["final","审阅结果"]];
@@ -254,7 +256,7 @@ function show(v){
   view = v; history.replaceState(null, "", "#" + v);
   document.querySelectorAll("header .tab").forEach(x => x.classList.toggle("on", x.dataset.view === v));
   document.querySelectorAll(".view").forEach(x => x.classList.toggle("on", x.id === "v-" + v));
-  const f = $("#v-progress iframe"); if (v === "progress" && !f.src) f.src = f.dataset.src;
+  const f = document.querySelector(`#v-${v} iframe`); if (f && !f.src) f.src = f.dataset.src;
   refreshAll();
 }
 document.querySelectorAll("#v-gallery .tab").forEach(b => b.onclick = () => {

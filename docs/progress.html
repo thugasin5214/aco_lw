@@ -48,20 +48,32 @@ code{color:var(--accent);font-size:.92em;overflow-wrap:anywhere}
 <main>
 <div class="muted small">aco_lw · 轻量本地视频 Agent · 更新于 2026-10-26</div>
 <h1>项目进度</h1>
-<div class="lead">阶段 0、1 已通过。阶段 2 代码完成：常驻服务 <code>va daemon</code>、控制台审阅（通过 / 重做 / 微调 / 打回+批注）、项目与对话历史、导演基准包、LLM 规划器（真机实测：理解需求 7–10 s，批注改写 7 s）。剩 G2：配置 Telegram bot 后在手机上完成一次选版。</div>
+<div class="lead">阶段 0、1 已通过；阶段 2 代码完成，控制台侧审阅流程已经用户实测（需求 → 候选 → 打回+批注 → 新一轮），Telegram 已接入（@luwu_abot，白名单已配），<b>手机侧选版待用户测试</b>。下一步按用户要求做<b>阶段 5：可安装包 + 配置向导</b>，目标是新机器一键跑起来。运行手册见控制台“手册”页。</div>
 
 <h2>阶段路线</h2>
-<div class="road">
+<div class="road" style="grid-template-columns:repeat(6,minmax(0,1fr))">
   <div class="ph done"><div class="n">阶段 0</div><div class="t">接口与基线实测</div>
     <div class="g">G0：视频冒烟通过，峰值内存与切换耗时已记录</div><span class="tag">已通过</span></div>
   <div class="ph done"><div class="n">阶段 1</div><div class="t">编排器 + 图片闭环 + Web 进度台</div>
     <div class="g">G1：CLI 图片闭环；重启不重复提交；Web 能看 DAG 与产物</div><span class="tag">已通过</span></div>
   <div class="ph now"><div class="n">阶段 2 · 进行中</div><div class="t">Telegram + 审阅 + 项目历史</div>
     <div class="g">G2：手机上能完成选版；等待期间无 LLM 推理</div><span class="tag">等 G2 验收</span></div>
+  <div class="ph"><div class="n">阶段 5 · 下一步</div><div class="t">可安装包 + 配置向导</div>
+    <div class="g">G5：干净 Mac 仅按安装文档 30 min 内出第一张图；重启自动恢复</div><span class="tag">规划中</span></div>
   <div class="ph"><div class="n">阶段 3</div><div class="t">短视频闭环 + 有限探索</div>
     <div class="g">G3：遵守探索预算；未经选定不替换定妆</div><span class="tag">后续</span></div>
   <div class="ph"><div class="n">阶段 4</div><div class="t">扩展能力（OpenClaw 子 agent）</div>
     <div class="g">G4：按需启动、能退出、无孤儿进程</div><span class="tag">后续</span></div>
+</div>
+
+<h2>测试中发现的待办（2026-10-26）</h2>
+<div class="box">
+  <ul class="tasks">
+    <li><span class="ck"></span><span class="id">B1</span><span>对话附参考图：控制台上传 / Telegram 发图 → 参考编辑或图生视频，可一键锁进基准包</span></li>
+    <li><span class="ck"></span><span class="id">B2</span><span>有待审阅轮次时，直接打字默认视为对最近一轮的批注（DAG 连线、自动关闭上一轮）</span></li>
+    <li><span class="ck"></span><span class="id">B3</span><span>规划器带上批注链与原话、回复复述理解要点，减少歧义（如“太小”指年龄）</span></li>
+    <li><span class="ck"></span><span class="id">B4</span><span>规划耗时随上下文增长到 23–41 s，评估关闭思考 / 缩短上下文</span></li>
+  </ul>
 </div>
 
 <h2>阶段 2 任务</h2>
@@ -77,7 +89,7 @@ code{color:var(--accent);font-size:.92em;overflow-wrap:anywhere}
     <li class="d"><span class="ck">✓</span><span class="id">T2.7</span><span>控制台审阅页：候选并排、快捷键 1–9 / Enter / F / R / X / J / K</span></li>
     <li class="d"><span class="ck">✓</span><span class="id">T2.8</span><span>驻留模式 <code>/mode</code>：按需 / 会话 / 常驻 / 纯命令</span></li>
     <li class="d"><span class="ck">✓</span><span class="id">T2.10</span><span>项目与对话历史：历史项目永久保留，控制台可看已完成项目、轮次、基准包版本、完整对话</span></li>
-    <li class="w"><span class="ck">…</span><span class="id">T2.9</span><span>G2 验收：手机上收到 4 个候选 → 选中锁定 → 批注 → 新一轮；等待期间 LLM 已按 TTL 卸载</span></li>
+    <li class="w"><span class="ck">…</span><span class="id">T2.9</span><span>G2 验收：控制台侧已走通（需求 → 4 候选 → 打回+批注 ×2 → 新一轮）；手机侧选版待用户测试</span></li>
   </ul>
 </div>
 
@@ -122,6 +134,8 @@ code{color:var(--accent);font-size:.92em;overflow-wrap:anywhere}
   <p>2026-10-26 · 进度台端口改为 8790（8765 是用户另一个 server）。</p>
   <p>2026-10-26 · 阶段 2：新建专用 Telegram bot；候选以原图文件发送；手机只用 Telegram；每轮候选数可配置，默认 4。</p>
   <p>2026-10-26 · 阶段 2 加入“项目”与对话历史：历史项目永久保留，控制台可看已完成项目与完整对话。</p>
+  <p>2026-10-26 · Telegram bot @luwu_abot 接入，白名单 1 个 chat。新增运行手册（控制台“手册”页 / <code>docs/runbook.md</code>）。</p>
+  <p>2026-10-26 · 下一步改为阶段 5：可安装包 + Web 配置向导 + 安装文档，目标新机器一键运行；阶段 3/4 顺延。</p>
 </div>
 </main>
 </body>
