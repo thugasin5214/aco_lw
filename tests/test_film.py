@@ -224,3 +224,12 @@ def test_start_waits_for_freevideo_approval_then_retries_same_ref(film_prod):
     assert all(a["meta"]["film"] == "d000000000001" and not a["meta"]["pending_ref"] for a in arts)
     p.fv.finish_takes("sh01")
     assert p.film.tick() == 1
+
+
+def test_restart_keeps_film_shots_running(film_prod):
+    p = film_prod
+    pr = to_film(p)
+    p.run_stage(pr["id"], "clips")
+    assert p.recover() == 0  # 电影镜头不是 LLM 作业：不重排
+    assert all(a["status"] == "running" for a in p.store.artifacts(pr["id"], "clips"))
+    assert p.pending_skill_jobs() == []

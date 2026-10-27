@@ -78,7 +78,9 @@ class Stage(BaseModel):
     tool: str | None = None  # tool 阶段：编排器里注册的确定性工具（例如 ingest）
     needs: list[str] = []
     skill: str | None = None
-    extra_skills: list[str] = []  # 一并读的参考 skill（例如 MiniMax 官方 h3-prompt-writing）；没装就跳过
+    extra_skills: list[
+        str
+    ] = []  # 一并读的参考 skill（例如 MiniMax 官方 h3-prompt-writing）；没装就跳过
     llm: str | None = None  # 指定后端（如 claude_code）；留空用制片设置 / 主后端
     instructions: str = ""
     output_schema: dict | str | None = Field(None, alias="schema")
@@ -240,7 +242,9 @@ class Production:
         self.workflows, self.llm, self.log = workflows, llm, log
         self.work_dir = work_dir or (self.store.jobs_dir.parent / "productions")
         self.listeners: list[Callable[[dict], None]] = []  # 阶段进入待审阅 / 失败 / 完成 → 通知
-        self.stop_running: Callable[[str], dict | None] = lambda pid: None  # 由 daemon 注入：中断该制片正在跑的任务
+        self.stop_running: Callable[[str], dict | None] = lambda pid: (
+            None
+        )  # 由 daemon 注入：中断该制片正在跑的任务
         self._lock = threading.RLock()
         self._wake = threading.Event()
         studio.round_listeners.append(self._on_round_created)
@@ -298,7 +302,10 @@ class Production:
         stopped = self.stop_running(production_id) if stop_running else None
         if stop_running and self.film is not None:
             self.film.cancel(production_id)  # 取消还没拍完的 take（拍好的保留）
-        self.log(f"production {production_id}: paused" + (f", interrupted {stopped['id']}" if stopped else ""))
+        self.log(
+            f"production {production_id}: paused"
+            + (f", interrupted {stopped['id']}" if stopped else "")
+        )
         return {**prod, "interrupted": stopped and stopped["id"]}
 
     def resume(self, production_id: str) -> dict:
@@ -569,7 +576,12 @@ class Production:
                     raise ProductionError("film 阶段需要 FreeVideo（freevideo_agent 未启用）")
                 if keys:
                     made = self.film.start(
-                        prod, st, idx, ctx, keys, note,
+                        prod,
+                        st,
+                        idx,
+                        ctx,
+                        keys,
+                        note,
                         lambda k: self._item_deps(prod, st, idx, ctx, k),
                     )
                 keys = []
@@ -744,15 +756,25 @@ class Production:
         jobs = []
         for prod in self.store.productions():
             if prod["state"] == "active":
-                jobs += self.store.artifacts(prod["id"], None, "queued")
+                wf = self.workflows.get(prod["workflow"])
+                jobs += [
+                    a
+                    for a in self.store.artifacts(prod["id"], None, "queued")
+                    if wf and wf.stage(a["stage"]).kind in ("skill", "tool")
+                ]
         return sorted(jobs, key=lambda a: a["created"])
 
     def recover(self) -> int:
         """进程重启：跑到一半的 skill 作业回到队列（LLM 调用无副作用，重跑安全）。"""
         n = 0
         for prod in self.store.productions():
+            wf = self.workflows.get(prod["workflow"])
             for a in self.store.artifacts(prod["id"], None, "running"):
-                if not a["round_id"]:
+                kind = wf.stage(a["stage"]).kind if wf else None
+                if not a["round_id"] and kind in (
+                    "skill",
+                    "tool",
+                ):  # 电影镜头等外部作业保持 running
                     self.store.update_artifact(a["id"], status="queued")
                     n += 1
         return n
@@ -775,6 +797,9 @@ class Production:
                     self.log(f"skill {art['stage']} parked: {e}")
                     parked = True
                     break
+                except Exception as e:  # noqa: BLE001 — 单个作业出错不能让整个后台线程退出
+                    self.log(f"job {art['stage']}/{art['key']} failed: {e}")
+                    self.store.update_artifact(art["id"], status="failed", note=str(e)[:500])
             idle = min(idle_s, 10.0) if filming else idle_s
             self._wake.wait(idle if parked or not self.pending_skill_jobs() else 0.1)
             self._wake.clear()
@@ -783,9 +808,12 @@ class Production:
         out = []
         for prod in self.store.productions():
             if prod["state"] == "active":
-                out += [a for a in self.store.artifacts(prod["id"], None, "running")
-                        if ((a["meta"] or {}).get("film") or (a["meta"] or {}).get("pending_ref"))
-                        and not a["round_id"]]
+                out += [
+                    a
+                    for a in self.store.artifacts(prod["id"], None, "running")
+                    if ((a["meta"] or {}).get("film") or (a["meta"] or {}).get("pending_ref"))
+                    and not a["round_id"]
+                ]
         return out
 
     def wake(self) -> None:
@@ -796,11 +824,17 @@ class Production:
         item = dict(self._items(st, ctx)).get(key, {})
         src_stage = st.fan_out.items.split(".")[0]
         cur = self._current(idx, src_stage, "main")
-        deps = [{
-            "stage": src_stage, "key": "main", "path": st.fan_out.items.split(".", 1)[1],
-            "field": st.fan_out.key, "item": key, "hash": fingerprint(item),
-            "version": cur and cur["version"],
-        }]
+        deps = [
+            {
+                "stage": src_stage,
+                "key": "main",
+                "path": st.fan_out.items.split(".", 1)[1],
+                "field": st.fan_out.key,
+                "item": key,
+                "hash": fingerprint(item),
+                "version": cur and cur["version"],
+            }
+        ]
         if st.cast:
             c = self._current(idx, st.cast, "main")
             deps.append({"stage": st.cast, "key": "main", "version": c and c["version"]})
