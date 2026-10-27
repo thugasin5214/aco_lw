@@ -14,10 +14,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
 import threading
+import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -478,6 +481,7 @@ class AgentRuntime:
         """enqueue：把一步放进规划器队列（单线程）；say_for(channel)：给某个渠道发消息的函数。"""
         self.studio, self.planner, self.store = studio, planner, studio.store
         self.enqueue, self.say_for, self.max_steps = enqueue, say_for, max_steps
+        self.cfg = studio.orch.cfg
         self.policies = Policies.load(studio.orch.cfg.data_dir)
         self.tools = build_tools(self)
         self.spec = tools_spec(self.tools)
@@ -495,6 +499,8 @@ class AgentRuntime:
             out = {"role": "assistant", "content": m["content"]}
             if m["meta"].get("reasoning"):  # 本次运行内逐字回放思考内容（与生成时一致）
                 out["reasoning_content"] = m["meta"]["reasoning"]
+            if m["meta"].get("anthropic"):  # Claude 生成的回合：原始内容块原样回放
+                out["_anthropic"] = m["meta"]["anthropic"]
             if m["tool_calls"]:
                 out["tool_calls"] = [
                     {
@@ -561,37 +567,96 @@ class AgentRuntime:
         return run
 
     # ---- 一步 ----
+    # ---- 选后端：本地优先；资源不够 / 本地不可用时按配置回退到在线模型或 agent CLI ----
+    def _api_backend(self, name: str):
+        cache = self.__dict__.setdefault("_api_backends", {})
+        if name not in cache:
+            from .planner import make_named_backend
+
+            cache[name] = make_named_backend(self.cfg, self.store, name)
+        return cache[name]
+
+    def _fallback(self, run: dict, why: str):
+        """返回 ("backend", 后端) | ("delegate", CLI 名) | ("park", 原因)。"""
+        chain = list(self.cfg.llm_fallback or [])
+        if not chain:
+            return "park", why
+        if not self.cfg.allow_online:  # 隐私开关没开：不往外发
+            return "park", f"{why}; online fallback is configured but allow_online is off"
+        fresh = len(self.store.agent_msgs(run["id"])) == 1  # 还没开始：可以整个交给 CLI
+        for name in chain:
+            if name in ("anthropic", "openai_compatible"):
+                return "backend", self._api_backend(name)
+            if name in ("claude_code", "codex") and fresh:
+                return "delegate", name
+        return "park", why
+
+    def _choose(self, run: dict):
+        primary = self.planner.backend
+        if not getattr(primary, "local", False):
+            return "backend", primary  # 主后端本身就在线：不占本地内存，不需要把关
+        ok, why = self.studio.orch.resources.llm_admit()
+        if ok:
+            return "backend", primary
+        return self._fallback(run, why)
+
     def step(self, run_id: str) -> None:
         with self._lock:
             run = self.store.get_run(run_id)
-            if run is None or run["status"] in TERMINAL_RUN:
+            if run is None or run["status"] in TERMINAL_RUN or run["status"] == "delegated":
                 return
             if self._unresolved(run_id):
                 return  # 还有工具结果没回来，等事件 / 审批
-            rm = self.studio.orch.resources
-            ok, why = rm.llm_admit()
-            if not ok:  # 结果先暂存，资源允许了再交回 LLM
-                self.store.update_run(run_id, status="waiting_resources", waiting={"reason": why})
-                return
             if run["steps"] >= self.max_steps:
                 self._finish(run, tr("agent_step_budget", n=self.max_steps), "done")
                 return
+            kind, what = self._choose(run)
+            if kind == "park":  # 结果先暂存，资源允许了再交回 LLM
+                self.store.update_run(run_id, status="waiting_resources", waiting={"reason": what})
+                return
+            if kind == "delegate":
+                self._delegate(run, what)
+                return
             self.store.update_run(run_id, status="running", waiting={})
+        backend = what
         say = self.say_for(run["channel"])
+        rm = self.studio.orch.resources
         try:
-            with rm.llm.inference():
-                res = self.planner.backend.chat(self.messages_for(run), None, tools=self.spec)
-        except Exception as e:  # LLM 出错：记录并告诉你，运行标为失败
-            log.exception("agent LLM call failed")
-            self._finish(run, tr("planner_error", e=e), "failed")
-            return
+            res = self._call(backend, run, rm)
+        except Exception as e:  # 本地 LLM 出错 / 不可用：按配置回退一次，否则标为失败
+            kind, alt = self._fallback(run, f"{backend.name} failed: {e}")
+            if kind == "backend" and alt is not backend:
+                log.warning(
+                    "agent backend %s failed, falling back to %s: %s", backend.name, alt.name, e
+                )
+                try:
+                    backend, res = alt, self._call(alt, run, rm)
+                except Exception as e2:
+                    log.exception("agent fallback call failed")
+                    self._finish(run, tr("planner_error", e=e2), "failed")
+                    return
+            elif kind == "delegate":
+                self._delegate(run, alt)
+                return
+            else:
+                log.exception("agent LLM call failed")
+                self._finish(run, tr("planner_error", e=e), "failed")
+                return
+        if backend is not self.planner.backend:
+            self._log_policy(
+                run, f"local LLM unavailable → this step used {res.backend or backend.name}"
+            )
         calls = res.tool_calls
+        extra = (
+            {"anthropic": res.raw_content} if (res.backend or "").startswith("anthropic") else {}
+        )
         self.store.add_agent_msg(
             run_id,
             "assistant",
             res.text or None,
             tool_calls=calls or None,
             reasoning=res.reasoning,
+            **extra,
             **res.stats(),
         )
         self.store.update_run(run_id, steps=run["steps"] + 1)
@@ -601,7 +666,7 @@ class AgentRuntime:
                 "out",
                 res.text or "",
                 run["project_id"],
-                self.planner.backend.name,
+                backend.name,
                 run_id=run_id,
                 purpose="agent",
                 **res.stats(),
@@ -611,6 +676,93 @@ class AgentRuntime:
         for c in calls:
             self._execute(run, c, say)
         self._advance(run_id)
+
+    def _call(self, backend, run: dict, rm):
+        inflight = (
+            rm.llm.inference() if getattr(backend, "local", False) else contextlib.nullcontext()
+        )
+        with inflight:
+            return backend.chat(self.messages_for(run), None, tools=self.spec)
+
+    # ---- 交给本机 agent CLI（Claude Code / Codex） ----
+    def _delegate(self, run: dict, name: str) -> None:
+        self.store.update_run(run["id"], status="delegated", waiting={"agent": name})
+        self._log_policy(run, f"local LLM unavailable → whole request delegated to {name}")
+        threading.Thread(
+            target=self._run_cli, args=(run["id"], name), daemon=True, name=f"agent-cli-{run['id']}"
+        ).start()
+
+    def cli_prompt(self, run: dict) -> str:
+        session = self.store.get_session(run["session_id"]) if run["session_id"] else None
+        parts = [self.system_prompt(run["project_id"], session)]
+        for r in self.store.runs(run["session_id"]):
+            if r["id"] == run["id"]:
+                break
+            if r["status"] in TERMINAL_RUN:
+                c = self._compact(r)
+                parts.append(f"{c[0]['content']}\n## Your earlier answer\n{c[1]['content']}")
+        parts.append(self.store.agent_msgs(run["id"])[0]["content"])
+        parts.append(
+            "## Environment\nYou run inside aco_lw. Use only the aco_lw tools; you have "
+            "no shell or file access. When finished, reply with the final message for the "
+            "user (it is shown to them as-is)."
+        )
+        return "\n\n".join(parts)
+
+    def _run_cli(self, run_id: str, name: str) -> None:
+
+        run = self.store.get_run(run_id)
+        url = f"http://127.0.0.1:{self.cfg.web_port}"
+        try:
+            text, stats = self.cli_runner(name).run(run_id, self.cli_prompt(run), url)
+            status = "done"
+        except Exception as e:  # CLI 失败：告诉你原因，运行标为失败
+            log.exception("agent CLI %s failed", name)
+            text, stats, status = tr("planner_error", e=e), {"via": name}, "failed"
+        self.store.add_agent_msg(run_id, "assistant", text, **stats)
+        self.studio.log(
+            "llm", "out", text, run["project_id"], name, run_id=run_id, purpose="agent", **stats
+        )
+        self.store.update_run(run_id, status="running")  # 离开 delegated 后再结束
+        self._finish(self.store.get_run(run_id), None, status, say_text=text)
+
+    def cli_runner(self, name: str):
+        from .agent_cli import AgentCLI
+
+        return AgentCLI(name, self.cfg)
+
+    def external_tool(self, run_id: str, name: str, args: dict, timeout: float = 1800) -> dict:
+        """CLI agent 经 MCP 发来的工具调用：同样的执行策略、审批与等待，只是同步返回结果。"""
+        run = self.store.get_run(run_id)
+        if run is None or run["status"] != "delegated":
+            return {"error": "this run is not delegated to an external agent"}
+        call = {
+            "id": f"ext_{uuid.uuid4().hex[:10]}",
+            "name": name,
+            "arguments": json.dumps(args, ensure_ascii=False),
+        }
+        self._execute(run, call, self.say_for(run["channel"]))
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            m = next(
+                (
+                    x
+                    for x in self.store.agent_msgs(run_id)
+                    if x["role"] == "tool" and x["tool_call_id"] == call["id"]
+                ),
+                None,
+            )
+            if m and m["status"] == "done":
+                try:
+                    return json.loads(m["content"])
+                except (TypeError, json.JSONDecodeError):
+                    return {"result": m["content"]}
+            time.sleep(1)
+        return {
+            "pending": True,
+            "note": "still waiting (render or user decision); "
+            "call the same tool again to keep waiting",
+        }
 
     def _execute(self, run: dict, call: dict, say) -> None:
         tool = self.tools.get(call["name"])
@@ -690,6 +842,9 @@ class AgentRuntime:
         ]
 
     def _advance(self, run_id: str) -> None:
+        run = self.store.get_run(run_id)
+        if run and run["status"] == "delegated":
+            return  # CLI agent 自己在等这个结果（external_tool 轮询），不要排本地步骤
         pending = self._unresolved(run_id)
         if not pending:
             self.store.update_run(run_id, status="running", waiting={})
@@ -884,7 +1039,7 @@ class AgentRuntime:
         return tr("agent_approved")
 
     def answer_pending_question(self, channel: str, session_id: str, text: str) -> bool:
-        for run in self.store.runs(session_id, "waiting_user"):
+        for run in self.store.runs(session_id, "waiting_user", "delegated"):
             if run["channel"] != channel:
                 continue
             if self.resolve(f"ask:{run['id']}", {"answer": text}):

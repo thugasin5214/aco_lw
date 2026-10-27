@@ -104,9 +104,29 @@ class Plan:
     memories: list[str] = field(default_factory=list)
 
 
-def make_backend(cfg: Settings, store: Store):
-    if cfg.planner_backend == "openai_compatible":
+API_BACKENDS = ("lmstudio", "openai_compatible", "anthropic")
+AGENT_CLIS = ("claude_code", "codex")
+
+
+def make_named_backend(cfg: Settings, store: Store, name: str):
+    """按名字建后端：lmstudio（本地）、openai_compatible、anthropic（在线）。"""
+    if name == "openai_compatible":
         return OpenAICompatBackend(cfg.openai_base_url, cfg.openai_model, cfg.openai_api_key)
+    if name == "anthropic":
+        from .backends import AnthropicBackend
+
+        return AnthropicBackend(
+            cfg.anthropic_model,
+            cfg.anthropic_effort,
+            cfg.anthropic_api_key or None,
+            cfg.anthropic_fallbacks,
+        )
+    return make_backend(cfg, store)
+
+
+def make_backend(cfg: Settings, store: Store):
+    if cfg.planner_backend in ("openai_compatible", "anthropic"):
+        return make_named_backend(cfg, store, cfg.planner_backend)
 
     def ttl() -> int | None:
         mode = store.get_kv("llm_mode", "on_demand")

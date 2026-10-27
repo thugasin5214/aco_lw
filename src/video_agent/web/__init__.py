@@ -491,6 +491,21 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
             "history": list(rm.history)[-360:],
         }
 
+    # ---- 给本机 agent CLI 的 MCP 服务用（只接受已委托出去的运行） ----
+    @app.get("/api/agent/tools")
+    def agent_tools() -> list[dict]:
+        return [t["function"] for t in actions.runtime.spec]
+
+    @app.post("/api/agent/tool")
+    def agent_tool(
+        run_id: str = Body(...),
+        name: str = Body(...),
+        arguments: dict = Body(default_factory=dict),  # noqa: B008 — FastAPI 请求体声明
+    ) -> dict:
+        return actions.runtime.external_tool(
+            run_id, name, arguments, timeout=cfg.agent_cli_timeout_s
+        )
+
     @app.get("/api/runs")
     def runs(session: str) -> list[dict]:
         return [

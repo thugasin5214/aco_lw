@@ -319,7 +319,7 @@ const I18N = {
     "q.col.task": "Task", "q.col.tpl": "Template / tier", "q.col.est": "Est.", "q.col.eta": "Starts / ends", "q.col.src": "Estimate from",
     "q.in": "in {m}", "q.chart.empty": "Collecting samples… (needs the daemon)", "q.free": "free GiB",
     "run.running": "working", "run.waiting_resources": "waiting for resources", "run.waiting_event": "waiting for a render",
-    "run.waiting_user": "waiting for you", "run.done": "done", "run.failed": "failed", "run.cancelled": "cancelled",
+    "run.waiting_user": "waiting for you", "run.delegated": "handed to an online agent", "via": "via {v}", "run.done": "done", "run.failed": "failed", "run.cancelled": "cancelled",
     "run.bar": "Agent is {s}{w}", "run.cancel": "Stop", "who.agent": "Agent",
     "wf.export": "⬇ Export workflow", "wf.open": "Open ComfyUI ↗", "wf.import": "⬆ Import edited workflow",
     "wf.howto": "Edit in ComfyUI: export this task's workflow, drag the file onto the ComfyUI canvas (or Ctrl+O), change it, then Workflow → Export (API) and import that file here.",
@@ -387,7 +387,7 @@ const I18N = {
     "q.col.task": "任务", "q.col.tpl": "模板 / 档位", "q.col.est": "预计耗时", "q.col.eta": "开始 / 结束", "q.col.src": "估计依据",
     "q.in": "{m} 后", "q.chart.empty": "正在采样……（需要 daemon 运行）", "q.free": "可用 GiB",
     "run.running": "处理中", "run.waiting_resources": "在等资源", "run.waiting_event": "在等渲染",
-    "run.waiting_user": "在等你", "run.done": "完成", "run.failed": "失败", "run.cancelled": "已取消",
+    "run.waiting_user": "在等你", "run.delegated": "已交给在线 agent", "via": "经 {v}", "run.done": "完成", "run.failed": "失败", "run.cancelled": "已取消",
     "run.bar": "Agent {s}{w}", "run.cancel": "停止", "who.agent": "Agent",
     "wf.export": "⬇ 导出 workflow", "wf.open": "打开 ComfyUI ↗", "wf.import": "⬆ 导入改好的 workflow",
     "wf.howto": "在 ComfyUI 里改：导出这个任务的 workflow，把文件拖到 ComfyUI 画布上（或 Ctrl+O），改完后用 Workflow → Export (API) 导出，再在这里导入。",
@@ -808,7 +808,8 @@ function chatHtml(p, msgs, canChat){
     if (m.channel === "llm") lastLlm = m.text;
     else if (m.direction === "out" && lastLlm && text.startsWith(lastLlm)) { text = text.slice(lastLlm.length).trim(); lastLlm = ""; if (!text) return ""; }
     const st = m.meta || {};
-    const extra = m.channel === "llm" && st.seconds != null ? " · " + t("llm.stats", {s: st.seconds, t: st.prompt_tokens ?? "?", c: st.prompt_tokens ? Math.round(100 * (st.cached_tokens_est || 0) / st.prompt_tokens) : 0}) + (st.load_s ? t("load", {l: st.load_s}) : "") : "";
+    const extra = (m.channel === "llm" && st.seconds != null ? " · " + t("llm.stats", {s: st.seconds, t: st.prompt_tokens ?? "?", c: st.prompt_tokens ? Math.round(100 * (st.cached_tokens_est || 0) / st.prompt_tokens) : 0}) + (st.load_s ? t("load", {l: st.load_s}) : "") : "")
+      + (m.channel === "llm" && st.via && !String(st.via).startsWith("lmstudio") && st.via !== "func" ? " · " + t("via", {v: st.via}) + (st.cost_usd != null ? ` · $${Number(st.cost_usd).toFixed(3)}` : "") : "");
     const att = (st.attachments || []).map(a => `<img class="att" src="/uploads/${encodeURIComponent(a.id)}" alt="${esc(a.name)}">`).join("");
     const btns = canChat && st.buttons ? `<div class="btns">${st.buttons.flat().map(([lbl, data]) => `<button class="btn sm" onclick="pressBtn('${esc(data)}')">${esc(lbl)}</button>`).join("")}</div>` : "";
     return `<div class="msg ${cls}"><span class="meta">${t("who." + m.channel)} · ${fmtT(m.ts)}${esc(extra)}</span>${esc(text)}${att}${btns}</div>`;
