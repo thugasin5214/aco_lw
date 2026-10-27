@@ -207,3 +207,29 @@ def test_reopen_reports_spawned_rounds_and_standalone_task(studio):
     studio.orch.execute(t["id"])
     studio.approve_task(t["id"], False)
     assert studio.reopen_task(t["id"])["state"] == "review"
+
+
+def test_unmeasured_video_tier_falls_back_with_opt_in_button(studio):
+    img = studio.start_round("flux2-t2i", {"seed": 1}, n=1)
+    drain(studio)
+    a, _p, out, reply = actions_with(
+        studio,
+        [
+            plan_reply(
+                action="round",
+                template="h3-i2v",
+                prompt="she smiles",
+                tier="hd",
+                image=f"@task:{studio.store.round_tasks(img['id'])[0]['id']}",
+            )
+        ],
+    )
+    a.inbound("web", "make a video", reply)
+    run_jobs(a)
+    rnd = studio.store.rounds(state="generating")[0]
+    assert rnd["tier"] == "smoke"  # 自动降到已实测档位
+    btn = next(b for t, b in out if b)[0][0][1]
+    assert btn == f"u:{rnd['id']}:hd"
+    a.button("web", btn, reply)  # 用户确认后才跑 hd
+    tiers = sorted(r["tier"] for r in studio.store.rounds(state="generating"))
+    assert tiers == ["hd", "smoke"]

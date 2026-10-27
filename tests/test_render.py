@@ -49,7 +49,7 @@ def test_resolve_rejects(params, msg):
 
 
 def test_unverified_tier_needs_flag():
-    with pytest.raises(ParamError, match="尚未实测"):
+    with pytest.raises(ParamError, match="not been measured"):
         resolve(REG.template("h3-t2v"), {}, tier="hd")
     assert resolve(REG.template("h3-t2v"), {}, tier="hd", allow_unverified=True)[1]["width"] == 1280
 

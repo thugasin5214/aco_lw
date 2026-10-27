@@ -52,7 +52,10 @@ def resolve(
     if tier not in t.tiers:
         raise ParamError(f"{t.name} 没有档位 {tier}；可选：{', '.join(t.tiers)}")
     if not t.tiers[tier].verified and not allow_unverified:
-        raise ParamError(f"档位 {tier} 尚未实测，需显式允许（--allow-unverified）")
+        raise ParamError(
+            f"tier {tier} has not been measured yet; approve it explicitly "
+            "(console / Telegram button, or --allow-unverified on the CLI)"
+        )
     unknown = set(params) - set(t.slots)
     if unknown:
         raise ParamError(f"未知参数：{', '.join(sorted(unknown))}")

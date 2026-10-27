@@ -202,12 +202,17 @@ class Actions:
                 parent = ref["id"]
                 if ref["state"] == "review":
                     self.studio.reject(ref["id"], text, origin=channel)
-            kind = self.studio.orch.registry.template(plan.template).kind
+            tpl = self.studio.orch.registry.template(plan.template)
+            kind, tier, asked = tpl.kind, plan.tier, None
+            if kind == "video" and tier in tpl.tiers and not tpl.tiers[tier].verified:
+                # 视频的未实测档位可能超出内存预算：先用已实测档位出，未实测档位要你点按钮确认
+                asked = tier
+                tier = next((k for k, v in tpl.tiers.items() if v.verified), tpl.default_tier)
             rnd = self.studio.start_round(
                 plan.template,
                 plan.params,
                 plan.n,
-                plan.tier,
+                tier,
                 plan.title,
                 origin=channel,
                 request=text,
@@ -220,6 +225,11 @@ class Actions:
                 f"{plan.reply}\n"
                 + tr("queued_round", n=rnd["n"], tpl=rnd["template"], tier=rnd["tier"])
             )
+            if asked:
+                say(
+                    tr("tier_fallback", asked=asked, used=tier),
+                    [[(tr("btn_try_tier", t=asked), f"u:{rnd['id']}:{asked}")]],
+                )
 
         self.jobs.put((job, say))
 
@@ -313,6 +323,23 @@ class Actions:
             if kind == "r":
                 new = self.studio.redo(rest, origin=channel)
                 say(tr("redo_queued", n=new["n"]))
+                return True
+            if kind == "u":  # 你确认后才用未实测档位
+                rid, tier = rest.split(":")
+                src = self.store.get_round(rid)
+                new = self.studio.start_round(
+                    src["template"],
+                    src["base_params"],
+                    src["n"],
+                    tier,
+                    src["title"],
+                    origin=channel,
+                    request=f"tier {tier} (unmeasured)",
+                    parent_round=rid,
+                    project_id=src["project_id"],
+                    allow_unverified=True,
+                )
+                say(tr("try_tier_queued", t=tier, n=new["n"]))
                 return True
             if kind == "o":
                 self.reopen(rest, channel, say)

@@ -38,6 +38,15 @@ M: dict[str, tuple[str, str]] = {
         "Queued a new round: {n} candidate(s) (keeping #{idx}'s seed)",
         "已排队新一轮：{n} 个候选（保留 #{idx} 的种子）",
     ),
+    "tier_fallback": (
+        "Tier “{asked}” hasn't been measured for video yet (memory and time unknown), so I queued it at “{used}”. Want to try “{asked}” as well?",
+        "视频档位「{asked}」还没实测过（内存与耗时未知），先按「{used}」出。要不要也试一下「{asked}」？",
+    ),
+    "btn_try_tier": ("Also try {t} (unmeasured)", "也试一下 {t}（未实测）"),
+    "try_tier_queued": (
+        "Queued at tier {t} (unmeasured — first run, watch memory): {n} candidate(s)",
+        "已按 {t} 档排队（未实测——首次运行，注意内存）：{n} 个候选",
+    ),
     "locked_as": ("Locked as “{r}”", "已锁定为「{r}」"),
     "ask_lock": ("Lock it into the baseline pack?", "要锁进基准包吗？"),
     "selected_ask_lock": (
