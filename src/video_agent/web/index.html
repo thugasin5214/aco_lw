@@ -313,7 +313,9 @@ const I18N = {
     "prod.empty": "No productions yet. Click New and paste a short story.", "prod.pick": "Pick a production on the left.",
     "prod.new": "New production", "prod.workflow": "Workflow", "prod.title": "Title", "prod.source": "Source text",
     "prod.vtier": "Video tier", "prod.ncand": "Image candidates", "prod.subs": "Subtitles", "prod.create": "Create",
-    "prod.run": "Run", "prod.start": "Start (long render)", "prod.rerun": "Re-run", "prod.approve": "Approve", "prod.redo": "Redo…",
+    "prod.run": "Run", "prod.start": "Start (long render)", "prod.rerun": "Re-run", "prod.rerun_all": "Re-run all…", "prod.in_flow": "Show in Flow",
+    "prod.rerun.confirm": "Re-run {n} item(s) of “{s}”? Approved versions stay valid until you approve the new ones.",
+    "prod.item.busy": "Generating or waiting for review — decide in Review first.", "prod.approve": "Approve", "prod.redo": "Redo…",
     "prod.reject": "Reject", "prod.lang": "Dialogue language", "prod.lang.ph": "same as the source", "prod.settings": "Settings", save: "Save",
     "prod.settings.hint": "Applies to items run from now on (language, tiers, candidates…). Approved items are not re-rendered automatically; to change all shots, redo the storyboard with a note.", "prod.keep": "Keep (still valid)", "prod.edit": "Edit JSON", "prod.save": "Approve edited",
     "prod.note": "What should change?", "prod.next": "Next", "prod.none": "Nothing to do — waiting or done.",
@@ -395,7 +397,9 @@ const I18N = {
     "prod.empty": "还没有制片。点「新建」，贴一段短篇小说。", "prod.pick": "在左侧选一个制片。",
     "prod.new": "新建制片", "prod.workflow": "工作流", "prod.title": "标题", "prod.source": "原文",
     "prod.vtier": "视频档位", "prod.ncand": "图片候选数", "prod.subs": "字幕", "prod.create": "创建",
-    "prod.run": "开跑", "prod.start": "开始（渲染较久）", "prod.rerun": "重跑", "prod.approve": "通过", "prod.redo": "重做…",
+    "prod.run": "开跑", "prod.start": "开始（渲染较久）", "prod.rerun": "重跑", "prod.rerun_all": "全部重跑…", "prod.in_flow": "在 Flow 里查看",
+    "prod.rerun.confirm": "重跑「{s}」的 {n} 个条目？新版本通过前，已通过的版本继续有效。",
+    "prod.item.busy": "正在生成或等待审阅——请先在「审阅」里处理。", "prod.approve": "通过", "prod.redo": "重做…",
     "prod.reject": "打回", "prod.lang": "对白语言", "prod.lang.ph": "与原文相同", "prod.settings": "设置", save: "保存",
     "prod.settings.hint": "对之后开跑的条目生效（语言、档位、候选数……）。已通过的不会自动重出；要改全部镜头，请带意见重做「分镜」。", "prod.keep": "保留（仍然适用）", "prod.edit": "手改 JSON", "prod.save": "按修改通过",
     "prod.note": "要改什么？", "prod.next": "下一步", "prod.none": "暂无操作——等待中或已完成。",
@@ -696,6 +700,8 @@ async function renderDetail(){
         <div class="media">${media(c, (c.outputs || [])[0], "", false)}</div>
         <div class="row"><span class="idx">#${c.idx}</span>${badge(c.state)}</div></div>`).join("")}</div>
       ${n.state === "review" ? `<div class="actions" style="margin-top:10px"><button class="btn" onclick="show('review')">${t("goto.review")}</button></div>` : ""}
+      ${n.production_id && n.state === "closed" ? `<div class="actions" style="margin-top:10px"><button class="btn primary" onclick="prodRerun('${esc(n.production_id)}','${esc(n.stage)}','${esc(n.key)}')">${t("prod.rerun")} · ${esc(n.key)}</button>
+        <button class="btn" onclick="selProd='${esc(n.production_id)}';show('productions')">${t("tab.productions")}</button></div>` : ""}
       ${n.state === "closed" && d.action && d.action !== "cancel" ? `<div class="actions" style="margin-top:10px"><button class="btn" onclick="reopenRound('${esc(n.id)}')">${t("reopen")}</button></div>` : ""}
       ${(d.history || []).length ? `<details><summary>${t("dec.history")} (${d.history.length})</summary><ol class="events">${d.history.map(h => `<li>${esc(decName(h))}${h.role ? esc(t("locked.as", {r: h.role})) : ""}${h.note ? " · " + esc(h.note) : ""}</li>`).join("")}</ol></details>` : ""}`;
     if (tk) html += `<h3 class="sub">${t("pipe.of", {n: tk.idx})}</h3>` + taskHtml(tk);
@@ -703,6 +709,10 @@ async function renderDetail(){
   $("#detail").innerHTML = html;
 }
 
+async function prodRerun(pid, stage, key){
+  if (!confirm(t("prod.rerun.confirm", {n: 1, s: `${stage} · ${key}`}))) return;
+  await act(`/api/productions/${encodeURIComponent(pid)}/run`, {stage, keys: [key], note: "manual re-run"});
+}
 async function reopenRound(id){
   if (!confirm(t("reopen.confirm"))) return;
   await act(`/api/rounds/${encodeURIComponent(id)}/reopen`, {}); detailKey = ""; keys = {};
@@ -1102,8 +1112,11 @@ function itemThumb(stage, it, arts){
 function stageActions(s){
   const b = [];
   const todo = s.items.filter(i => !["current","running","review","queued"].includes(i.state)).length;
+  const idle = s.items.filter(i => !["running","review","queued"].includes(i.state)).length;
   if (s.kind !== "input" && s.state !== "blocked" && todo)
     b.push(`<button class="btn sm ${s.confirm ? "primary" : ""}" data-run="${esc(s.id)}">${t(s.confirm ? "prod.start" : "prod.run")}</button>`);
+  else if (s.kind !== "input" && s.state !== "blocked" && idle)
+    b.push(`<button class="btn sm" data-rerun-all="${esc(s.id)}">${t("prod.rerun_all")}</button>`);
   if ((s.kind === "skill" || s.kind === "assemble") && s.items.length) b.push(`<button class="btn sm" data-view-art="${esc(s.id)}">${t("detail")}</button>`);
   if (s.kind === "render" && s.state === "review") b.push(`<button class="btn sm" data-goto="review">${t("prod.open_review")}</button>`);
   return b.join("");
@@ -1142,9 +1155,27 @@ async function renderProdDetail(){
   };
   box.querySelectorAll("[data-goto]").forEach(b => b.onclick = () => show(b.dataset.goto));
   box.querySelectorAll("[data-view-art]").forEach(b => b.onclick = () => { prodArt = b.dataset.viewArt; showArtifact(arts); });
+  box.querySelectorAll("[data-rerun-all]").forEach(b => b.onclick = () => {
+    const s = PLAN.stages.find(x => x.id === b.dataset.rerunAll);
+    const keys = s.items.filter(i => !["running","review","queued"].includes(i.state)).map(i => i.key);
+    if (!confirm(t("prod.rerun.confirm", {n: keys.length, s: s.title}))) return;
+    const note = s.kind === "skill" ? prompt(t("prod.note")) : null;
+    act(url + "/run", {stage: s.id, keys, note: note || null});
+  });
   box.querySelectorAll(".chip").forEach(b => b.onclick = () => {
-    const it = PLAN.stages.find(s => s.id === b.dataset.stage).items.find(i => i.key === b.dataset.key);
-    if (it.state === "review") show("review"); else if (it.round_id) { selNode = it.round_id; show("flow"); }
+    const s = PLAN.stages.find(x => x.id === b.dataset.stage), it = s.items.find(i => i.key === b.dataset.key);
+    const busy = ["running","review","queued"].includes(it.state);
+    modal(`<h3>${esc(s.title)} · ${esc(it.key)} <span class="badge ${ITONE[it.state] ?? ""}">${esc(t("is." + it.state))}</span></h3>
+      <div class="hint">v${it.version ?? "–"}${it.current_version && it.current_version !== it.version ? ` · ${t("is.current")} v${it.current_version}` : ""}${it.note ? " · " + esc(it.note) : ""}</div>
+      ${busy ? `<div class="hint" style="margin-top:6px">${t("prod.item.busy")}</div>` : ""}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-top:14px">
+        ${it.round_id ? `<button class="btn" id="it-flow">${t("prod.in_flow")}</button>` : ""}
+        ${it.state === "review" ? `<button class="btn" id="it-review">${t("prod.open_review")}</button>` : ""}
+        <button class="btn" onclick="closeModal()">${t("close")}</button>
+        ${!busy && s.state !== "blocked" ? `<button class="btn primary" id="it-run">${t(it.state === "current" ? "prod.rerun" : "prod.run")}</button>` : ""}</div>`);
+    $("#it-flow") && ($("#it-flow").onclick = () => { closeModal(); selNode = it.round_id; show("flow"); });
+    $("#it-review") && ($("#it-review").onclick = () => { closeModal(); show("review"); });
+    $("#it-run") && ($("#it-run").onclick = () => { closeModal(); act(url + "/run", {stage: s.id, keys: [it.key], note: "manual re-run"}); });
   });
   if (prodArt) showArtifact(arts);
 }

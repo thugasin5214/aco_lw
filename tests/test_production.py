@@ -387,3 +387,17 @@ def test_plain_reject_of_a_production_round_re_renders(prod):
     p.studio.reject(cat["id"], "make it fluffier")  # 带意见：等规划器派生新轮，不在这里重出
     items = {i["key"]: i for i in stage(p.plan(pr["id"]), "characters")["items"]}
     assert items["cat"]["state"] == "rejected"
+
+
+def test_manual_rerun_of_an_approved_item_keeps_it_until_replaced(prod):
+    p = prod
+    pr = _to_keyframes(p)
+    old = p._current(p._index(pr["id"]), "keyframes", "sh01")
+    p.run_stage(pr["id"], "keyframes", ["sh01"], "manual re-run")
+    items = {i["key"]: i for i in stage(p.plan(pr["id"]), "keyframes")["items"]}
+    assert items["sh01"]["state"] == "running" and items["sh01"]["current_version"] == old["version"]
+    with pytest.raises(ProductionError, match="正在生成"):
+        p.run_stage(pr["id"], "keyframes", ["sh01"])
+    select_all(p)
+    items = {i["key"]: i for i in stage(p.plan(pr["id"]), "keyframes")["items"]}
+    assert items["sh01"]["state"] == "current" and items["sh01"]["current_version"] == old["version"] + 1

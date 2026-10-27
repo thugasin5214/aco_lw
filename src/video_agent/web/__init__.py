@@ -278,6 +278,9 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
         extra, stage_nodes = _production_graph(project)
         for n in nodes:
             n["parents"] = sorted(set(n["parents"]) | set(extra.get(n["id"], [])))
+            art = store.artifact_by_round(n["id"])
+            if art:  # 制片的渲染轮：带上所属阶段与条目（控制台可手动重跑）
+                n.update(production_id=art["production_id"], stage=art["stage"], key=art["key"])
         nodes += stage_nodes
         for t in ts:
             if t["round_id"]:
