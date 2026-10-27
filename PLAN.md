@@ -262,7 +262,12 @@ G0 结论（详见 `docs/baseline.md`）：LLM 加载仅约 15 s；视频峰值�
 | 安全：agent CLI 自带文件 / shell 能力 | 只读沙箱 + 仅 MCP 工具；输出一律 schema 校验 |
 | 离线 / 故障 | 自动回退到本地 27B，再回退到纯命令模式 |
 
-**任务（草案）**：O1 OpenAI / Anthropic 后端（含缓存断点、用量与费用）；O2 aco_lw MCP 服务；O3 Codex / Claude Code 接入说明与沙箱配置；O4 按项目选择后端 + 预算 + 隐私开关（设置页 / 向导）；O5 视觉审阅（可选：在线模型对候选写差异说明，仍不自动淘汰）。
+**任务**：
+- [x] O1 Anthropic 后端（原生工具调用、Claude 回合原样回放、缓存断点、服务端拒答回退）+ 通用 OpenAI 兼容后端（2026-10-27）
+- [x] O2 aco_lw MCP 服务（stdio，只暴露 aco_lw 工具，调用转发给 daemon 执行）
+- [x] O3 Claude Code / Codex 委托：Claude Code `--tools ""` + 仅 aco_lw MCP；Codex 只读沙箱；空工作目录
+- [x] O4（部分）回退配置：`llm_fallback` 顺序 + `allow_online` 隐私开关（默认关）；本地资源不够或不可用时启用。待做：按项目选择、预算上限、设置页
+- [ ] O5 视觉审阅（可选：在线模型对候选写差异说明，仍不自动淘汰）
 **验收 G6**：同一项目在本地与在线后端之间切换，会话与项目记忆不丢；断网自动回退；agent 无法越过 MCP 白名单。
 
 ## 6c-5. 阶段 7（草案，用户 2026-10-26 提出，放在后面）：联网资料与 LoRA
