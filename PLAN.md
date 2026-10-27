@@ -68,6 +68,7 @@
 | 2 Telegram + 审阅 + 项目历史 | 通知与按钮选版、控制台审阅、导演基准包、LLM 规划（schema 校验）、项目与对话历史 | G2：手机上能完成选版；等待期间无 LLM 推理 | **进行中**：代码完成，等 Telegram token 做 G2 实机验收 |
 | 3 短视频闭环 + 有限探索 | 样片、一致性评分、预算内多候选、档位逐级上调 | G3：遵守探索预算；未经选定不替换定妆 | 后续 |
 | 4 扩展能力 | OpenClaw 子 agent：搜索、Skills、MCP | G4：按需启动、能退出、无孤儿进程 | 后续 |
+| **2.8 Agent 运行时 + Executor + 资源调度** | LLM tool call 由编排器执行并择机交回；Executor 接口；动态资源调度（见 §6c-3b） | G2.8：一句话需求跑完“查状态 → 出图 → 等待 → 决定 → 出视频”，视频期间续跑暂存、结束自动继续；重启可恢复 | **下一步** |
 | **5 可安装包 + 配置向导** | 一键安装、Web 配置向导 + 设置页、安装文档、launchd 常驻、升级 / 卸载（见 §6d） | G5：干净 Mac 上仅按安装文档 30 min 内出第一张图（不含模型下载）；重启自动恢复 | **推后**（用户 2026-10-26 决定，先做 W2） |
 | 6 在线模型与外部 agent | OpenAI / Anthropic 后端、aco_lw MCP 服务、Codex / Claude Code 接入、预算与隐私开关（见 §6c-4） | G6：本地 / 在线切换不丢会话与记忆；断网回退；agent 不越过 MCP 白名单 | 规划中 |
 
@@ -178,6 +179,50 @@ G0 结论（详见 `docs/baseline.md`）：LLM 加载仅约 15 s；视频峰值�
   - “在 ComfyUI 中打开”：把该任务实际提交的工作流导出成文件（`data/jobs/<ID>/prompt.json` 已有），并复制到 ComfyUI 的工作流列表里（`user/default/workflows/aco_lw/` 子目录，不碰已有工作流），在 ComfyUI 画布里手动改节点、连线。**待核实**：当前 ComfyUI 前端能否直接载入 API 格式，否则需要同时保存画布格式。
   - “导回 aco_lw”：把改好的工作流导入为**候选模板变体** → `/object_info` 图校验 → 最低档试跑 → 用户确认后晋升为正式模板（可插拔，同模型注册表）。未晋升的变体只在该项目内可用。
   - 控制台内也提供只读的节点 / 参数视图（JSON + 槽位高亮），便于对照。
+
+## 6c-3b. 阶段 2.8：Agent 运行时（tool call）+ Executor 接口 + 动态资源调度（用户提出，2026-10-26）
+
+**参考**：vhotseat（wandermyz/vhotseat：本地 LLM 与 ComfyUI 轮流使用同一 GPU / 内存——加载前把关、运行中的工作绝不打断、批量提交减少交接、状态实时读取）；成熟 agent 的工具循环（OpenAI / Anthropic tool calling 协议、最大步数、人工审批中断、可恢复的检查点）。
+**实测前提（2026-10-26）**：LM Studio 上 qwen3.8-27b 原生 tool calling 可用（会先 `get_status` 再 `queue_round`）；工具往返后前缀缓存仍命中（第二轮 1235 token 首 token 0.64 s）。
+
+### A. Agent 运行时：LLM 发 tool call，编排器执行，结果按资源情况择机交回
+- **循环**：LLM → tool_calls → 编排器执行（内部工具 / 以后的 MCP）→ 结果写库 → *调度器决定何时把结果交回 LLM* → LLM 继续 → … → 最终回复。
+- **运行状态（持久化，可恢复）**：`running` → `executing_tools` → `waiting_resources`（结果已就绪，但内存紧 / 视频在跑，暂存不发）→ `waiting_event`（等渲染完成）→ `waiting_user`（需要你批准或回答）→ `done` / `failed` / `cancelled`。每一步（assistant 的 tool_calls、每个 tool 结果）先落库再继续；daemon 重启后从最后一步接着跑。
+- **工具分级**：
+  - 只读（立即执行、同一轮内可缓存）：`get_status`、`list_rounds`、`get_round`、`list_templates`、`get_pack`、`list_memories`、`view_candidates`（以后用模型的视觉能力看图）。
+  - 动作（经 Studio，带幂等键 = run+step+call_id，恢复时不会重复执行）：`queue_round`、`tweak`、`redo_round`、`reject_round`、`propose_memory`。
+  - 长任务：`wait_for_round` → 运行进入 `waiting_event`，渲染完成后由事件唤醒并带回结果（产物、耗时、失败原因）。
+  - 需要审批（进入 `waiting_user`，控制台 / Telegram 按钮）：`select_and_lock`（除非你在这句话里明确授权）、晋升 workflow、未实测视频档位；以后的 `install_lora`（L5）。
+  - 外部（阶段 7）：`web_search` 等，带隐私开关。
+- **结果交回策略**：交回 LLM 本身是调度器里的一个作业（LLM 推理），按资源决定时机；结果太长时截断 / 摘要后再交回，原文留库。
+- **预算**：每次运行最多步数、最多渲染分钟数；超了停下来问你。
+- **缓存**：assistant 的 tool_calls 与 tool 结果逐字存、逐字复现（与 S8 一致）。
+- **兼容**：现有单次 JSON 规划保留为“简单模式”后端；纯命令模式不变。
+
+### B. Executor 接口（替代编排器对 ComfyUI 的直接依赖）
+- `Executor`：`estimate(task)`（预计峰值内存、耗时、需要的常驻模型、切换代价）· `submit` · `poll`（进度）· `collect` · `cancel`（只取消自己的）· `release`（释放模型）· `resident()`（当前常驻什么）· `health()`。
+- 实现：`ComfyExecutor`（现有逻辑搬过来，行为不变）、`FFmpegExecutor`（拼接、抽帧、转码，本地子进程）；以后：独立 LTX 服务、其他本地生成器、在线生成服务（不占本地内存）。
+- LLM 也是一个“工作负载”（Workload）：`load / unload / in_flight / resident`，与 Executor 一起由资源管理器调度（对应 vhotseat 的 driver）。
+
+### C. 动态资源调度器（替代 `memgate` 的固定阈值）
+- **实时资源视图**：可用内存、压力等级、swap 趋势；各工作负载当前常驻（LLM 是否加载、ComfyUI 最近加载的是哪个模型族）。
+- **从历史学习的估计**：按（模板, 档位）用已记录的 metrics 做滑动平均——峰值内存、耗时、加载耗时；没有历史时回退到模型注册表。
+- **统一作业队列**：渲染作业与 LLM 推理作业在同一个队列里排；优先级：用户交互 > agent 续跑 > 后台探索 / 试跑；等待时间老化防饿死。
+- **减少切换**：同一模型族的作业成批连续执行（如 4 张图连跑，中间不插 LLM 推理）；切换代价（LLM 加载约 15 s + 缓存失效、图片模型冷启动 +12 s、视频模型加载）计入排序。
+- **准入与释放计划**：预计可用（当前可用 + 可释放的）≥ 需求 + 余量才放行；需要时按计划释放（`/free`、卸载 LLM），**绝不打断正在运行的工作**（LLM 正在回答时等它答完；渲染中不抢）。
+- **ETA**：控制台显示队列时间线与预计完成时间；资源时间线图（内存、压力、谁在用）。
+
+### 任务
+- [ ] **E1** Executor 接口 + `ComfyExecutor`（重构，行为不变，测试全过）+ LLM Workload
+- [ ] **E2** `FFmpegExecutor`（抽帧、拼接、转码）
+- [ ] **R1** 资源视图 + 从历史 metrics 学习的估计（峰值、耗时、加载耗时）
+- [ ] **Q1** 统一作业队列与调度器（优先级、按模型族成批、切换代价、准入与释放计划、不打断运行中的工作），替代 Worker 主循环与 memgate
+- [ ] **A1** 工具注册表（JSON schema、分级、幂等、审批）+ 运行与步骤持久化
+- [ ] **A2** Agent 循环：tool call 执行、结果暂存、经调度器择机交回 LLM、事件唤醒、预算、崩溃恢复
+- [ ] **A3** 渠道接入：控制台与 Telegram 显示运行步骤（调用了哪些工具、结果、在等什么）、审批按钮
+- [ ] **U1** 控制台：队列时间线 + ETA、资源时间线图、运行详情
+- [ ] **T1** 测试：假 Executor / 假 LLM 覆盖竞态（渲染中 LLM 请求、LLM 回答中渲染到达、重启恢复、重复执行防护）
+- **验收 G2.8**：一句话需求 → agent 查状态、排队一轮图、等渲染、拿到结果后再决定下一步（例如出视频）；视频渲染期间 agent 的续跑被暂存、渲染结束后自动接着跑；全程无内存压力严重档、无重复提交；daemon 中途重启后运行能接着走完。
 
 ## 6c-4. 阶段 6（草案）：在线模型与外部 agent（Codex / Claude Code 等）
 
