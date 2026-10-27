@@ -195,6 +195,60 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
         return t
 
     # ---- DAG：轮为节点（含候选缩略图），独立任务也是节点 ----
+    def _production_graph(project: str | None) -> tuple[dict[str, list[str]], list[dict]]:
+        engine = getattr(actions, "production", None)
+        extra: dict[str, list[str]] = {}
+        nodes: list[dict] = []
+        if engine is None:
+            return extra, nodes
+        for prod in store.productions(project):
+            wf = engine.workflows.get(prod["workflow"])
+            titles = {st.id: st.title or st.id for st in wf.stages} if wf else {}
+            arts = store.artifacts(prod["id"])
+            by_ver = {(a["stage"], a["key"], a["version"]): a for a in arts}
+            latest: dict[tuple[str, str], dict] = {}
+            for a in arts:
+                if not a["round_id"] and a["status"] != "superseded":
+                    latest[(a["stage"], a["key"])] = a
+
+            def node_id(a: dict, pid: str = prod["id"]) -> str:
+                return a["round_id"] or f"stage:{pid}:{a['stage']}:{a['key']}"
+
+            def parents(a: dict, by_ver=by_ver, latest=latest) -> list[str]:
+                out = []
+                for d in a["deps"]:
+                    dep = by_ver.get((d["stage"], d["key"], d.get("version")))
+                    if dep is None:  # 按条目指纹记的依赖：连到该阶段的节点
+                        dep = latest.get((d["stage"], d["key"]))
+                    if dep is not None:
+                        out.append(node_id(dep))
+                return out
+
+            for a in arts:
+                if a["round_id"]:
+                    extra.setdefault(a["round_id"], []).extend(parents(a))
+            for (stage, key), a in latest.items():
+                label = titles.get(stage, stage) + ("" if key == "main" else f" · {key}")
+                nodes.append(
+                    {
+                        "id": node_id(a),
+                        "type": "stage",
+                        "title": f"{prod['title']} · {label}",
+                        "state": a["status"],
+                        "created": a["created"],
+                        "updated": a["updated"],
+                        "template": "",
+                        "tier": f"v{a['version']}",
+                        "parents": sorted(set(parents(a))),
+                        "tasks": [],
+                        "production_id": prod["id"],
+                        "stage": stage,
+                        "data": a["data"],
+                        "note": a["note"],
+                    }
+                )
+        return extra, nodes
+
     @app.get("/api/graph")
     def graph(project: str | None = None) -> list[dict]:
         rounds = store.rounds(project)
@@ -220,6 +274,11 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
                     "tasks": [slim(c) for c in cands],
                 }
             )
+        # 制片：规划阶段也是节点；渲染轮按产物依赖连到上游（设定 → 定妆 → 分镜 → 关键帧 → 视频 → 剪辑 → 成片）
+        extra, stage_nodes = _production_graph(project)
+        for n in nodes:
+            n["parents"] = sorted(set(n["parents"]) | set(extra.get(n["id"], [])))
+        nodes += stage_nodes
         for t in ts:
             if t["round_id"]:
                 continue

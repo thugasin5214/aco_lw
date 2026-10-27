@@ -138,6 +138,7 @@ pre{font-size:12px;background:var(--bg);border:1px solid var(--line);border-radi
 .chip .k{font-size:11.5px;display:flex;justify-content:space-between;gap:4px;align-items:center}
 pre.json{max-height:420px;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;font-size:12px;white-space:pre-wrap;word-break:break-word}
 textarea.json{width:100%;min-height:320px;font:12px/1.5 ui-monospace,Menlo,monospace;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px}
+.node.stagenode{border-style:dashed}.node .snip{font-size:11.5px;line-height:1.35;overflow:hidden;max-height:32px;margin-top:4px}
 .sreview .sum{font-size:14px;margin:4px 0}.sreview .sum li{margin:2px 0}
 .sreview details{margin-top:8px}.sreview summary{cursor:pointer;color:var(--muted);font-size:13px}
 .nexta{border-radius:10px;padding:8px 12px;background:var(--acc-tint);color:var(--accent);font-size:13.5px;margin:6px 0 12px}
@@ -577,7 +578,16 @@ function renderDag(){
   };
   roots.forEach(r => place(r, 0));
   GRAPH.forEach(n => { if (!pos[n.id]) place(n, 0); });
-  const maxX = Math.max(...Object.values(pos).map(p => p.x)) + W + 4, maxY = y + 4;
+  // 多个上游的节点（如分镜依赖设定与全部定妆图）：列 = 最长依赖路径；同列按树形位置排序并消除重叠
+  const depth = {}, visiting = new Set();
+  const dep = n => { if (n.id in depth) return depth[n.id]; if (visiting.has(n.id)) return 0; visiting.add(n.id);
+    const ps = n.parents.filter(p => byId[p]); depth[n.id] = ps.length ? 1 + Math.max(...ps.map(p => dep(byId[p]))) : 0; return depth[n.id]; };
+  const cols = {};
+  GRAPH.forEach(n => { pos[n.id].x = dep(n) * (W + GX); (cols[depth[n.id]] ||= []).push(n.id); });
+  let maxY = y + 4;
+  Object.values(cols).forEach(ids => { ids.sort((a, b) => pos[a].y - pos[b].y); let last = -Infinity;
+    ids.forEach(id => { pos[id].y = Math.max(pos[id].y, last + H + GY); last = pos[id].y; maxY = Math.max(maxY, last + H + 4); }); });
+  const maxX = Math.max(...Object.values(pos).map(p => p.x)) + W + 4;
   let edges = "";
   GRAPH.forEach(n => n.parents.forEach(pid => {
     const p = pos[pid], c = pos[n.id]; if (!p || !c) return;
@@ -591,6 +601,13 @@ function renderDag(){
       const cls = "th" + (pick === tk.id ? " pick" : "") + (["rejected","failed"].includes(tk.state) && pick ? " dim" : "");
       return o ? media(tk, o, cls, false) : `<div class="${cls}"></div>`;
     }).join("");
+    if (n.type === "stage"){
+      const d = n.data || {}, txt = typeof d === "string" ? d : d.logline || d.synopsis || (d.style && d.style.look) || (d.shots && `${d.shots.length} shots`) || (d.clips && `${d.clips.length} clips`) || "";
+      return `<div class="node stagenode ${n.id === selNode ? "sel" : ""}" data-id="${esc(n.id)}" style="left:${p.x}px;top:${p.y}px;width:${W}px;height:${H}px">
+        <div class="t" title="${esc(n.title)}">🎬 ${esc(n.title)}</div>
+        <div class="s"><span class="badge ${ITONE[n.state] ?? ""}">${esc(t("is." + n.state))}</span> <span>${esc(n.tier)}</span></div>
+        <div class="hint snip">${esc(String(txt).slice(0, 90))}</div></div>`;
+    }
     return `<div class="node ${n.id === selNode ? "sel" : ""}" data-id="${esc(n.id)}" style="left:${p.x}px;top:${p.y}px;width:${W}px;height:${H}px">
       <div class="t" title="${esc(n.title)}">${esc(n.title)}</div>
       <div class="s">${badge(n.state)} <span>${esc(n.tier || "")}${n.type === "round" ? " × " + n.tasks.length : ""}</span> <span>${esc(decName(n.decision))}</span></div>
@@ -661,6 +678,14 @@ async function renderDetail(){
   if ([...document.querySelectorAll("#detail video")].some(v => !v.paused) && key.slice(0, 40) === detailKey.slice(0, 40)) return;
   detailKey = key;
   let html = "";
+  if (n.type === "stage"){
+    $("#detail").innerHTML = `<dl><dt>${t("productions")}</dt><dd>${esc(n.title)} · <span class="badge ${ITONE[n.state] ?? ""}">${esc(t("is." + n.state))}</span> ${esc(n.tier)}</dd></dl>
+      ${n.note ? `<div class="hint">${esc(n.note)}</div>` : ""}
+      <div class="actions" style="margin:8px 0">${["review","invalid"].includes(n.state) ? `<button class="btn primary" onclick="show('review')">${t("goto.review")}</button>` : ""}
+        <button class="btn" onclick="selProd='${esc(n.production_id)}';prodArt='${esc(n.stage)}';show('productions')">${t("tab.productions")}</button></div>
+      <div class="sreview"><div class="sum">${typeof n.data === "string" ? `<pre class="json">${esc(n.data)}</pre>` : summarize(n.data)}</div></div>`;
+    return;
+  }
   if (n.type === "round"){
     const d = n.decision || {};
     html += `<dl><dt>${t("round")}</dt><dd>${esc(n.title)} · ${badge(n.state)}</dd><dt>${t("template")}</dt><dd>${esc(n.template)} / ${esc(n.tier || "")}</dd>
