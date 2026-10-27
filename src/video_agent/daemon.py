@@ -49,15 +49,6 @@ class Worker(threading.Thread):
             log.warning("Startup reconcile skipped: %s", e)
         self._refresh_rounds()
         while not self.stop.is_set():
-            self.store.set_kv(
-                "daemon",
-                {
-                    "pid": os.getpid(),
-                    "ts": time.time(),
-                    "busy": self.current and self.current["id"],
-                    "paused": bool(self.store.get_kv("paused")),
-                },
-            )
             if self.store.get_kv("paused"):
                 self.stop.wait(2)
                 continue
@@ -80,6 +71,20 @@ class Worker(threading.Thread):
             finally:
                 self.current, self.busy_kind = None, None
             self._after(task)
+
+    def heartbeat(self) -> None:
+        """独立线程写心跳：渲染时 Worker 卡在一次长任务里，心跳不能跟着停。"""
+        while not self.stop.is_set():
+            self.store.set_kv(
+                "daemon",
+                {
+                    "pid": os.getpid(),
+                    "ts": time.time(),
+                    "busy": self.current and self.current["id"],
+                    "paused": bool(self.store.get_kv("paused")),
+                },
+            )
+            self.stop.wait(5)
 
     def _after(self, task: dict) -> None:
         if task["round_id"]:
@@ -570,6 +575,7 @@ class Daemon:
 
     def start(self) -> None:
         self.worker.start()
+        threading.Thread(target=self.worker.heartbeat, name="heartbeat", daemon=True).start()
         threading.Thread(
             target=self.actions.planner_loop, args=(self.stop,), name="planner", daemon=True
         ).start()
