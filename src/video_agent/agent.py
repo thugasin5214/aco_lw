@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 import jsonschema
 
 from .config import ROOT
+from .freevideo import FreeVideoError
 from .i18n import tr
 from .policy import Policies, classify_round
 from .production import ProductionError
@@ -1078,7 +1079,7 @@ class AgentRuntime:
             return self._tool_done(run, call, args, {"error": denied})
         try:
             out = tool.handler(ctx, args)
-        except (StudioError, ParamError, KeyError, ValueError, ProductionError) as e:
+        except (StudioError, ParamError, KeyError, ValueError, ProductionError, FreeVideoError) as e:
             out = Done({"error": str(e)})
         except jsonschema.ValidationError as e:
             out = Done({"error": f"schema: {e.message}"})

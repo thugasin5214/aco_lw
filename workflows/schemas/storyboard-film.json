@@ -79,7 +79,28 @@
               }
             }
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "continue": {
+                  "const": true
+                }
+              },
+              "required": [
+                "continue"
+              ]
+            },
+            "then": {
+              "properties": {
+                "seconds": {
+                  "minimum": 10
+                }
+              }
+            }
+          }
+        ]
       }
     }
   }

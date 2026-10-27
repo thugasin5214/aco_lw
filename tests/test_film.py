@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from video_agent.config import ROOT
@@ -164,3 +166,57 @@ def test_film_without_freevideo_refuses(make_orch, fake, tmp_path):
     assert stage(p.plan(pr["id"]), "clips")["state"] == "blocked"
     with pytest.raises(Exception, match="上游"):
         p.run_stage(pr["id"], "clips")
+
+
+def test_short_continued_shots_are_lengthened_and_hints_applied(film_prod):
+    from video_agent.freevideo import FreeVideoError
+
+    p = film_prod
+    board = json.loads(json.dumps(BOARD))
+    board["shots"][1]["seconds"] = 6  # 续拍写短了（现在的 schema 会拦）
+    calls = []
+    real = p.fv.plan_film
+
+    def picky(sp, takes=1):
+        calls.append([s["seconds"] for s in sp["shots"]])
+        if len(calls) == 1 and sp["shots"][0]["seconds"] != 6:
+            raise FreeVideoError(422, {"error": {"code": "invalid_request", "message":
+                "x", "next": "Use /screenplay/shots/0/seconds 6"}})
+        return real(sp, takes)
+
+    pr = to_film(p)
+    art = p._current(p._index(pr["id"]), "storyboard")
+    p.store.update_artifact(art["id"], data=board)  # 规则上线前就通过的旧分镜
+    p.fv.plan_film = picky
+    p.run_stage(pr["id"], "clips")
+    sp, _ = p.fv.started[0]
+    assert sp["shots"][1]["seconds"] == 10  # 续拍补到 10 秒
+    assert sp["shots"][0]["seconds"] == 6 and calls[0][0] == 5  # 按 FreeVideo 的建议改了一次
+
+
+def test_start_waits_for_freevideo_approval_then_retries_same_ref(film_prod):
+    from video_agent.freevideo import FreeVideoError
+
+    p = film_prod
+    real, refs, notes = p.fv.start_film, [], []
+    p.film.notify_text = lambda prod, key: notes.append(key)
+
+    def guarded(sp, takes=1, ref=None):
+        refs.append(ref)
+        if len(refs) < 3:  # 你还没在 FreeVideo 页面批准
+            raise FreeVideoError(409, {"error": {"code": "needs_confirmation", "message": "approve"}})
+        return real(sp, takes, ref)
+
+    p.fv.start_film = guarded
+    pr = to_film(p)
+    made = p.run_stage(pr["id"], "clips")  # 不报错：挂起等你批准
+    assert all(m["meta"]["pending_ref"] and not m["meta"]["film"] for m in made)
+    assert notes == ["film_needs_approval"]
+    assert stage(p.plan(pr["id"]), "clips")["state"] == "active"
+    p.film.tick()  # 还没批准
+    p.film.tick()  # 批准了：原样重发（同一个 ref）
+    assert len(set(refs)) == 1 and len(refs) == 3
+    arts = p.store.artifacts(pr["id"], "clips")
+    assert all(a["meta"]["film"] == "d000000000001" and not a["meta"]["pending_ref"] for a in arts)
+    p.fv.finish_takes("sh01")
+    assert p.film.tick() == 1

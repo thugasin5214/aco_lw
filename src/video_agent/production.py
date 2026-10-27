@@ -784,7 +784,8 @@ class Production:
         for prod in self.store.productions():
             if prod["state"] == "active":
                 out += [a for a in self.store.artifacts(prod["id"], None, "running")
-                        if (a["meta"] or {}).get("film") and not a["round_id"]]
+                        if ((a["meta"] or {}).get("film") or (a["meta"] or {}).get("pending_ref"))
+                        and not a["round_id"]]
         return out
 
     def wake(self) -> None:

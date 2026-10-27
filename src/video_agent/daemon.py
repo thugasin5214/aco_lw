@@ -648,6 +648,7 @@ class Daemon:
         )
         if self.production.film is not None:
             self.production.film.notify_round = self.notify_round  # 导入的一轮 take：推送审阅
+            self.production.film.notify_text = self.notify_film
         self.production.listeners.append(self.notify_stage)
         self.orch.resources.listeners.append(self.production.wake)  # 渲染结束 → 排队的 skill 再试
         self.actions.production = self.production
@@ -721,6 +722,12 @@ class Daemon:
                     log.info("skill %s: local LLM unavailable (%s) → %s", stage.id, why, name)
                     return run(name)
         raise Park(why)
+
+    def notify_film(self, prod: dict, key: str) -> None:
+        text = tr(key, p=prod["title"])
+        self.studio.log("system", "out", text, prod["project_id"])
+        if self.bot:
+            self.bot.broadcast(text)
 
     def notify_stage(self, ev: dict) -> None:
         prod = ev["production"]

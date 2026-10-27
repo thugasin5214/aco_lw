@@ -39,6 +39,10 @@ M: dict[str, tuple[str, str]] = {
         "🎬 {p}: {s} — the model's output failed validation; edit it or redo",
         "🎬 {p}：{s} 的输出未通过校验，请手改或重做",
     ),
+    "film_needs_approval": (
+        "🎬 {p}: FreeVideo asks you to approve starting the film — open the FreeVideo page and approve; filming starts right after.",
+        "🎬 {p}：FreeVideo 要你批准开拍——打开 FreeVideo 页面点批准，批准后马上开拍。",
+    ),
     "stage_failed": ("🎬 {p}: {s} failed", "🎬 {p}：{s} 失败"),
     # 规划结果
     "queued_round": (

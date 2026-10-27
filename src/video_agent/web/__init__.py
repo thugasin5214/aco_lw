@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from .. import llm
 from ..config import ROOT, Settings
+from ..freevideo import FreeVideoError
 from ..memory import snapshot
 from ..planner import MODES
 from ..production import ProductionError
@@ -88,7 +89,9 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
     def guard(fn):
         try:
             return fn()
-        except (StudioError, KeyError, ValueError, TransitionError, ProductionError) as e:
+        except (
+            StudioError, KeyError, ValueError, TransitionError, ProductionError, FreeVideoError
+        ) as e:
             raise HTTPException(400, str(e)) from e
         except jsonschema.ValidationError as e:
             raise HTTPException(400, f"schema: {e.message}") from e

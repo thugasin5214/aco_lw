@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import TYPE_CHECKING
 
@@ -24,6 +25,8 @@ if TYPE_CHECKING:  # pragma: no cover
 
 TERMINAL_JOB = ("succeeded", "failed", "cancelled", "interrupted")
 TAKE_TEMPLATE = "freevideo-take"
+MIN_CONTINUE_S = 10.0
+_FIX = re.compile(r"Use /screenplay/shots/(\d+)/seconds ([\d.]+)")
 
 
 class FilmDriver:
@@ -31,6 +34,9 @@ class FilmDriver:
         self.engine, self.fv = engine, client
         self.store = engine.store
         self.notify_round = lambda rnd: None  # daemon 注入：导入的一轮推送到控制台 / Telegram
+        self.notify_text = lambda prod, key: (
+            None
+        )  # daemon 注入：给你发一条提醒（例如去 FreeVideo 批准）
 
     # ---- 角色卡 ----
     def cards_tool(self, prod: dict, st: Stage, inputs: dict) -> dict:
@@ -113,6 +119,9 @@ class FilmDriver:
                 sh["lines"] = lines
             if item.get("continue") and shots:
                 sh["continue"] = True
+                sh["seconds"] = max(
+                    float(sh["seconds"]), MIN_CONTINUE_S
+                )  # FreeVideo：续拍至少 10 秒
             shots.append(sh)
         return {
             "title": prod["title"],
@@ -148,11 +157,27 @@ class FilmDriver:
         sp = self.screenplay(prod, st, ctx, keys if film_id else None)
         takes = int(prod["settings"].get("video_candidates") or 1)
         ref = f"aco-{prod['id']}-{st.id}-{int(time.time())}"
-        plan = self.fv.plan_film(sp, takes=takes)  # 先校验（不提交）：写错的地方在这里就报出来
-        film = self.fv.start_film(sp, takes=takes, ref=ref)
+        plan, fixed = self._validated_plan(sp, takes)  # 先校验（不提交）：写错的地方在这里就报出来
+        try:
+            film = self.fv.start_film(sp, takes=takes, ref=ref)
+        except FreeVideoError as e:
+            if e.code != "needs_confirmation":
+                raise
+            film = (
+                None  # FreeVideo 设置成开拍要你在它的页面上批准：挂起，批准后原样重发（同一个 ref）
+            )
+        pending = None if film else {"screenplay": sp, "takes": takes, "ref": ref}
         self.engine.log(
-            f"film {film['id']} started for {prod['id']}: {len(sp['shots'])} shot(s) × {takes} take(s)"
+            (
+                f"film {film['id']} started"
+                if film
+                else "film start waits for your approval in FreeVideo"
+            )
+            + f" for {prod['id']}: {len(sp['shots'])} shot(s) × {takes} take(s)"
+            + (f"; durations adjusted for FreeVideo: {fixed}" if fixed else "")
         )
+        if pending:
+            self.notify_text(prod, "film_needs_approval")
         for sh in sp["shots"]:
             preview = next(
                 (p for p in plan.get("preview", {}).get("shots", []) if p["id"] == sh["id"]), {}
@@ -164,8 +189,11 @@ class FilmDriver:
                     sh["id"],
                     "running",
                     deps=deps_for(sh["id"]),
+                    note=None if film else "waiting for your approval in the FreeVideo page",
                     meta={
-                        "film": film["id"],
+                        "film": film["id"] if film else None,
+                        "pending_start": pending if sh is sp["shots"][0] else None,
+                        "pending_ref": None if film else ref,
                         "shot": sh["id"],
                         "imported": [],
                         "prompt": preview.get("prompt"),
@@ -176,17 +204,41 @@ class FilmDriver:
             )
         return made
 
+    def _validated_plan(self, sp: dict, takes: int) -> tuple[dict, dict]:
+        """plan 校验；FreeVideo 给出明确的时长建议时（例如续拍须 10–11 秒）按建议改一次再校验。
+        返回 (plan, 改过的镜头 {id: (原时长, 新时长)})。别的错误原样抛出给你看。"""
+        fixed: dict = {}
+        for _ in range(2):
+            try:
+                return self.fv.plan_film(sp, takes=takes), fixed
+            except FreeVideoError as e:
+                hints = _FIX.findall(str(e))
+                if not hints:
+                    raise
+                for idx, sec in hints:
+                    shot = sp["shots"][int(idx)]
+                    fixed[shot["id"]] = (shot["seconds"], float(sec))
+                    shot["seconds"] = float(sec)
+        return self.fv.plan_film(sp, takes=takes), fixed
+
     def _reshoot(self, prod, st, film_id, key, note, deps) -> dict:
         takes = int(prod["settings"].get("video_candidates") or 1)
         self.fv.reshoot(film_id, key, note=note, takes=takes)
-        imported = sorted({
-            job
-            for a in self.store.artifacts(prod["id"], st.id)
-            if a["key"] == key and (a["meta"] or {}).get("film") == film_id
-            for job in (a["meta"] or {}).get("imported", [])
-        })  # 之前导入过的 take 不再导入
+        imported = sorted(
+            {
+                job
+                for a in self.store.artifacts(prod["id"], st.id)
+                if a["key"] == key and (a["meta"] or {}).get("film") == film_id
+                for job in (a["meta"] or {}).get("imported", [])
+            }
+        )  # 之前导入过的 take 不再导入
         return self.store.add_artifact(
-            prod["id"], st.id, key, "running", deps=deps, note=note,
+            prod["id"],
+            st.id,
+            key,
+            "running",
+            deps=deps,
+            note=note,
             meta={"film": film_id, "shot": key, "imported": imported},
         )
 
@@ -243,6 +295,7 @@ class FilmDriver:
         for prod in self.store.productions():
             if prod["state"] != "active":
                 continue
+            self._retry_pending_start(prod)
             waiting: dict[str, dict[str, dict]] = {}
             for a in self.store.artifacts(prod["id"], None, "running"):
                 meta = a["meta"] or {}
@@ -259,6 +312,31 @@ class FilmDriver:
                     if art is not None:
                         imported += self._import(prod, art, film, shot)
         return imported
+
+    def _retry_pending_start(self, prod: dict) -> None:
+        """开拍在等你于 FreeVideo 页面批准：原样重发同一个请求（同 ref，幂等）；批准后拿到电影 ID。"""
+        arts = [
+            a
+            for a in self.store.artifacts(prod["id"], None, "running")
+            if (a["meta"] or {}).get("pending_ref")
+        ]
+        head = next((a for a in arts if (a["meta"] or {}).get("pending_start")), None)
+        if head is None:
+            return
+        req = head["meta"]["pending_start"]
+        try:
+            film = self.fv.start_film(req["screenplay"], takes=req["takes"], ref=req["ref"])
+        except FreeVideoError as e:
+            if e.code != "needs_confirmation":
+                self.engine.log(f"film start for {prod['id']} failed: {e}")
+                for a in arts:
+                    self.store.update_artifact(a["id"], status="failed", note=str(e)[:500])
+            return
+        for a in arts:
+            if a["meta"].get("pending_ref") == req["ref"]:
+                meta = {**a["meta"], "film": film["id"], "pending_start": None, "pending_ref": None}
+                self.store.update_artifact(a["id"], meta=meta, note=None)
+        self.engine.log(f"film {film['id']} started for {prod['id']} after your approval")
 
     def _import(self, prod: dict, art: dict, film: dict, shot: dict) -> int:
         done_before = set((art["meta"] or {}).get("imported") or [])
