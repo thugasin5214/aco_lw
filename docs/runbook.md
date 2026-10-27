@@ -150,6 +150,11 @@ A production runs a **workflow** stage by stage; every stage waits for your appr
 - The chat agent (and Claude Code / Codex over MCP) can drive productions with `create_production`, `get_production_plan`, `run_stage`, `review_stage`; video stages still need your go-ahead.
 - Extending: a workflow is a YAML file in `workflows/` (or `data/workflows/`), output contracts are JSON Schemas in `workflows/schemas/`, and skills are Claude-Code-style `SKILL.md` folders in `skills/` (or `data/skills/` for your own). A new kind of film = a new YAML + skills, no code changes.
 
+### 3.9 Consistent characters with FreeVideo films; ComfyUI tools for the agent
+- **Workflow `story-to-film`**: characters become **FreeVideo cast cards** (up to six labelled pictures + a voice; an existing card with the same name is reused, otherwise one is made from the approved sheet). Shots are filmed as **one FreeVideo film**: each shot gets `video_candidates` takes with the cards as references, and a shot marked *continue* is shot on from the last frame of the take you chose. Takes arrive in **Review** as a round; selecting one tells FreeVideo; *redo / reject with a note* becomes a FreeVideo reshoot with your note. Continued shots need ≥ 10 s and quality light/medium. Pause → *stop now* cancels unfinished takes.
+- Prompts follow MiniMax's official **h3-prompt-writing** skill (installed in `data/skills/`); FreeVideo compiles each shot into the H3 reference format.
+- **ComfyUI tools (artokun/comfyui-mcp, run by our daemon)**: the agent can list models and nodes, read and build workflows, read model-family guides (`comfy_catalog`, `comfy`). Running a workflow goes through our queue (`run_comfy_workflow`, tracked, pause and memory gates apply). Installing nodes, downloading models or training needs your approval (buttons); restarting ComfyUI, deleting models, touching other jobs in the queue, freeing VRAM, changing ComfyUI settings and cloud/paid nodes are refused.
+
 ## 4. Resources and memory policy (automatic)
 
 | Situation | What the system does |

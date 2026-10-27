@@ -150,6 +150,11 @@ llm_fallback = ["anthropic", "claude_code", "codex"]  # 依次尝试
 - 对话里的 agent（以及经 MCP 的 Claude Code / Codex）可用 `create_production`、`get_production_plan`、`run_stage`、`review_stage` 驱动制片；视频阶段仍需你点头。
 - 扩展：工作流是 `workflows/`（或 `data/workflows/`）下的 YAML，输出契约是 `workflows/schemas/` 里的 JSON Schema，skill 是 Claude Code 格式的 `SKILL.md` 目录，放在 `skills/`（你自己的放 `data/skills/`）。新类型的片子 = 新 YAML + skill，不改代码。
 
+### 3.9 用 FreeVideo 电影保持人物一致；agent 的 ComfyUI 工具
+- **工作流 `story-to-film`**：人物变成 **FreeVideo 角色卡**（最多 6 张标注图 + 声音；卡库里有同名卡就复用，否则用已通过的定妆图新建）。镜头由 **一部 FreeVideo 电影** 拍：每镜按 `video_candidates` 拍几条 take，以角色卡为参考；标了 *continue* 的镜头从你选中那条的末帧续拍。take 拍完以一轮候选出现在 **审阅** 里；选中会告诉 FreeVideo；*重做 / 带意见打回* 变成 FreeVideo 按你的意见重拍。续拍镜头至少 10 秒、质量只能 light / medium。暂停时选“立即停止”会取消没拍完的 take。
+- 提示词遵循 MiniMax 官方 **h3-prompt-writing** skill（装在 `data/skills/`）；FreeVideo 把每个镜头编成 H3 参考格式。
+- **ComfyUI 工具（artokun/comfyui-mcp，由我们的 daemon 启动）**：agent 可以查模型和节点、读与搭建 workflow、读模型族指南（`comfy_catalog`、`comfy`）。运行 workflow 走我们的队列（`run_comfy_workflow`，可追踪，受暂停与内存闸门）。装节点、下模型、训练要你批准（按钮）；重启 ComfyUI、删模型、动队列里别人的任务、释放显存、改 ComfyUI 设置、云端 / 付费节点一律拒绝。
+
 ## 4. 资源与内存策略（自动执行）
 
 | 情况 | 系统行为 |
