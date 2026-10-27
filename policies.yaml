@@ -36,5 +36,10 @@ execution:
     propose_selection: {allow: true, approval: unless_named}
     propose_memory: {allow: true}
     ask_user: {allow: true}
+    list_workflows: {allow: true}
+    create_production: {allow: true}
+    get_production_plan: {allow: true}
+    run_stage: {allow: true}           # stages marked confirm (videos) also need user_confirmed
+    review_stage: {allow: true}
     shell: {allow: false}              # not implemented; would need a command whitelist + workdir
     web_search: {allow: false}         # phase 7

@@ -313,6 +313,8 @@ class Orchestrator:
         )
 
     def _after(self, t: Template, ex: Executor, unloaded_llm: bool) -> None:
+        if self.registry.model_of(t).resource == "cpu":
+            return  # 没占内存闸门，也就没有要还的
         released = False
         if t.release_after == "free":
             released = ex.release()

@@ -184,6 +184,17 @@ T = {
     "k_err": ("invalid · cancelled · executor error · lost", "校验失败 · 取消 · 执行端出错 · 丢失"),
     "k_gate": ("gate timeout / monitor timeout", "门控超时 / 观察超时"),
     # ---- 组件表 ----
+    # ---- 图 8 ----
+    "f8": ("8. Production pipeline (novel → film)", "8. 制片流水线（小说 → 成片）"),
+    "f8c": ("Stages are data (workflows/novel-to-film.yaml). Planning stages are skills that return JSON checked against a schema; render stages fan out into one round per character, location or shot. Every stage waits for your approval; videos wait for an explicit Start. Accent arrows: the reference each render uses, so changing one character only invalidates the sheets and shots that depend on it.",
+            "阶段是数据（workflows/novel-to-film.yaml）。规划阶段是 skill，输出 JSON 并按 schema 校验；渲染阶段按人物、场景或镜头展开成一轮轮候选。每个阶段都等你通过；视频还要你明确点开始。强调色箭头：每次渲染引用的参考产物——所以改一个人物只让依赖它的定妆图和镜头过期。"),
+    "p_src": ("source text", "原文"), "p_ad": ("adaptation", "改编"), "p_bi": ("story bible", "设定圣经"),
+    "p_ch": ("character sheets", "人物定妆"), "p_lo": ("location plates", "场景基准图"),
+    "p_sb": ("storyboard", "分镜"), "p_kf": ("keyframes", "关键帧"), "p_cl": ("shot videos", "镜头视频"),
+    "p_ed": ("edit timeline", "剪辑时间线"), "p_fi": ("final cut", "成片"),
+    "p_skill": ("skill → JSON · review", "skill → JSON · 审核"), "p_fan": ("1 round / item · select", "每项一轮 · 选版"),
+    "p_ff": ("FFmpeg · review", "FFmpeg · 审核"), "p_conf": ("Start needed · H3 i2v", "需点开始 · H3 图生视频"),
+    "p_edit": ("FLUX.2 edit per shot", "FLUX.2 逐镜编辑"), "p_ref": ("reference", "参考"),
     "tbl": ("Components and where they live", "组件与代码位置"),
     "th": (("Component", "Code", "Responsibility"), ("组件", "代码", "职责")),
 }
@@ -200,6 +211,8 @@ ROWS = [
     ("Orchestrator", "scheduler.py", ("Create, execute, monitor, recover; the only side-effect path", "创建、执行、监控、恢复；唯一的副作用路径")),
     ("Executors", "executors/", ("ComfyExecutor today; FFmpeg / LTX / online later", "目前 ComfyExecutor；以后 FFmpeg / LTX / 在线")),
     ("Workflows", "variants.py", ("ComfyUI round-trip: import, diff, trial, promote", "ComfyUI 往返：导入、对比、试跑、晋升")),
+    ("Production", "production.py · skills.py", ("Workflow spec, artifacts with staleness, authoritative plan, stage runs and reviews", "工作流规格、带过期的产物库、权威计划、阶段执行与审核")),
+    ("FFmpeg executor", "executors/ffmpeg.py", ("Timeline → trims, transitions, concat, soft subtitles (CPU class)", "时间线 → 裁切、转场、拼接、软字幕（CPU 资源类）")),
     ("Store", "store.py", ("SQLite schema, migrations, state machine", "SQLite 结构、迁移、状态机")),
     ("Web / Telegram", "web/ · telegram.py", ("Console UI + API; bot with whitelist", "控制台界面与 API；带白名单的 bot")),
 ]
@@ -432,6 +445,34 @@ def build(lang: int) -> str:
     d.arrow([(625, 196), (625, 230)], t("k_gate"), at=(633, 220), anchor="start")
     d.arrow([(690, 250), (860, 250), (860, 154)], t("k_late"), at=(700, 244), anchor="start", acc=True)
     figs.append((t("f7"), d.svg(), t("f7c")))
+
+    # ---------- 图 8：制片流水线 ----------
+    d = D(1100, 360, t("f8c"))
+    d.box(20, 60, 150, 50, t("p_src"), small=True)
+    d.box(210, 60, 170, 50, t("p_ad"), [t("p_skill")])
+    d.box(420, 60, 170, 50, t("p_bi"), [t("p_skill")])
+    d.box(640, 30, 190, 50, t("p_ch"), [t("p_fan")], acc=True)
+    d.box(640, 100, 190, 50, t("p_lo"), [t("p_fan")], acc=True)
+    d.box(880, 60, 180, 50, t("p_sb"), [t("p_skill")])
+    d.arrow([(170, 85), (210, 85)])
+    d.arrow([(380, 85), (420, 85)])
+    d.arrow([(590, 80), (615, 80), (615, 55), (640, 55)])
+    d.arrow([(590, 90), (615, 90), (615, 125), (640, 125)])
+    d.arrow([(830, 55), (855, 55), (855, 80), (880, 80)])
+    d.arrow([(830, 125), (855, 125), (855, 92), (880, 92)])
+    d.box(880, 230, 180, 50, t("p_kf"), [t("p_edit")], acc=True)
+    d.box(620, 230, 200, 50, t("p_cl"), [t("p_conf")], dashed=True)
+    d.box(380, 230, 180, 50, t("p_ed"), [t("p_skill")])
+    d.box(140, 230, 180, 50, t("p_fi"), [t("p_ff")])
+    d.arrow([(970, 110), (970, 230)])
+    d.arrow([(880, 255), (820, 255)])
+    d.arrow([(620, 255), (560, 255)])
+    d.arrow([(380, 255), (320, 255)])
+    d.arrow([(735, 30), (735, 14), (1085, 14), (1085, 245), (1060, 245)], t("p_ref"), at=(1079, 180),
+            anchor="end", acc=True)
+    d.arrow([(735, 150), (735, 190), (930, 190), (930, 230)], t("p_ref"), at=(800, 184), acc=True)
+    d.arrow([(970, 280), (970, 318), (720, 318), (720, 280)], t("p_ref"), at=(845, 312), acc=True)
+    figs.append((t("f8"), d.svg(), t("f8c")))
 
     th = T["th"][lang]
     rows = "".join(f"<tr><td>{a}</td><td><code>{b}</code></td><td>{c[lang]}</td></tr>" for a, b, c in ROWS)

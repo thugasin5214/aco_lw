@@ -1,0 +1,105 @@
+# 小说 → 成片。阶段 DAG 是数据：换一套 YAML（广告、MV……）不改代码。
+# 表达式：{settings.x}、{item.y}、{bible.style}；@art:阶段/key 引用已通过的产物（并记为依赖）。
+name: novel-to-film
+title: Novel → film
+description: Adapt a short story into a storyboarded, silent short film with optional subtitles.
+settings:
+  image_tier: standard      # flux2 档位（实测）
+  video_tier: smoke         # h3 档位：smoke 已实测；其他档位创建时显式指定
+  image_candidates: 4
+  video_candidates: 1
+  subtitles: true
+  auto_advance: true        # 上一阶段通过后自动开跑下一阶段（confirm 的阶段除外）
+  width: 1280
+  height: 720
+  fps: 24
+stages:
+  - id: source
+    title: Source text
+    kind: input
+
+  - id: adaptation
+    title: Adaptation
+    kind: skill
+    skill: adapt-novel
+    needs: [source]
+    schema: adaptation
+
+  - id: bible
+    title: Story bible (characters · locations · style)
+    kind: skill
+    skill: story-bible
+    needs: [source, adaptation]
+    schema: bible
+
+  - id: characters
+    title: Character sheets (casting)
+    kind: render
+    needs: [bible]
+    fan_out: {items: bible.characters, key: id}
+    render:
+      template: flux2-t2i
+      tier: "{settings.image_tier}"
+      n: "{settings.image_candidates}"
+      params:
+        prompt: "Character reference sheet, full body, neutral pose, plain background. {item.look}. Style: {bible.style.look}"
+
+  - id: locations
+    title: Location plates
+    kind: render
+    needs: [bible]
+    fan_out: {items: bible.locations, key: id}
+    render:
+      template: flux2-t2i
+      tier: "{settings.image_tier}"
+      n: "{settings.image_candidates}"
+      params:
+        prompt: "Establishing shot, no people. {item.look}. Style: {bible.style.look}"
+
+  - id: storyboard
+    title: Storyboard (shots · framing · camera)
+    kind: skill
+    skill: storyboard
+    needs: [adaptation, bible, characters, locations]
+    schema: storyboard
+
+  - id: keyframes
+    title: Keyframes
+    kind: render
+    needs: [storyboard, characters, locations]
+    fan_out: {items: storyboard.shots, key: id}
+    render:
+      template: flux2-edit
+      tier: "{settings.image_tier}"
+      n: "{settings.image_candidates}"
+      params:
+        image: "@art:{item.ref}"
+        prompt: "{item.frame}. {item.framing}. Style: {bible.style.look}"
+
+  - id: clips
+    title: Shot videos
+    kind: render
+    needs: [storyboard, keyframes]
+    confirm: true             # 视频耗时以分钟～小时计：通过关键帧后由你点开始
+    fan_out: {items: storyboard.shots, key: id}
+    render:
+      template: h3-i2v
+      tier: "{settings.video_tier}"
+      n: "{settings.video_candidates}"
+      params:
+        image: "@art:keyframes/{item.id}"
+        prompt: "{item.motion}. Camera: {item.camera}. {item.frame}"
+
+  - id: edit
+    title: Edit (order · trims · transitions · subtitles)
+    kind: skill
+    skill: edit-timeline
+    needs: [storyboard, clips]
+    schema: timeline
+
+  - id: final
+    title: Final cut
+    kind: assemble
+    needs: [edit, clips]
+    timeline: edit
+    clips: clips

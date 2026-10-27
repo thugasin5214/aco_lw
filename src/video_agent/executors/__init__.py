@@ -1,6 +1,6 @@
 """执行端接口（E1）：编排器只通过 Executor 与具体生成器打交道。
 
-现在：ComfyExecutor（ComfyUI，FLUX.2 / FreeVideo）。以后：FFmpeg、独立 LTX 服务、
+现在：ComfyExecutor（ComfyUI，FLUX.2 / FreeVideo）、FFmpegExecutor（剪辑合成）。以后：独立 LTX 服务、
 其他本地生成器、在线生成服务——实现同一接口即可，编排器、调度器、恢复逻辑不变。
 
 约定（与 vhotseat 一致的原则）：
@@ -62,5 +62,6 @@ class Executor(Protocol):
 
 def get_executors(cfg, comfy=None) -> dict[str, Executor]:
     from .comfy import ComfyExecutor
+    from .ffmpeg import FFmpegExecutor
 
-    return {"comfy": ComfyExecutor(comfy, cfg)}
+    return {"comfy": ComfyExecutor(comfy, cfg), "ffmpeg": FFmpegExecutor(cfg)}

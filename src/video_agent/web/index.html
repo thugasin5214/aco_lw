@@ -117,6 +117,28 @@ pre{font-size:12px;background:var(--bg);border:1px solid var(--line);border-radi
 .actions{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 /* projects */
 .plist{display:flex;flex-direction:column;gap:8px}
+.pitem.prod{flex-direction:column;align-items:stretch;gap:2px;text-align:left;background:transparent;cursor:pointer;width:100%}
+.prow{display:flex;gap:8px;align-items:center}.prow .sp{flex:1}
+.pipe{display:flex;flex-direction:column;gap:0}
+.pstage{display:grid;grid-template-columns:22px minmax(0,1fr);gap:10px}
+.pstage .rail{display:flex;flex-direction:column;align-items:center}
+.pstage .node{width:14px;height:14px;border-radius:50%;border:2px solid var(--idle);background:var(--card);margin-top:14px}
+.pstage .bar{flex:1;width:2px;background:var(--line)}
+.pstage.completed .node{background:var(--ok);border-color:var(--ok)}
+.pstage.review .node,.pstage.ready .node{border-color:var(--warn)}
+.pstage.active .node{border-color:var(--accent);animation:pulse 1.4s ease-in-out infinite}
+.pstage .body{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:6px 0}
+.pstage.blocked .body{opacity:.6}
+.pstage .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.pstage .row .sp{flex:1}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.chip{display:flex;flex-direction:column;gap:4px;border:1px solid var(--line);border-radius:8px;padding:4px;width:112px;cursor:pointer;background:transparent;text-align:left}
+.chip:hover{border-color:var(--accent)}
+.chip img,.chip video,.chip .ph{width:102px;height:58px;object-fit:cover;border-radius:5px;background:var(--bg);display:block}
+.chip .k{font-size:11.5px;display:flex;justify-content:space-between;gap:4px;align-items:center}
+pre.json{max-height:420px;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;font-size:12px;white-space:pre-wrap;word-break:break-word}
+textarea.json{width:100%;min-height:320px;font:12px/1.5 ui-monospace,Menlo,monospace;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px}
+.nexta{border-radius:10px;padding:8px 12px;background:var(--acc-tint);color:var(--accent);font-size:13.5px;margin:6px 0 12px}
 .pitem{display:flex;gap:10px;align-items:center;border:1px solid var(--line);border-radius:10px;
   padding:8px;cursor:pointer;background:var(--card)}
 .pitem:hover{border-color:var(--accent)}.pitem.sel{outline:2px solid var(--accent);outline-offset:1px}
@@ -198,6 +220,7 @@ kbd{font:11.5px ui-monospace,monospace;border:1px solid var(--line);border-radiu
     <button class="tab on" data-view="flow" data-t="tab.flow">Flow</button>
     <button class="tab" data-view="review"><span data-t="tab.review">Review</span><span class="count" id="c-review" hidden></span></button>
     <button class="tab" data-view="projects" data-t="tab.projects">Projects &amp; Chat</button>
+    <button class="tab" data-view="productions" data-t="tab.productions">Productions</button>
     <button class="tab" data-view="queue" data-t="tab.queue">Queue</button>
     <button class="tab" data-view="gallery" data-t="tab.gallery">Outputs</button>
     <button class="tab" data-view="progress" data-t="tab.progress">Progress</button>
@@ -238,6 +261,18 @@ kbd{font:11.5px ui-monospace,monospace;border:1px solid var(--line);border-radiu
     </div>
   </section>
 
+  <section class="view" id="v-productions">
+    <div class="layout proj">
+      <div class="card">
+        <h2><span data-t="productions">Productions</span> <span class="sp"></span>
+          <button class="btn" id="prod-new" data-t="new">New</button></h2>
+        <div class="plist" id="prod-list"></div>
+        <div class="hint" style="margin-top:10px" data-t="prod.hint"></div>
+      </div>
+      <div class="card" id="prod-detail"></div>
+    </div>
+  </section>
+
   <section class="view" id="v-queue">
     <div class="qgrid">
       <div class="card"><h2 data-t="q.now">Now</h2><div id="q-now"></div>
@@ -269,7 +304,20 @@ const I18N = {
   en: {
     title: "aco_lw Console", memory: "Memory", project: "Project", detail: "Details", projects: "Projects",
     "tab.flow": "Flow", "tab.review": "Review", "tab.projects": "Projects & Chat", "tab.gallery": "Outputs",
-    "tab.progress": "Progress", "tab.runbook": "Runbook", "tab.architecture": "Architecture", new: "New", all: "All", images: "Images", videos: "Videos",
+    "tab.progress": "Progress", "tab.runbook": "Runbook", "tab.architecture": "Architecture", "tab.productions": "Productions", productions: "Productions",
+    "prod.hint": "A production runs a workflow (e.g. novel → film) stage by stage. Planning stages are written by the LLM from a skill; render stages are rounds of candidates — select one in Review to approve it. Each stage waits for your approval before the next starts.",
+    "prod.empty": "No productions yet. Click New and paste a short story.", "prod.pick": "Pick a production on the left.",
+    "prod.new": "New production", "prod.workflow": "Workflow", "prod.title": "Title", "prod.source": "Source text",
+    "prod.vtier": "Video tier", "prod.ncand": "Image candidates", "prod.subs": "Subtitles", "prod.create": "Create",
+    "prod.run": "Run", "prod.start": "Start (long render)", "prod.rerun": "Re-run", "prod.approve": "Approve", "prod.redo": "Redo…",
+    "prod.reject": "Reject", "prod.keep": "Keep (still valid)", "prod.edit": "Edit JSON", "prod.save": "Approve edited",
+    "prod.note": "What should change?", "prod.next": "Next", "prod.none": "Nothing to do — waiting or done.",
+    "prod.open_review": "Open in Review", "prod.blocked": "waiting for {s}", "prod.versions": "Versions",
+    "na.run_stage": "Run “{s}”", "na.review": "Review “{s}”", "na.wait": "Working on “{s}”…", "na.stale": "“{s}”: upstream changed — keep or redo?", "na.none": "Done",
+    "ps.completed": "done", "ps.ready": "ready", "ps.active": "running", "ps.review": "review", "ps.blocked": "blocked",
+    "is.current": "approved", "is.stale": "stale", "is.missing": "missing", "is.running": "running", "is.queued": "queued", "is.review": "review",
+    "is.failed": "failed", "is.invalid": "invalid", "is.rejected": "rejected", "pk.input": "input", "pk.skill": "skill", "pk.render": "render", "pk.assemble": "FFmpeg",
+    new: "New", all: "All", images: "Images", videos: "Videos",
     "flow.title": "Creative flow (DAG)", "flow.all": "All projects",
     "flow.hint": "One node = one round of candidates (or a standalone task). Arrows = derived from a previous decision (tweak / redo / reject) or reuse of its output. Green outline = selected candidate.",
     "flow.empty": "No tasks yet. Describe what you want in “Projects & Chat”, or use Telegram / <code>va round</code>.",
@@ -337,7 +385,20 @@ const I18N = {
   zh: {
     title: "aco_lw 控制台", memory: "内存", project: "项目", detail: "详情", projects: "项目",
     "tab.flow": "任务流", "tab.review": "审阅", "tab.projects": "项目与对话", "tab.gallery": "产物",
-    "tab.progress": "项目进度", "tab.runbook": "手册", "tab.architecture": "架构", new: "新建", all: "全部", images: "图片", videos: "视频",
+    "tab.progress": "项目进度", "tab.runbook": "手册", "tab.architecture": "架构", "tab.productions": "制片", productions: "制片",
+    "prod.hint": "制片按工作流（例如小说 → 成片）逐阶段推进。规划阶段由 LLM 按 skill 写出；渲染阶段是一轮轮候选——在「审阅」里选中即通过。每个阶段都等你通过后才进入下一阶段。",
+    "prod.empty": "还没有制片。点「新建」，贴一段短篇小说。", "prod.pick": "在左侧选一个制片。",
+    "prod.new": "新建制片", "prod.workflow": "工作流", "prod.title": "标题", "prod.source": "原文",
+    "prod.vtier": "视频档位", "prod.ncand": "图片候选数", "prod.subs": "字幕", "prod.create": "创建",
+    "prod.run": "开跑", "prod.start": "开始（渲染较久）", "prod.rerun": "重跑", "prod.approve": "通过", "prod.redo": "重做…",
+    "prod.reject": "打回", "prod.keep": "保留（仍然适用）", "prod.edit": "手改 JSON", "prod.save": "按修改通过",
+    "prod.note": "要改什么？", "prod.next": "下一步", "prod.none": "暂无操作——等待中或已完成。",
+    "prod.open_review": "去审阅", "prod.blocked": "等待 {s}", "prod.versions": "版本",
+    "na.run_stage": "开跑「{s}」", "na.review": "审核「{s}」", "na.wait": "「{s}」进行中……", "na.stale": "「{s}」的上游变了——保留还是重做？", "na.none": "已完成",
+    "ps.completed": "完成", "ps.ready": "就绪", "ps.active": "进行中", "ps.review": "待审核", "ps.blocked": "等待上游",
+    "is.current": "已通过", "is.stale": "已过期", "is.missing": "未生成", "is.running": "生成中", "is.queued": "排队", "is.review": "待审核",
+    "is.failed": "失败", "is.invalid": "未通过校验", "is.rejected": "打回", "pk.input": "输入", "pk.skill": "skill", "pk.render": "渲染", "pk.assemble": "FFmpeg",
+    new: "新建", all: "全部", images: "图片", videos: "视频",
     "flow.title": "创作流程 DAG", "flow.all": "全部项目",
     "flow.hint": "一个节点 = 一轮候选（或一个独立任务）；箭头 = 由上一轮决定派生（微调 / 重做 / 打回）或引用其产物。绿框 = 选中的候选。",
     "flow.empty": "还没有任务。在“项目与对话”里描述需求，或用 Telegram / <code>va round</code>。",
@@ -938,6 +999,121 @@ function renderGallery(){
 
 /* ================= refresh ================= */
 let keys = {};
+
+/* ================= productions ================= */
+let PRODS = [], selProd = null, PLAN = null, WORKFLOWS = [], prodArt = null;
+const PTONE = {completed:"ok", ready:"warn", review:"warn", active:"", blocked:"idle"};
+const ITONE = {current:"ok", stale:"warn", review:"warn", running:"", queued:"", missing:"idle", failed:"bad", invalid:"bad", rejected:"bad"};
+function renderProdList(){
+  const box = $("#prod-list");
+  if (!PRODS.length){ box.innerHTML = `<div class="empty">${t("prod.empty")}</div>`; return; }
+  box.innerHTML = PRODS.map(p => `<button class="pitem prod ${p.id === selProd ? "sel" : ""}" data-pid="${esc(p.id)}">
+    <div class="prow"><b>${esc(p.title)}</b><span class="sp"></span>${badge(p.state)}</div>
+    <div class="hint">${esc(p.workflow)} · ${fmtT(p.created)}</div></button>`).join("");
+  box.querySelectorAll("[data-pid]").forEach(b => b.onclick = () => { selProd = b.dataset.pid; prodArt = null; keys.pd = ""; refreshAll(true); });
+}
+function itemThumb(stage, it, arts){
+  const a = arts.filter(x => x.stage === stage.id && x.key === it.key && x.data && x.data.outputs).pop();
+  const o = a && a.data.outputs.find(o => o.kind === "video" || o.kind === "image");
+  const m = !o ? `<div class="ph"></div>` : o.kind === "video"
+    ? `<video src="${fileUrl(a.data.task_id, o.file)}#t=0.5" muted preload="metadata"></video>`
+    : `<img src="${fileUrl(a.data.task_id, o.file)}" alt="" loading="lazy">`;
+  return `<button class="chip" data-stage="${esc(stage.id)}" data-key="${esc(it.key)}">${m}
+    <span class="k"><span>${esc(it.key)}</span><span class="badge ${ITONE[it.state] ?? ""}">${esc(t("is." + it.state))}</span></span></button>`;
+}
+function stageActions(s){
+  const b = [];
+  const todo = s.items.filter(i => !["current","running","review","queued"].includes(i.state)).length;
+  if (s.kind !== "input" && s.state !== "blocked" && todo)
+    b.push(`<button class="btn sm ${s.confirm ? "primary" : ""}" data-run="${esc(s.id)}">${t(s.confirm ? "prod.start" : "prod.run")}</button>`);
+  if ((s.kind === "skill" || s.kind === "assemble") && s.items.length) b.push(`<button class="btn sm" data-view-art="${esc(s.id)}">${t("detail")}</button>`);
+  if (s.kind === "render" && s.state === "review") b.push(`<button class="btn sm" data-goto="review">${t("prod.open_review")}</button>`);
+  return b.join("");
+}
+async function renderProdDetail(){
+  const box = $("#prod-detail");
+  if (!PLAN){ box.innerHTML = `<div class="empty">${t("prod.pick")}</div>`; return; }
+  const arts = await api(`/api/productions/${encodeURIComponent(PLAN.production.id)}/artifacts`).catch(() => []);
+  const na = PLAN.next_action, sTitle = id => (PLAN.stages.find(s => s.id === id) || {}).title || id;
+  const nat = na.type === "none" ? (PLAN.done ? t("na.none") : t("prod.none")) : t("na." + na.type, {s: sTitle(na.stage)});
+  const final = arts.filter(a => a.stage === "final" && a.status === "current" && a.data).pop();
+  const fv = final && final.data.outputs.find(o => o.kind === "video");
+  box.innerHTML = `<h2>${esc(PLAN.production.title)} <span class="hint">${esc(PLAN.workflow.title)}</span><span class="sp"></span>${badge(PLAN.production.state)}</h2>
+    <div class="nexta">${t("prod.next")}: ${esc(nat)}</div>
+    ${fv ? `<video controls style="width:100%;max-height:420px;border-radius:10px;background:#000" src="${fileUrl(final.data.task_id, fv.file)}"></video>` : ""}
+    <div class="pipe">${PLAN.stages.map((s, i) => `<div class="pstage ${esc(s.state)}">
+      <div class="rail"><span class="node"></span>${i < PLAN.stages.length - 1 ? `<span class="bar"></span>` : ""}</div>
+      <div class="body"><div class="row"><b>${esc(s.title)}</b><span class="badge idle">${esc(t("pk." + s.kind))}</span>
+        <span class="badge ${PTONE[s.state] ?? ""} ${s.state === "active" ? "live" : ""}">${esc(t("ps." + s.state))}</span>
+        ${s.blocked_by.length ? `<span class="hint">${esc(t("prod.blocked", {s: s.blocked_by.map(sTitle).join(", ")}))}</span>` : ""}
+        <span class="sp"></span>${stageActions(s)}</div>
+        ${s.kind === "render" && s.items.length ? `<div class="chips">${s.items.map(it => itemThumb(s, it, arts)).join("")}</div>`
+          : s.items.length && s.kind !== "input" ? `<div class="hint">${s.items.map(it => `<span class="badge ${ITONE[it.state] ?? ""}">${esc(t("is." + it.state))}</span> v${it.version ?? "–"}`).join(" ")}</div>` : ""}
+      </div></div>`).join("")}</div>
+    <div id="prod-art"></div>`;
+  const pid = PLAN.production.id, url = `/api/productions/${encodeURIComponent(pid)}`;
+  box.querySelectorAll("[data-run]").forEach(b => b.onclick = () => act(url + "/run", {stage: b.dataset.run}));
+  box.querySelectorAll("[data-goto]").forEach(b => b.onclick = () => show(b.dataset.goto));
+  box.querySelectorAll("[data-view-art]").forEach(b => b.onclick = () => { prodArt = b.dataset.viewArt; showArtifact(arts); });
+  box.querySelectorAll(".chip").forEach(b => b.onclick = () => {
+    const it = PLAN.stages.find(s => s.id === b.dataset.stage).items.find(i => i.key === b.dataset.key);
+    if (it.state === "review") show("review"); else if (it.round_id) { selNode = it.round_id; show("flow"); }
+  });
+  if (prodArt) showArtifact(arts);
+}
+function showArtifact(arts){
+  const s = PLAN.stages.find(x => x.id === prodArt); if (!s) return;
+  const it = s.items[0] || {}, vs = arts.filter(a => a.stage === s.id && a.key === "main");
+  const a = vs.filter(x => x.status !== "superseded").pop() || vs[vs.length - 1];
+  const url = `/api/productions/${encodeURIComponent(PLAN.production.id)}/review`;
+  const btn = (k, cls = "") => `<button class="btn sm ${cls}" data-act="${k}">${t("prod." + k)}</button>`;
+  const actions = s.kind !== "skill" ? "" : [
+    ["review","invalid"].includes(it.state) ? btn("approve", "primary") : "",
+    it.state === "stale" ? btn("keep", "primary") : "",
+    ["review","invalid","stale","current","rejected","failed"].includes(it.state) ? btn("redo") : "",
+    it.state === "review" ? btn("reject", "danger") : "",
+    a && a.data ? btn("edit") : ""].join(" ");
+  $("#prod-art").innerHTML = `<h3 class="sub">${esc(s.title)} · v${a ? a.version : "–"} <span class="badge ${ITONE[it.state] ?? ""}">${esc(t("is." + (it.state || "missing")))}</span>
+      <span class="hint">${esc(t("prod.versions"))}: ${vs.map(v => `v${v.version} ${esc(t("is." + v.status) || v.status)}`).join(" · ")}</span></h3>
+    <div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">${actions}</div>
+    ${a && a.note ? `<div class="hint">${esc(a.note)}</div>` : ""}
+    <pre class="json">${esc(a ? JSON.stringify(a.data, null, 2) : "")}</pre>`;
+  $("#prod-art").querySelectorAll("[data-act]").forEach(b => b.onclick = async () => {
+    const k = b.dataset.act;
+    if (k === "edit"){
+      const cur = a.data && a.data.raw ? a.data.raw : JSON.stringify(a.data, null, 2);
+      modal(`<h3>${esc(s.title)}</h3><textarea class="json" id="art-json">${esc(cur)}</textarea>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px"><button class="btn" onclick="closeModal()">${t("cancel")}</button>
+        <button class="btn primary" id="art-save">${t("prod.save")}</button></div>`);
+      $("#art-save").onclick = async () => { let data; try { data = JSON.parse($("#art-json").value); } catch(e){ toast(e.message, true); return; }
+        closeModal(); await act(url, {stage: s.id, action: "approve", data}); };
+      return;
+    }
+    let note = null;
+    if (k === "redo"){ note = prompt(t("prod.note")); if (note === null) return; }
+    await act(url, {stage: s.id, action: k, note});
+  });
+}
+$("#prod-new").onclick = async () => {
+  try { WORKFLOWS = await api("/api/workflows"); } catch(e){ toast(t("not.done") + e.message, true); return; }
+  const vt = Object.keys((META.templates["h3-i2v"] || {}).tiers || {smoke: 1});
+  modal(`<h3>${t("prod.new")}</h3>
+    <label class="hint">${t("prod.workflow")}</label><select id="pn-wf" style="width:100%">${WORKFLOWS.map(w => `<option value="${esc(w.name)}">${esc(w.title)}</option>`).join("")}</select>
+    <label class="hint">${t("prod.title")}</label><input id="pn-title" style="width:100%">
+    <label class="hint">${t("prod.source")}</label><textarea id="pn-src" style="width:100%;min-height:200px"></textarea>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;align-items:center">
+      <label class="hint">${t("prod.vtier")} <select id="pn-vt">${vt.map(x => `<option ${x === "smoke" ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></label>
+      <label class="hint">${t("prod.ncand")} <input id="pn-n" type="number" min="1" max="8" value="4" style="width:60px"></label>
+      <label class="hint"><input id="pn-subs" type="checkbox" checked> ${t("prod.subs")}</label></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px"><button class="btn" onclick="closeModal()">${t("cancel")}</button>
+      <button class="btn primary" id="pn-go">${t("prod.create")}</button></div>`);
+  $("#pn-go").onclick = async () => {
+    const body = {workflow: $("#pn-wf").value, title: $("#pn-title").value.trim() || "Untitled", inputs: {source: $("#pn-src").value},
+      settings: {video_tier: $("#pn-vt").value, image_candidates: +$("#pn-n").value || 4, subtitles: $("#pn-subs").checked}};
+    if (!body.inputs.source.trim()) { toast(t("prod.source"), true); return; }
+    closeModal(); const p = await act("/api/productions", body); if (p) { selProd = p.id; refreshAll(true); }
+  };
+};
 async function refreshAll(force){
   await pollSystem();
   try { PROJECTS = await api("/api/projects"); } catch {}
@@ -960,6 +1136,14 @@ async function refreshAll(force){
     if (!selProject && SYS){ selProject = SYS.project.id; renderProjects(); }
     loadProject(!!force);
     if (ptab === "chat") loadRunbar();
+  } else if (view === "productions"){
+    try { PRODS = await api("/api/productions"); } catch { PRODS = []; }
+    if (!selProd && PRODS.length) selProd = PRODS[0].id;
+    const k1 = LANG + PRODS.map(p => p.id + p.updated + p.state).join("|") + selProd;
+    if (force || k1 !== keys.pl){ keys.pl = k1; renderProdList(); }
+    if (selProd){ try { PLAN = await api(`/api/productions/${encodeURIComponent(selProd)}/plan`); } catch { PLAN = null; } } else PLAN = null;
+    const k2 = LANG + JSON.stringify(PLAN) + prodArt;
+    if (force || k2 !== keys.pd){ keys.pd = k2; renderProdDetail(); }
   } else if (view === "queue"){
     let q; try { q = await api("/api/queue"); } catch { return; }
     renderQueue(q);

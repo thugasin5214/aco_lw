@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "required": ["clips"],
+  "properties": {
+    "transition": {
+      "type": "object",
+      "properties": {
+        "type": {"enum": ["cut", "fade", "dissolve", "wipeleft", "wiperight", "slideleft", "slideright"]},
+        "seconds": {"type": "number", "minimum": 0, "maximum": 2}
+      }
+    },
+    "clips": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "required": ["shot"],
+        "properties": {
+          "shot": {"type": "string"},
+          "in": {"type": "number", "minimum": 0},
+          "out": {"type": "number", "minimum": 0},
+          "subtitle": {"type": "string"}
+        }
+      }
+    },
+    "notes": {"type": "string"}
+  }
+}

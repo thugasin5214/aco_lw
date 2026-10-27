@@ -24,9 +24,12 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+import jsonschema
+
 from .config import ROOT
 from .i18n import tr
 from .policy import Policies, classify_round
+from .production import ProductionError
 from .render import ParamError
 from .studio import StudioError
 
@@ -328,6 +331,95 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
     def ask_user(ctx, a):
         return Pending("user", f"ask:{ctx['run_id']}", a["question"])
 
+    # ---- 制片流水线（阶段 3）：agent 只读计划、按计划开跑或转达你的审核，不自建状态机 ----
+    def _prod():
+        prod = getattr(rt, "production", None)
+        if prod is None:
+            raise ValueError("production engine not available (runs inside va daemon)")
+        return prod
+
+    def _plan_view(plan: dict) -> dict:
+        return {
+            "production_id": plan["production"]["id"],
+            "title": plan["production"]["title"],
+            "workflow": plan["workflow"]["name"],
+            "next_action": plan["next_action"],
+            "stages": [
+                {"id": s["id"], "state": s["state"], "counts": s["counts"], "confirm": s["confirm"]}
+                for s in plan["stages"]
+            ],
+        }
+
+    def list_workflows(ctx, a):
+        return Done(
+            {
+                "workflows": [
+                    {
+                        "name": w.name,
+                        "title": w.title,
+                        "description": w.description,
+                        "settings": w.settings,
+                        "stages": [s.id for s in w.stages],
+                    }
+                    for w in _prod().workflows.values()
+                ],
+                "productions": [
+                    {
+                        "id": p["id"],
+                        "title": p["title"],
+                        "workflow": p["workflow"],
+                        "state": p["state"],
+                    }
+                    for p in store.productions(ctx["project_id"])
+                ][:10],
+            }
+        )
+
+    def create_production(ctx, a):
+        prod = _prod().create(
+            a["workflow"],
+            a["title"],
+            {"source": a["source"]},
+            a.get("settings") or {},
+            ctx["project_id"],
+        )
+        return Done(_plan_view(_prod().plan(prod["id"])))
+
+    def get_production_plan(ctx, a):
+        return Done(_plan_view(_prod().plan(a["production_id"])))
+
+    def run_stage(ctx, a):
+        p = _prod()
+        plan = p.plan(a["production_id"])
+        st = next((s for s in plan["stages"] if s["id"] == a["stage"]), None)
+        if st and st["confirm"] and not a.get("user_confirmed"):
+            return Done(
+                {
+                    "error": f"stage {a['stage']} needs the user's go-ahead (long renders); "
+                    "ask them, then call again with user_confirmed=true"
+                }
+            )
+        made = p.run_stage(a["production_id"], a["stage"], a.get("keys"), a.get("note"), "agent")
+        return Done({"started": len(made), "plan": _plan_view(p.plan(a["production_id"]))})
+
+    def review_stage(ctx, a):
+        p = _prod()
+        art = p.review(
+            a["production_id"],
+            a["stage"],
+            a["action"],
+            a.get("note"),
+            None,
+            a.get("key") or "main",
+            ctx["channel"],
+        )
+        return Done(
+            {
+                "artifact": {k: art[k] for k in ("stage", "key", "version", "status")},
+                "plan": _plan_view(p.plan(a["production_id"])),
+            }
+        )
+
     round_id = {"round_id": S}
     tools = [
         Tool(
@@ -441,6 +533,74 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
             ),
             "wait",
             queue_pipeline,
+        ),
+        Tool(
+            "list_workflows",
+            "Production workflows (e.g. novel-to-film) and this project's productions.",
+            _obj({}),
+            "read",
+            list_workflows,
+        ),
+        Tool(
+            "create_production",
+            "Start a multi-stage production (e.g. novel → film) from source text. Planning "
+            "stages start automatically; every stage waits for the user's review before the next.",
+            _obj(
+                {
+                    "workflow": S,
+                    "title": S,
+                    "source": S,
+                    "settings": {
+                        "type": "object",
+                        "description": "e.g. video_tier, image_candidates, subtitles",
+                    },
+                },
+                ["workflow", "title", "source"],
+            ),
+            "act",
+            create_production,
+        ),
+        Tool(
+            "get_production_plan",
+            "The authoritative plan of a production: each stage's state and the next action. "
+            "Always read it instead of guessing progress.",
+            _obj({"production_id": S}, ["production_id"]),
+            "read",
+            get_production_plan,
+        ),
+        Tool(
+            "run_stage",
+            "Run (or re-run) a production stage — by default only missing / stale / failed items. "
+            "Stages marked confirm (videos) need user_confirmed=true, set only when the user said so.",
+            _obj(
+                {
+                    "production_id": S,
+                    "stage": S,
+                    "keys": {"type": "array", "items": S},
+                    "note": S,
+                    "user_confirmed": {"type": "boolean"},
+                },
+                ["production_id", "stage"],
+            ),
+            "act",
+            run_stage,
+        ),
+        Tool(
+            "review_stage",
+            "Relay the user's review of a planning stage: approve, redo (with note), reject, or "
+            "keep (still valid although upstream changed). Render stages are reviewed on their rounds.",
+            _obj(
+                {
+                    "production_id": S,
+                    "stage": S,
+                    "action": {"type": "string", "enum": ["approve", "redo", "reject", "keep"]},
+                    "note": S,
+                    "key": S,
+                },
+                ["production_id", "stage", "action"],
+            ),
+            "act",
+            review_stage,
         ),
         Tool(
             "ask_user",
@@ -785,8 +945,10 @@ class AgentRuntime:
             return self._tool_done(run, call, args, {"error": denied})
         try:
             out = tool.handler(ctx, args)
-        except (StudioError, ParamError, KeyError, ValueError) as e:
+        except (StudioError, ParamError, KeyError, ValueError, ProductionError) as e:
             out = Done({"error": str(e)})
+        except jsonschema.ValidationError as e:
+            out = Done({"error": f"schema: {e.message}"})
         if isinstance(out, Done):
             return self._tool_done(run, call, args, out.result)
         mid = self.store.add_agent_msg(

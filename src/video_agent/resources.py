@@ -98,7 +98,8 @@ class Estimator:
                 return Estimate(
                     h["exec_s"] * cost / base, peak, template.model, f"scaled from {h['tier']}"
                 )
-        return Estimate(DEFAULT_EXEC_S[template.kind], peak, template.model, "default")
+        default = model.exec_s or DEFAULT_EXEC_S[template.kind]
+        return Estimate(default, peak, template.model, "default")
 
 
 class LLMWorkload:
@@ -229,6 +230,8 @@ class ResourceManager:
     # ---- 渲染把关（替代 memgate.ensure） ----
     def prepare_render(self, template: Template, tier: str, executor, task_id: str) -> RenderGate:
         model = self.registry.model_of(template)
+        if model.resource == "cpu":  # 不占统一内存的大头：不等、不卸载、不记 render_active
+            return RenderGate(ok=True, required_gib=0, actions=["cpu job; memory gate skipped"])
         est = self.estimator.estimate(template, tier)
         res = RenderGate(ok=False, required_gib=round(est.peak_gib + self.cfg.memory_margin_gib, 1))
         start = time.monotonic()

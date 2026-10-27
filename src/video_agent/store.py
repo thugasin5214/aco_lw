@@ -186,6 +186,35 @@ CREATE TABLE IF NOT EXISTS agent_msgs (
   meta TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS agent_msgs_run ON agent_msgs(run_id);
+CREATE TABLE IF NOT EXISTS productions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  created REAL NOT NULL,
+  updated REAL NOT NULL,
+  workflow TEXT NOT NULL,
+  title TEXT NOT NULL,
+  settings TEXT NOT NULL DEFAULT '{}',
+  state TEXT NOT NULL DEFAULT 'active'
+);
+CREATE INDEX IF NOT EXISTS productions_project ON productions(project_id);
+CREATE TABLE IF NOT EXISTS artifacts (
+  id TEXT PRIMARY KEY,
+  production_id TEXT NOT NULL,
+  created REAL NOT NULL,
+  updated REAL NOT NULL,
+  stage TEXT NOT NULL,
+  key TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  data TEXT NOT NULL DEFAULT 'null',
+  deps TEXT NOT NULL DEFAULT '[]',
+  round_id TEXT,
+  task_id TEXT,
+  note TEXT,
+  meta TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS artifacts_production ON artifacts(production_id, stage, key);
+CREATE INDEX IF NOT EXISTS artifacts_round ON artifacts(round_id);
 CREATE TABLE IF NOT EXISTS uploads (
   id TEXT PRIMARY KEY,
   project_id TEXT,
@@ -218,6 +247,9 @@ JSON_COLS = (
     "source",
     "waiting",
     "tool_calls",
+    "settings",
+    "data",
+    "deps",
 )
 
 
@@ -807,3 +839,89 @@ class Store:
                 " ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (key, json.dumps(value, ensure_ascii=False)),
             )
+
+    # ---- 制片：production 与产物（artifact） ----
+    @_locked
+    def create_production(self, project_id: str, workflow: str, title: str, settings: dict) -> dict:
+        now, pid = time.time(), _new_id()
+        with self.db:
+            self.db.execute(
+                "INSERT INTO productions (id, project_id, created, updated, workflow, title, settings)"
+                " VALUES (?,?,?,?,?,?,?)",
+                (pid, project_id, now, now, workflow, title, json.dumps(settings, ensure_ascii=False)),
+            )
+        return self.get_production(pid)
+
+    @_locked
+    def get_production(self, production_id: str) -> dict | None:
+        return self._one("SELECT * FROM productions WHERE id=?", (production_id,))
+
+    @_locked
+    def productions(self, project_id: str | None = None) -> list[dict]:
+        if project_id:
+            return self._rows(
+                "SELECT * FROM productions WHERE project_id=? ORDER BY created DESC", (project_id,)
+            )
+        return self._rows("SELECT * FROM productions ORDER BY created DESC")
+
+    @_locked
+    def update_production(self, production_id: str, **fields) -> dict:
+        fields = self._encode(fields)
+        cols = ", ".join(f"{k}=?" for k in fields)
+        with self.db:
+            self.db.execute(
+                f"UPDATE productions SET {cols}, updated=? WHERE id=?",
+                (*fields.values(), time.time(), production_id),
+            )
+        return self.get_production(production_id)
+
+    @_locked
+    def add_artifact(self, production_id: str, stage: str, key: str, status: str, **fields) -> dict:
+        now, aid = time.time(), _new_id()
+        row = self.db.execute(
+            "SELECT MAX(version) FROM artifacts WHERE production_id=? AND stage=? AND key=?",
+            (production_id, stage, key),
+        ).fetchone()
+        version = (row[0] or 0) + 1
+        base = {"data": None, "deps": [], "meta": {}, **fields}
+        enc = self._encode(base)
+        cols = ", ".join(enc)
+        with self.db:
+            self.db.execute(
+                "INSERT INTO artifacts (id, production_id, created, updated, stage, key, version,"
+                f" status, {cols}) VALUES (?,?,?,?,?,?,?,?,{','.join('?' * len(enc))})",
+                (aid, production_id, now, now, stage, key, version, status, *enc.values()),
+            )
+        return self.get_artifact(aid)
+
+    @_locked
+    def get_artifact(self, artifact_id: str) -> dict | None:
+        return self._one("SELECT * FROM artifacts WHERE id=?", (artifact_id,))
+
+    @_locked
+    def artifact_by_round(self, round_id: str) -> dict | None:
+        return self._one("SELECT * FROM artifacts WHERE round_id=?", (round_id,))
+
+    @_locked
+    def artifacts(
+        self, production_id: str, stage: str | None = None, *statuses: str
+    ) -> list[dict]:
+        q, args = "SELECT * FROM artifacts WHERE production_id=?", [production_id]
+        if stage:
+            q += " AND stage=?"
+            args.append(stage)
+        if statuses:
+            q += f" AND status IN ({','.join('?' * len(statuses))})"
+            args += list(statuses)
+        return self._rows(q + " ORDER BY stage, key, version", tuple(args))
+
+    @_locked
+    def update_artifact(self, artifact_id: str, **fields) -> dict:
+        fields = self._encode(fields)
+        cols = ", ".join(f"{k}=?" for k in fields)
+        with self.db:
+            self.db.execute(
+                f"UPDATE artifacts SET {cols}, updated=? WHERE id=?",
+                (*fields.values(), time.time(), artifact_id),
+            )
+        return self.get_artifact(artifact_id)

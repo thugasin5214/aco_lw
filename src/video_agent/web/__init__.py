@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 import httpx
+import jsonschema
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
@@ -18,6 +19,7 @@ from .. import llm
 from ..config import ROOT, Settings
 from ..memory import snapshot
 from ..planner import MODES
+from ..production import ProductionError
 from ..render import TIER_KEYS
 from ..store import PROJECT_ZH, ROUND_ZH, STATE_ZH, TransitionError
 from ..studio import StudioError
@@ -86,8 +88,10 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
     def guard(fn):
         try:
             return fn()
-        except (StudioError, KeyError, ValueError, TransitionError) as e:
+        except (StudioError, KeyError, ValueError, TransitionError, ProductionError) as e:
             raise HTTPException(400, str(e)) from e
+        except jsonschema.ValidationError as e:
+            raise HTTPException(400, f"schema: {e.message}") from e
 
     # ---- 页面 ----
     @app.get("/", response_class=HTMLResponse)
@@ -532,6 +536,76 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
     def cancel_run(run_id: str) -> dict:
         actions.runtime.cancel(run_id)
         return {"ok": True}
+
+    # ---- 制片流水线（阶段 3） ----
+    def _production():
+        prod = getattr(actions, "production", None)
+        if prod is None:
+            raise HTTPException(503, "production engine runs inside the daemon (va daemon)")
+        return prod
+
+    @app.get("/api/workflows")
+    def workflows() -> list[dict]:
+        return [
+            {
+                "name": w.name,
+                "title": w.title,
+                "description": w.description,
+                "settings": w.settings,
+                "stages": [
+                    {"id": s.id, "title": s.title or s.id, "kind": s.kind, "needs": s.needs,
+                     "skill": s.skill, "gate": s.gate, "confirm": s.confirm}
+                    for s in w.stages
+                ],
+            }
+            for w in _production().workflows.values()
+        ]
+
+    @app.get("/api/skills")
+    def skills() -> list[dict]:
+        return _production().skills.list()
+
+    @app.get("/api/productions")
+    def productions(project: str | None = None) -> list[dict]:
+        return store.productions(project)
+
+    @app.post("/api/productions")
+    def create_production(
+        workflow: str = Body(...),
+        title: str = Body(...),
+        inputs: dict = Body(...),  # noqa: B008 — 例如 {"source": "小说原文"}
+        settings: dict = Body(default_factory=dict),  # noqa: B008
+        project_id: str | None = Body(None),
+    ) -> dict:
+        return guard(lambda: _production().create(workflow, title, inputs, settings, project_id))
+
+    @app.get("/api/productions/{pid}/plan")
+    def production_plan(pid: str) -> dict:
+        return guard(lambda: _production().plan(pid))
+
+    @app.get("/api/productions/{pid}/artifacts")
+    def production_artifacts(pid: str, stage: str | None = None) -> list[dict]:
+        return store.artifacts(pid, stage)
+
+    @app.post("/api/productions/{pid}/run")
+    def production_run(
+        pid: str,
+        stage: str = Body(...),
+        keys: list[str] | None = Body(None),  # noqa: B008
+        note: str | None = Body(None),
+    ) -> list[dict]:
+        return guard(lambda: _production().run_stage(pid, stage, keys, note, origin="web"))
+
+    @app.post("/api/productions/{pid}/review")
+    def production_review(
+        pid: str,
+        stage: str = Body(...),
+        action: str = Body(...),
+        note: str | None = Body(None),
+        data: dict | None = Body(None),  # noqa: B008
+        key: str = Body("main"),
+    ) -> dict:
+        return guard(lambda: _production().review(pid, stage, action, note, data, key, "web"))
 
     @app.get("/api/settings")
     def settings() -> dict:

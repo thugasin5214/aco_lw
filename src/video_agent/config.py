@@ -54,6 +54,8 @@ class Settings:
     telegram_chat_ids: list[int] = field(default_factory=list)
     data_dir: Path = field(default_factory=lambda: ROOT / "data")
     templates_dir: Path = field(default_factory=lambda: ROOT / "templates")
+    skills_dir: Path = field(default_factory=lambda: ROOT / "skills")
+    workflows_dir: Path = field(default_factory=lambda: ROOT / "workflows")
 
     @property
     def db_path(self) -> Path:

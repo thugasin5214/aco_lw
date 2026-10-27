@@ -126,6 +126,26 @@ llm_fallback = ["anthropic", "claude_code", "codex"]  # 依次尝试
 - 不设 `allow_online = true` 就不会往外发任何内容，控制台会显示请求在等资源及原因。
 - 对话气泡上会标注由哪个后端回答（“经 …”），Claude Code 还会显示花费。
 
+### 3.8 制片：从短篇小说到成片（阶段 3，预览）
+制片按**工作流**逐阶段推进；每个阶段都等你通过后才开始下一阶段。第一套工作流是 `novel-to-film`：
+
+| 阶段 | 由谁完成 | 你审核 |
+|---|---|---|
+| 改编（一句话梗概、场次、节拍） | LLM + skill `adapt-novel` | 通过 / 带意见重做 / 手改 JSON |
+| 设定圣经（风格、人物、场景） | LLM + skill `story-bible` | 同上 |
+| 人物定妆、场景基准图 | FLUX.2，每个人物 / 场景一轮 | 在「审阅」里选中候选 |
+| 分镜（景别、运镜、动作、每镜参考） | LLM + skill `storyboard` | 通过 / 重做 / 手改 |
+| 关键帧（以已通过的定妆图为参考编辑） | FLUX.2 编辑，每镜一轮 | 在「审阅」里选中 |
+| 镜头视频 | H3 图生视频，每镜一条——**你点「开始」才跑** | 选中 / 重做 |
+| 剪辑（顺序、裁切、转场、字幕） | LLM + skill `edit-timeline` | 通过 / 重做 / 手改 |
+| 成片 | FFmpeg 按时间线合成（无声，软字幕 + `.srt`） | 通过 |
+
+- **控制台 → 制片 → 新建**：贴原文，选视频档位（默认 `smoke`，已实测）和图片候选数。规划阶段马上开始（本地 LLM；视频渲染期间排队，除非设了 `allow_online` + `llm_fallback`）。
+- **改上游只影响依赖它的下游**：改一个人物，只重出该人物的定妆图和用到它的镜头；其他镜头保持已通过。输入变了的规划阶段会显示“上游变了——保留还是重做？”。
+- 规划阶段待审核时 Telegram 会收到消息；渲染轮照常带按钮推送。
+- 对话里的 agent（以及经 MCP 的 Claude Code / Codex）可用 `create_production`、`get_production_plan`、`run_stage`、`review_stage` 驱动制片；视频阶段仍需你点头。
+- 扩展：工作流是 `workflows/`（或 `data/workflows/`）下的 YAML，输出契约是 `workflows/schemas/` 里的 JSON Schema，skill 是 Claude Code 格式的 `SKILL.md` 目录，放在 `skills/`（你自己的放 `data/skills/`）。新类型的片子 = 新 YAML + skill，不改代码。
+
 ## 4. 资源与内存策略（自动执行）
 
 | 情况 | 系统行为 |

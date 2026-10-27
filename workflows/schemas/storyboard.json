@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "required": ["shots"],
+  "properties": {
+    "shots": {
+      "type": "array", "minItems": 1, "maxItems": 24,
+      "items": {
+        "type": "object",
+        "required": ["id", "scene", "ref", "frame", "framing", "camera", "motion", "seconds"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9_-]+$"},
+          "scene": {"type": "string"},
+          "ref": {"type": "string", "pattern": "^(characters|locations)/[a-z0-9_-]+$"},
+          "cast": {"type": "array", "items": {"type": "string"}},
+          "frame": {"type": "string"},
+          "framing": {"type": "string"},
+          "camera": {"type": "string"},
+          "motion": {"type": "string"},
+          "seconds": {"type": "number", "minimum": 1, "maximum": 15},
+          "dialogue": {"type": "string"},
+          "continuity": {"type": "string"}
+        }
+      }
+    }
+  }
+}

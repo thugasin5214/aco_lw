@@ -1,0 +1,12 @@
+title: 剪辑合成 · FFmpeg 按时间线拼接
+kind: video
+model: ffmpeg
+executor: ffmpeg
+release_after: keep
+# 不是 ComfyUI workflow：api.json 只承载参数，由 executors/ffmpeg.py 执行
+slots:
+  timeline:  {node: "1", field: timeline, type: str, required: true}   # 时间线 JSON 的路径
+  subtitles: {node: "1", field: subtitles, type: bool}
+tiers:
+  draft: {verified: true}
+default_tier: draft

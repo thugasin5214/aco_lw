@@ -67,6 +67,8 @@ class ModelInfo(BaseModel):
     measured: bool = False
     exclusive_llm: bool = False
     adaptive: bool = False  # 引擎按可用内存自适应（如 FreeVideo）：实测峰值≠最低需求
+    resource: Literal["memory", "cpu"] = "memory"  # cpu：不经内存闸门（如 FFmpeg）
+    exec_s: float | None = None  # 没有历史时的默认耗时（估算）
 
 
 def load_template(dir_: Path, origin: str = "builtin") -> Template:

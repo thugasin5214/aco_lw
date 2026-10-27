@@ -1,0 +1,37 @@
+{
+  "type": "object",
+  "required": ["style", "characters", "locations"],
+  "properties": {
+    "style": {
+      "type": "object", "required": ["look"],
+      "properties": {"look": {"type": "string"}, "palette": {"type": "string"}, "lens": {"type": "string"}}
+    },
+    "characters": {
+      "type": "array", "maxItems": 6,
+      "items": {
+        "type": "object", "required": ["id", "name", "look"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9_-]+$"},
+          "name": {"type": "string"},
+          "look": {"type": "string"},
+          "wardrobe": {"type": "string"},
+          "personality": {"type": "string"}
+        }
+      }
+    },
+    "locations": {
+      "type": "array", "minItems": 1, "maxItems": 6,
+      "items": {
+        "type": "object", "required": ["id", "name", "look"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9_-]+$"},
+          "name": {"type": "string"},
+          "look": {"type": "string"},
+          "time_of_day": {"type": "string"}
+        }
+      }
+    },
+    "props": {"type": "array", "items": {"type": "object", "required": ["id", "look"],
+      "properties": {"id": {"type": "string"}, "look": {"type": "string"}}}}
+  }
+}

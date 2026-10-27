@@ -19,8 +19,10 @@ from .agent import AgentRuntime
 from .comfy import ComfyBusy
 from .i18n import tr
 from .planner import MODES, Planner, PlannerUnavailable
+from .production import Park, Production, load_workflows
 from .render import ParamError
 from .scheduler import Orchestrator, SchedulerBusy
+from .skills import SkillLibrary
 from .studio import Studio, StudioError
 from .telegram import TelegramAPI, TelegramBot, lock_buttons
 
@@ -605,6 +607,17 @@ class Daemon:
         self.worker = Worker(self.orch, self.studio, self.notify_round, self.stop)
         self.actions = Actions(self.studio, self.planner, self.worker)
         self.orch.on_llm_restored = self.actions.prewarm_current
+        self.production = Production(
+            self.studio,
+            SkillLibrary.from_settings(cfg),
+            load_workflows(cfg.workflows_dir, cfg.data_dir / "workflows"),
+            self.skill_llm,
+            log=lambda m: log.info(m),
+        )
+        self.production.listeners.append(self.notify_stage)
+        self.orch.resources.listeners.append(self.production.wake)  # 渲染结束 → 排队的 skill 再试
+        self.actions.production = self.production
+        self.actions.runtime.production = self.production
         if cfg.telegram_token:
             self.bot = TelegramBot(
                 TelegramAPI(cfg.telegram_token), self.actions, cfg.telegram_chat_ids
@@ -627,9 +640,62 @@ class Daemon:
         if self.bot:
             self.bot.send_round(rnd, tasks, self.orch.store.task_dir)
         self.actions.runtime.on_round_ready(rnd)  # 在等这轮的 agent 运行带着结果继续
+        self.production.on_round_ready(rnd)  # 制片阶段：自动通过 / 通知审阅
+
+    # ---- 制片：skill 阶段的 LLM（本地优先；不够时按回退链；在线须 allow_online） ----
+    def skill_llm(self, stage, messages: list[dict], schema: dict) -> tuple[str, dict]:
+        from .agent_cli import AgentCLI
+        from .planner import make_named_backend
+
+        cfg, rm = self.cfg, self.orch.resources
+        online = ("anthropic", "openrouter", "openai_compatible", "claude_code", "codex")
+
+        def run(name: str) -> tuple[str, dict]:
+            if name in ("claude_code", "codex"):
+                prompt = "\n\n".join(m["content"] for m in messages)
+                return AgentCLI(name, cfg).run(
+                    f"skill-{stage.id}-{int(time.time())}", prompt, f"http://127.0.0.1:{cfg.web_port}"
+                )
+            res = make_named_backend(cfg, self.orch.store, name).chat(messages, schema, 8192)
+            return res.text, res.stats()
+
+        if stage.llm:  # 阶段指定了后端
+            if stage.llm in online and not cfg.allow_online:
+                raise Park(f"stage {stage.id} uses {stage.llm} but allow_online is off")
+            if stage.llm in online:
+                return run(stage.llm)
+        primary = self.planner.backend
+        if not getattr(primary, "local", False):
+            res = primary.chat(messages, schema, 8192)
+            return res.text, res.stats()
+        ok, why = rm.llm_admit()
+        if ok:
+            with rm.llm.inference():
+                res = primary.chat(messages, schema, 8192)
+            return res.text, res.stats()
+        if cfg.allow_online:
+            for name in cfg.llm_fallback or []:
+                if name in online:
+                    log.info("skill %s: local LLM unavailable (%s) → %s", stage.id, why, name)
+                    return run(name)
+        raise Park(why)
+
+    def notify_stage(self, ev: dict) -> None:
+        prod = ev["production"]
+        if ev["status"] not in ("review", "invalid", "failed"):
+            return
+        key = f" · {ev['key']}" if ev["key"] != "main" else ""
+        text = tr(f"stage_{ev['status']}", p=prod["title"], s=ev["title"] + key)
+        self.studio.log("system", "out", text, prod["project_id"])
+        if self.bot and not ev["artifact"].get("round_id"):  # 渲染阶段的轮已经单独推送过
+            self.bot.broadcast(text)
 
     def start(self) -> None:
         self.actions.runtime.recover()
+        self.production.recover()
+        threading.Thread(
+            target=self.production.work, args=(self.stop,), name="production", daemon=True
+        ).start()
         self.worker.start()
         threading.Thread(target=self.worker.heartbeat, name="heartbeat", daemon=True).start()
         threading.Thread(

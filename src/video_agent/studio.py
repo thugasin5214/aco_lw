@@ -30,6 +30,7 @@ class Studio:
         self.store: Store = orch.store
         self.round_size = round_size
         self.decision_listeners: list = []  # 你对某轮做了决定 → 通知（例如等这轮的 agent 运行）
+        self.round_listeners: list = []  # 新开了一轮（含重做 / 微调派生的）→ 通知（例如制片产物跟随）
 
     # ---- 项目 ----
     def current_project(self) -> dict:
@@ -283,7 +284,10 @@ class Studio:
         except Exception:
             self.cancel_round(rnd["id"], "创建失败")
             raise
-        return self.store.get_round(rnd["id"])
+        rnd = self.store.get_round(rnd["id"])
+        for cb in self.round_listeners:
+            cb(rnd)
+        return rnd
 
     def refresh_round(self, round_id: str) -> tuple[dict, bool]:
         """全部候选跑完则进入待审阅；返回 (轮, 是否刚刚进入待审阅)。"""

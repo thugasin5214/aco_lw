@@ -126,6 +126,26 @@ llm_fallback = ["anthropic", "claude_code", "codex"]  # tried in order
 - Without `allow_online = true` nothing is sent out, and the console shows the request waiting for resources with the reason.
 - Chat bubbles show which backend answered ("via …") and, for Claude Code, the cost.
 
+### 3.8 Productions: from a short story to a film (phase 3, preview)
+A production runs a **workflow** stage by stage; every stage waits for your approval before the next one starts. The first workflow is `novel-to-film`:
+
+| Stage | Who does it | You review |
+|---|---|---|
+| Adaptation (logline, scenes, beats) | LLM with skill `adapt-novel` | approve / redo with a note / edit the JSON |
+| Story bible (style, characters, locations) | LLM with skill `story-bible` | same |
+| Character sheets, location plates | FLUX.2 rounds, one per character / location | select a candidate in **Review** |
+| Storyboard (framing, camera, motion, reference per shot) | LLM with skill `storyboard` | approve / redo / edit |
+| Keyframes (edited from the approved sheets) | FLUX.2 edit, one round per shot | select in Review |
+| Shot videos | H3 image-to-video per shot — **starts only when you press Start** | select / redo |
+| Edit (order, trims, transitions, subtitles) | LLM with skill `edit-timeline` | approve / redo / edit |
+| Final cut | FFmpeg renders the timeline (silent, soft subtitles + `.srt`) | approve |
+
+- **Console → Productions → New**: paste the text, choose the video tier (default `smoke`, measured) and the number of image candidates. Planning stages start right away (local LLM; they wait while a video renders unless `allow_online` + `llm_fallback` are set).
+- **Changing something upstream** only invalidates what depends on it: editing one character re-renders that character's sheet and the shots that use it; other shots stay approved. A planning stage whose input changed shows *upstream changed — keep or redo?*.
+- Telegram gets a message when a planning stage is ready for review; render rounds arrive with the usual buttons.
+- The chat agent (and Claude Code / Codex over MCP) can drive productions with `create_production`, `get_production_plan`, `run_stage`, `review_stage`; video stages still need your go-ahead.
+- Extending: a workflow is a YAML file in `workflows/` (or `data/workflows/`), output contracts are JSON Schemas in `workflows/schemas/`, and skills are Claude-Code-style `SKILL.md` folders in `skills/` (or `data/skills/` for your own). A new kind of film = a new YAML + skills, no code changes.
+
 ## 4. Resources and memory policy (automatic)
 
 | Situation | What the system does |

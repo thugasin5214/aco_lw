@@ -28,6 +28,13 @@ M: dict[str, tuple[str, str]] = {
         "当前是纯命令模式，文字不会唤醒 LLM。用 /round 直接出图，或 /mode on_demand。",
     ),
     "invalid_params": ("Invalid parameters: {e}", "参数无效：{e}"),
+    # 制片
+    "stage_review": ("🎬 {p}: {s} is ready for review", "🎬 {p}：{s} 待审核"),
+    "stage_invalid": (
+        "🎬 {p}: {s} — the model's output failed validation; edit it or redo",
+        "🎬 {p}：{s} 的输出未通过校验，请手改或重做",
+    ),
+    "stage_failed": ("🎬 {p}: {s} failed", "🎬 {p}：{s} 失败"),
     # 规划结果
     "queued_round": (
         "Queued: {n} candidate(s) ({tpl} / {tier})",
