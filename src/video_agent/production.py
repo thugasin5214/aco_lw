@@ -850,6 +850,36 @@ class Production:
                 return self.run_stage(production_id, stage_id, None, note or "redo", origin)[0]
             return self.store.get_artifact(art["id"])
 
+    def pending_reviews(self, project_id: str | None = None) -> list[dict]:
+        """所有进行中制片里等你处理的规划阶段（待审核 / 未通过校验 / 上游变了）。渲染阶段在轮上审。"""
+        out = []
+        for prod in self.store.productions(project_id):
+            if prod["state"] != "active":
+                continue
+            plan = self.plan(prod["id"])
+            for s in plan["stages"]:
+                if s["kind"] != "skill" or s["state"] == "blocked":
+                    continue
+                for it in s["items"]:
+                    if it["state"] in ("review", "invalid", "stale"):
+                        art = self.store.get_artifact(it["artifact_id"])
+                        out.append(
+                            {
+                                "production_id": prod["id"],
+                                "production": prod["title"],
+                                "project_id": prod["project_id"],
+                                "stage": s["id"],
+                                "title": s["title"],
+                                "key": it["key"],
+                                "state": it["state"],
+                                "version": it["version"],
+                                "data": art["data"],
+                                "note": art["note"],
+                                "updated": art["updated"],
+                            }
+                        )
+        return out
+
     # ---- 推进：上一阶段通过后，自动开跑下一批就绪阶段（confirm 的阶段等你点开始） ----
     def advance(self, production_id: str) -> list[str]:
         prod = self._prod(production_id)

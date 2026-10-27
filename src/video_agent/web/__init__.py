@@ -165,7 +165,8 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
             "queued": len(store.by_state("draft")),
             "project": studio.current_project(),
             "pending_review": len(store.rounds(state="review"))
-            + sum(1 for t in store.by_state("review") if not t["round_id"]),
+            + sum(1 for t in store.by_state("review") if not t["round_id"])
+            + len(_stage_reviews()),
         }
 
     @app.get("/api/meta")
@@ -538,6 +539,14 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
         return {"ok": True}
 
     # ---- 制片流水线（阶段 3） ----
+    def _stage_reviews() -> list[dict]:
+        prod = getattr(actions, "production", None)
+        return prod.pending_reviews() if prod else []
+
+    @app.get("/api/review/stages")
+    def review_stages() -> list[dict]:
+        return _stage_reviews()
+
     def _production():
         prod = getattr(actions, "production", None)
         if prod is None:

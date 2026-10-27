@@ -138,6 +138,8 @@ pre{font-size:12px;background:var(--bg);border:1px solid var(--line);border-radi
 .chip .k{font-size:11.5px;display:flex;justify-content:space-between;gap:4px;align-items:center}
 pre.json{max-height:420px;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;font-size:12px;white-space:pre-wrap;word-break:break-word}
 textarea.json{width:100%;min-height:320px;font:12px/1.5 ui-monospace,Menlo,monospace;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px}
+.sreview .sum{font-size:14px;margin:4px 0}.sreview .sum li{margin:2px 0}
+.sreview details{margin-top:8px}.sreview summary{cursor:pointer;color:var(--muted);font-size:13px}
 .nexta{border-radius:10px;padding:8px 12px;background:var(--acc-tint);color:var(--accent);font-size:13.5px;margin:6px 0 12px}
 .pitem{display:flex;gap:10px;align-items:center;border:1px solid var(--line);border-radius:10px;
   padding:8px;cursor:pointer;background:var(--card)}
@@ -246,6 +248,7 @@ kbd{font:11.5px ui-monospace,monospace;border:1px solid var(--line);border-radiu
 
   <section class="view" id="v-review">
     <div class="hint" style="margin-bottom:12px" data-t="review.keys" data-html="1"></div>
+    <div id="review-stages"></div>
     <div id="review"></div>
   </section>
 
@@ -760,9 +763,57 @@ async function openTweak(taskId){
 }
 
 /* ================= review ================= */
+
+/* ---- 规划阶段的待审核（制片） ---- */
+let SREVIEW = [];
+function summarize(d){
+  if (!d || typeof d !== "object") return "";
+  if (d.raw !== undefined) return `<div class="err">${esc(d.violation || "")}</div>`;
+  const parts = [];
+  for (const [k, v] of Object.entries(d)){
+    if (typeof v === "string") parts.push(`<div><b>${esc(k)}</b>: ${esc(v)}</div>`);
+    else if (Array.isArray(v) && v.length && typeof v[0] === "object")
+      parts.push(`<div><b>${esc(k)}</b> (${v.length})<ul>${v.map(x => {
+        const label = x.id || x.shot || x.name || "";
+        const txt = x.summary || x.look || x.frame || x.name || x.subtitle || "";
+        return `<li><b>${esc(label)}</b> ${esc(String(txt).slice(0, 160))}</li>`; }).join("")}</ul></div>`);
+    else if (v && typeof v === "object" && !Array.isArray(v))
+      parts.push(`<div><b>${esc(k)}</b>: ${esc(Object.entries(v).map(([a, b]) => `${a}: ${typeof b === "string" ? b : JSON.stringify(b)}`).join(" · "))}</div>`);
+  }
+  return parts.join("");
+}
+function renderStageReviews(){
+  const box = $("#review-stages");
+  box.innerHTML = SREVIEW.map((r, i) => {
+    const btn = (k, cls = "") => `<button class="btn ${cls}" data-i="${i}" data-act="${k}">${t("prod." + k)}</button>`;
+    const acts = r.state === "stale" ? btn("keep", "primary") + btn("redo")
+      : (r.state === "review" ? btn("approve", "primary") : "") + btn("edit") + btn("redo") + (r.state === "review" ? btn("reject", "danger") : "");
+    return `<div class="card sreview" style="margin-bottom:14px">
+      <h2>🎬 ${esc(r.production)} · ${esc(r.title)} <span class="badge ${ITONE[r.state] ?? ""}">${esc(t("is." + r.state))}</span>
+        <span class="hint">v${r.version} · ${fmtT(r.updated)}</span><span class="sp"></span>${acts}</h2>
+      ${r.state === "stale" ? `<div class="hint">${esc(t("na.stale", {s: r.title}))}</div>` : ""}
+      <div class="sum">${summarize(r.data)}</div>
+      <details><summary>JSON</summary><pre class="json">${esc(JSON.stringify(r.data, null, 2))}</pre></details></div>`;
+  }).join("");
+  box.querySelectorAll("[data-act]").forEach(b => b.onclick = async () => {
+    const r = SREVIEW[+b.dataset.i], k = b.dataset.act, url = `/api/productions/${encodeURIComponent(r.production_id)}/review`;
+    if (k === "edit"){
+      const cur = r.data && r.data.raw !== undefined ? r.data.raw : JSON.stringify(r.data, null, 2);
+      modal(`<h3>${esc(r.title)}</h3><textarea class="json" id="art-json">${esc(cur)}</textarea>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px"><button class="btn" onclick="closeModal()">${t("cancel")}</button>
+        <button class="btn primary" id="art-save">${t("prod.save")}</button></div>`);
+      $("#art-save").onclick = async () => { let data; try { data = JSON.parse($("#art-json").value); } catch(e){ toast(e.message, true); return; }
+        closeModal(); await act(url, {stage: r.stage, action: "approve", data, key: r.key}); };
+      return;
+    }
+    let note = null;
+    if (k === "redo"){ note = prompt(t("prod.note")); if (note === null) return; }
+    await act(url, {stage: r.stage, action: k, note, key: r.key});
+  });
+}
 function renderReview(){
   const box = $("#review");
-  if (!REVIEW.length){ box.innerHTML = `<div class="empty">${t("review.empty")}</div>`; return; }
+  if (!REVIEW.length){ box.innerHTML = SREVIEW.length ? "" : `<div class="empty">${t("review.empty")}</div>`; return; }
   reviewActive = Math.min(reviewActive, REVIEW.length - 1);
   const proj = Object.fromEntries(PROJECTS.map(p => [p.id, p.name]));
   box.innerHTML = REVIEW.map((it, i) => {
@@ -1127,6 +1178,9 @@ async function refreshAll(force){
     if (!selNode && GRAPH.length){ selNode = [...GRAPH].sort((a,b) => b.updated - a.updated)[0].id; renderDag(); }
     renderDetail();
   } else if (view === "review"){
+    try { SREVIEW = await api("/api/review/stages"); } catch { SREVIEW = []; }
+    const ks = LANG + SREVIEW.map(r => r.production_id + r.stage + r.version + r.state).join("|");
+    if (force || ks !== keys.rs){ keys.rs = ks; renderStageReviews(); }
     try { REVIEW = await api("/api/review"); } catch { return; }
     const k = LANG + REVIEW.map(r => r.id + r.tasks.map(x => x.updated).join()).join("|");
     if (force || k !== keys.r){ keys.r = k; renderReview(); }

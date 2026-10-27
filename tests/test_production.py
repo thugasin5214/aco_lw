@@ -319,3 +319,14 @@ def test_materialize_and_ffmpeg_command(tmp_path):
     out = tmp_path / "final.mp4"
     subprocess.run(build_command(tl, out, srt), check=True)
     assert abs(probe_seconds(out) - 3.0) < 0.2  # 1.5 + 2 − 0.5 转场重叠
+
+
+def test_pending_reviews_list_planning_stages(prod):
+    pr = prod.create("novel-to-film", "Lost cat", {"source": "..."})
+    assert prod.pending_reviews() == []  # 还在排队
+    run_skills(prod)
+    (r,) = prod.pending_reviews()
+    assert (r["production_id"], r["stage"], r["state"]) == (pr["id"], "adaptation", "review")
+    assert r["data"]["logline"] == ADAPT["logline"]
+    prod.review(pr["id"], "adaptation", "approve")
+    assert [x["stage"] for x in prod.pending_reviews()] == []
