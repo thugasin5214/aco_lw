@@ -352,6 +352,8 @@ G0 结论（详见 `docs/baseline.md`）：LLM 加载仅约 15 s；视频峰值�
 5. 这部片全英文（英式英语）。
 顺序：H3 skill + 英文 → FreeVideo 角色卡（马尔福用你的 7 张高清图）→ FreeVideo 电影执行端接镜头视频阶段 → comfyui-mcp 由编排器调度 → 关键帧双参考。
 
+- 2026-10-27 用户要求：FreeVideo 的批准开关 `ComfyUI/output/FreeVideo/.agent/confirm.json` 设为 `{"start": false, "reshoot_seconds": null}`（开拍、重拍不再在 FreeVideo 页面询问；我们的「开始」按钮与审核照旧）。
+
 ### 已定（用户 2026-10-27）
 1. skill 来源：内置 + 兼容 Claude Code SKILL.md 格式的外部 skill（`data/skills/`，按阶段映射）；不默认扫描 `~/.claude/skills`。
 2. 改编 / 分镜的 LLM：可配置（阶段级），默认本地 27B；本地被视频占用时按 `llm_fallback` 回退。

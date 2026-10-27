@@ -154,6 +154,7 @@ llm_fallback = ["anthropic", "claude_code", "codex"]  # 依次尝试
 - **工作流 `story-to-film`**：人物变成 **FreeVideo 角色卡**（最多 6 张标注图 + 声音；卡库里有同名卡就复用，否则用已通过的定妆图新建）。镜头由 **一部 FreeVideo 电影** 拍：每镜按 `video_candidates` 拍几条 take，以角色卡为参考；标了 *continue* 的镜头从你选中那条的末帧续拍。take 拍完以一轮候选出现在 **审阅** 里；选中会告诉 FreeVideo；*重做 / 带意见打回* 变成 FreeVideo 按你的意见重拍。续拍镜头至少 10 秒、质量只能 light / medium。暂停时选“立即停止”会取消没拍完的 take。
 - 提示词遵循 MiniMax 官方 **h3-prompt-writing** skill（装在 `data/skills/`）；FreeVideo 把每个镜头编成 H3 参考格式。
 - **ComfyUI 工具（artokun/comfyui-mcp，由我们的 daemon 启动）**：agent 可以查模型和节点、读与搭建 workflow、读模型族指南（`comfy_catalog`、`comfy`）。运行 workflow 走我们的队列（`run_comfy_workflow`，可追踪，受暂停与内存闸门）。装节点、下模型、训练要你批准（按钮）；重启 ComfyUI、删模型、动队列里别人的任务、释放显存、改 ComfyUI 设置、云端 / 付费节点一律拒绝。
+- **FreeVideo 的批准**：FreeVideo 可以要求开拍电影、长时间重拍前由你在它的页面上批准（ComfyUI → Extensions → FreeVideo → agent 对话）。设置是文件 `~/Documents/ChatGPT/jev/FreeVideo-local/ComfyUI/output/FreeVideo/.agent/confirm.json`（这个 FreeVideo 版本没有页面开关；默认 `{"start": true, "reshoot_seconds": 300}`）。**2026-10-27 按用户要求设为 `{"start": false, "reshoot_seconds": null}`**：开拍与重拍在 FreeVideo 里不再询问；我们自己的「开始」按钮和审核照常。要恢复：把 `start` 改回 `true`，和 / 或把 `reshoot_seconds` 设成秒数。FreeVideo 每次检查都会重读这个文件。
 
 ## 4. 资源与内存策略（自动执行）
 
