@@ -14,24 +14,9 @@ from pathlib import Path
 
 import httpx
 
-log = logging.getLogger("aco_lw.telegram")
+from .i18n import roles, tr
 
-HELP = """aco_lw 命令（不唤醒 LLM）：
-/status 系统与队列状态
-/rounds 最近几轮
-/round 模板 [数量] [prompt]  直接出一轮候选
-/review 重新推送待审阅的候选
-/redo 最近一轮待审阅的整轮重做
-/pause /resume 暂停 / 恢复出图
-/cancel 取消排队中的任务（含正在跑的本系统任务）
-/mode [on_demand|session|always|command_only] LLM 驻留模式
-/project 当前项目 · /projects 全部项目
-/project new 名称 · /project use 名称 · /project done
-/pack 当前基准包
-/session 会话列表 · /session new [标题] · /session use 序号
-/memory 项目记忆 · /memory add 文本 · /memory del 编号
-/whoami 显示 chat_id
-其它文字：新需求或批注，会唤醒 LLM 理解。"""
+log = logging.getLogger("aco_lw.telegram")
 
 
 class TelegramAPI:
@@ -138,11 +123,13 @@ class TelegramBot:
                 if not ok:
                     self.api.send(
                         chat,
-                        f"「{title}」这一轮全部失败，请看控制台。",
-                        [[("🎲 重做", f"r:{rnd['id']}")]],
+                        tr("round_failed", t=title),
+                        [[(tr("btn_redo"), f"r:{rnd['id']}")]],
                     )
                     continue
-                self.api.send(chat, f"「{title}」{len(ok)} 个候选待审阅", round_buttons(rnd, ok))
+                self.api.send(
+                    chat, tr("round_ready_tg", t=title, n=len(ok)), round_buttons(rnd, ok)
+                )
             except Exception as e:  # noqa: BLE001
                 log.warning("Telegram 发送候选失败：%s", e)
 
@@ -163,14 +150,14 @@ class TelegramBot:
                     log.exception("处理更新失败")
                     chat = _chat_of(u)
                     if chat in self.allowed:
-                        self.api.send(chat, f"出错了：{e}")
+                        self.api.send(chat, tr("error", e=e))
 
     def handle(self, u: dict) -> None:
         chat = _chat_of(u)
         if "message" in u:
             text = (u["message"].get("text") or "").strip()
             if text.startswith("/whoami"):
-                self.api.send(chat, f"你的 chat_id：{chat}")
+                self.api.send(chat, tr("whoami", id=chat))
                 return
             if chat not in self.allowed:
                 log.info("忽略非白名单 chat_id=%s 的消息", chat)
@@ -195,21 +182,14 @@ class TelegramBot:
 def round_buttons(rnd: dict, tasks: list[dict]) -> list[list[tuple[str, str]]]:
     rid = rnd["id"]
     return [
-        [(f"✅ 选{t['idx']}", f"s:{rid}:{t['idx']}") for t in tasks],
-        [(f"🔧 微调{t['idx']}", f"f:{rid}:{t['idx']}") for t in tasks],
-        [("🎲 整轮重做", f"r:{rid}"), ("↩️ 打回+批注", f"x:{rid}")],
+        [(tr("btn_select", i=t["idx"]), f"s:{rid}:{t['idx']}") for t in tasks],
+        [(tr("btn_refine", i=t["idx"]), f"f:{rid}:{t['idx']}") for t in tasks],
+        [(tr("btn_redo"), f"r:{rid}"), (tr("btn_reject"), f"x:{rid}")],
     ]
 
 
 def lock_buttons(task_id: str) -> list[list[tuple[str, str]]]:
-    return [
-        [
-            ("🔒 角色", f"l:{task_id}:角色"),
-            ("🔒 场景", f"l:{task_id}:场景"),
-            ("🔒 风格", f"l:{task_id}:风格"),
-        ],
-        [("不锁定", "noop")],
-    ]
+    return [[(f"🔒 {r}", f"l:{task_id}:{r}") for r in roles()], [(tr("btn_no_lock"), "noop")]]
 
 
 def _chat_of(u: dict) -> int | None:

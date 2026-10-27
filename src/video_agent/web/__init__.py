@@ -11,14 +11,15 @@ import time
 from pathlib import Path
 
 import httpx
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 
 from .. import llm
 from ..config import ROOT, Settings
 from ..memory import snapshot
 from ..planner import MODES
-from ..store import PROJECT_ZH, ROUND_ZH, STATE_ZH
+from ..render import TIER_KEYS
+from ..store import PROJECT_ZH, ROUND_ZH, STATE_ZH, TransitionError
 from ..studio import StudioError
 
 STATIC = Path(__file__).parent / "index.html"
@@ -84,7 +85,7 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
     def guard(fn):
         try:
             return fn()
-        except (StudioError, KeyError, ValueError) as e:
+        except (StudioError, KeyError, ValueError, TransitionError) as e:
             raise HTTPException(400, str(e)) from e
 
     # ---- 页面 ----
@@ -236,10 +237,13 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
         p = store.get_project(project_id)
         if p is None:
             raise HTTPException(404)
+        cur = studio.current_session(project_id) if p["state"] == "active" else None
         return {
             **p,
             "packs": store.pack_history(project_id),
-            "messages": store.messages(project_id),
+            "sessions": store.sessions(project_id),
+            "current_session": cur and cur["id"],
+            "memories": store.memories(project_id),
             "rounds": [
                 {**r, "tasks": [slim(t) for t in store.round_tasks(r["id"])]}
                 for r in store.rounds(project_id)
@@ -319,16 +323,127 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
             guard(lambda: studio.lock(task_id, role))
         return r
 
+    @app.post("/api/rounds/{round_id}/reopen")
+    def reopen_round(round_id: str) -> dict:
+        out, reply = collect()
+        guard(lambda: actions.reopen(round_id, "web", actions._say("web", reply)))
+        return {"messages": out}
+
+    @app.post("/api/tasks/{task_id}/reopen")
+    def reopen_task(task_id: str) -> dict:
+        t = store.get(task_id)
+        if t and t["round_id"]:
+            return reopen_round(t["round_id"])
+        return guard(lambda: studio.reopen_task(task_id, origin="web"))
+
     @app.post("/api/tasks/{task_id}/redo")
     def redo_task(task_id: str) -> dict:
         return guard(lambda: studio.redo_task(task_id, origin="web"))
 
     # ---- 控制台对话（与 Telegram 同一套命令 / 自由文本） ----
     @app.post("/api/chat")
-    def chat(text: str = Body(..., embed=True)) -> dict:
+    def chat(text: str = Body(...), attachments: list[str] = Body(default_factory=list)) -> dict:  # noqa: B008 — FastAPI 请求体声明
         out, reply = collect()
-        guard(lambda: actions.inbound("web", text.strip(), reply))
+        atts = []
+        for uid in attachments:
+            up = store.get_upload(uid)
+            if up:
+                atts.append({"id": up["id"], "name": up["name"]})
+        guard(lambda: actions.inbound("web", text.strip(), reply, atts or None))
         return {"messages": out}
+
+    @app.post("/api/action")
+    def action(data: str = Body(..., embed=True)) -> dict:
+        """控制台对话里的按钮（与 Telegram callback_data 相同格式）。"""
+        out, reply = collect()
+        guard(lambda: actions.button("web", data, reply))
+        return {"messages": out}
+
+    # ---- 会话 ----
+    @app.get("/api/sessions/{session_id}/messages")
+    def session_messages(session_id: str, after: int = 0) -> list[dict]:
+        return store.session_messages(session_id, after)
+
+    @app.post("/api/sessions")
+    def new_session(title: str | None = Body(None, embed=True)) -> dict:
+        return guard(lambda: studio.new_session(title))
+
+    @app.post("/api/sessions/{session_id}/use")
+    def use_session(session_id: str) -> dict:
+        s = store.get_session(session_id)
+        if s is None:
+            raise HTTPException(404)
+        guard(lambda: studio.use_project(s["project_id"]))
+        return guard(lambda: studio.use_session(session_id, s["project_id"]))
+
+    @app.post("/api/sessions/{session_id}/rename")
+    def rename_session(session_id: str, title: str = Body(..., embed=True)) -> dict:
+        return store.update_session(session_id, title=title.strip())
+
+    @app.get("/api/sessions/{session_id}/context")
+    def session_context(session_id: str) -> dict:
+        """下一次调用 LLM 时会发送的完整上下文（最后一条为预览占位）。"""
+        s = store.get_session(session_id)
+        if s is None:
+            raise HTTPException(404)
+        msgs = actions.planner.build("（下一条消息）", s["project_id"], session_id, None)
+        chars = sum(len(m["content"]) for m in msgs)
+        return {
+            "messages": msgs,
+            "chars": chars,
+            "summary_upto": s["summary_upto"],
+            "rules_file": "prompts/planner_rules.md",
+        }
+
+    # ---- 项目记忆 ----
+    @app.post("/api/memories")
+    def add_memory(text: str = Body(..., embed=True)) -> dict:
+        return guard(lambda: studio.add_memory(text))
+
+    @app.post("/api/memories/{memory_id}/{op}")
+    def memory_op(memory_id: int, op: str, text: str | None = Body(None, embed=True)) -> dict:
+        return guard(lambda: studio.set_memory(memory_id, op, text))
+
+    # ---- 上传参考图（请求体即文件内容，避免额外依赖） ----
+    @app.post("/api/upload")
+    async def upload(request: Request, name: str) -> dict:
+        data = await request.body()
+        if len(data) > 50 * 2**20:
+            raise HTTPException(413, "文件超过 50 MB")
+        up = guard(lambda: studio.save_upload(name, data))
+        return {"id": up["id"], "name": up["name"], "kind": up["kind"]}
+
+    @app.get("/uploads/{upload_id}")
+    def upload_file(upload_id: str) -> FileResponse:
+        up = store.get_upload(upload_id)
+        if up is None:
+            raise HTTPException(404)
+        return _safe_file(store.jobs_dir.parent / "uploads", Path(up["path"]))
+
+    # ---- 手动微调（W1） ----
+    @app.get("/api/templates/{name}")
+    def template_info(name: str) -> dict:
+        t = guard(lambda: registry.template(name))
+        return {
+            "name": t.name,
+            "title": t.title,
+            "kind": t.kind,
+            "slots": {k: v.model_dump() for k, v in t.slots.items() if k not in TIER_KEYS},
+            "tiers": {k: {**v.values(), "verified": v.verified} for k, v in t.tiers.items()},
+        }
+
+    @app.post("/api/tasks/{task_id}/tweak")
+    def tweak(
+        task_id: str,
+        params: dict = Body(...),  # noqa: B008 — FastAPI 请求体声明
+        tier: str | None = Body(None),
+        n: int = Body(1),
+    ) -> dict:
+        return guard(lambda: studio.tweak(task_id, params, tier, n))
+
+    @app.get("/api/settings")
+    def settings() -> dict:
+        return {"language": cfg.language}
 
     @app.get("/api/messages")
     def messages(project: str | None = None, after: int = 0) -> list[dict]:

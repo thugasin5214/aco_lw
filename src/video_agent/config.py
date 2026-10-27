@@ -29,6 +29,7 @@ class Settings:
     memory_wait_s: float = 600.0
     poll_interval_s: float = 2.0
     task_timeout_s: float = 5400.0
+    language: str = "en"  # 控制台 / 系统消息默认语言：en | zh
     web_port: int = 8790  # 8765 是用户另一个 server
     round_size: int = 4
     telegram_token: str = ""

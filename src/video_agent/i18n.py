@@ -1,0 +1,286 @@
+"""服务端文字的双语目录（I2）。默认英文；`config.language` 设为 zh 则输出中文。
+
+只覆盖用户能看到的文字（对话回复、系统通知、Telegram 帮助与按钮）。日志与代码注释不翻译。
+写入对话历史的是当时的语言，切换语言不会改写历史。
+"""
+
+from __future__ import annotations
+
+_LANG = "en"
+
+M: dict[str, tuple[str, str]] = {
+    # 通用
+    "ack": ("Got it — thinking…", "收到，正在理解……"),
+    "llm_queued_video": (
+        "A video is rendering and holding memory; the LLM will reply right after it finishes.",
+        "视频生成占着内存，LLM 先排队，生成结束后马上处理。",
+    ),
+    "cannot": ("Couldn't do that: {e}", "没能处理：{e}"),
+    "planner_error": ("Planner error: {e}", "规划器出错：{e}"),
+    "not_done": ("Not done: {e}", "操作没有执行：{e}"),
+    "unknown_button": ("Unknown button {d}", "未知按钮 {d}"),
+    "unknown_cmd": (
+        "Unknown command. /help lists all commands.",
+        "不认识这个命令。/help 查看全部命令。",
+    ),
+    "command_only": (
+        "Command-only mode: text won't wake the LLM. Use /round, or /mode on_demand.",
+        "当前是纯命令模式，文字不会唤醒 LLM。用 /round 直接出图，或 /mode on_demand。",
+    ),
+    "invalid_params": ("Invalid parameters: {e}", "参数无效：{e}"),
+    # 规划结果
+    "queued_round": (
+        "Queued: {n} candidate(s) ({tpl} / {tier})",
+        "已排队：{n} 个候选（{tpl} / {tier}）",
+    ),
+    "queued_new_round": ("Queued a new round: {n} candidate(s)", "已排队新一轮：{n} 个候选"),
+    "queued_refine": (
+        "Queued a new round: {n} candidate(s) (keeping #{idx}'s seed)",
+        "已排队新一轮：{n} 个候选（保留 #{idx} 的种子）",
+    ),
+    "locked_as": ("Locked as “{r}”", "已锁定为「{r}」"),
+    "ask_lock": ("Lock it into the baseline pack?", "要锁进基准包吗？"),
+    "selected_ask_lock": (
+        "Selected #{idx}. Lock it into the baseline pack?",
+        "已选中 #{idx}。要锁进基准包吗？",
+    ),
+    "pack_locked": (
+        "Baseline pack v{v}: locked “{r}”. Reference it later as @pack:{r}.",
+        "基准包 v{v}：已锁定「{r}」。之后可用 @pack:{r} 引用。",
+    ),
+    "refine_ack": (
+        "Tweak #{idx}: {note}. Translating the note into parameters…",
+        "收到微调 #{idx}：{note}。正在把批注翻译成参数……",
+    ),
+    "reject_ack": ("Rejected. Adjusting per your note: {note}", "已打回。正在按批注调整：{note}"),
+    "ask_refine_note": (
+        "Send one line describing the tweak for #{idx} (e.g. softer eyes, side light)",
+        "请发一句对 #{idx} 的微调说明（例如：眼神更忧伤，光打侧面）",
+    ),
+    "ask_reject_note": (
+        "Send one line: why rejected / what to change",
+        "请发一句打回原因 / 改进方向",
+    ),
+    "redo_queued": ("Redo: queued {n} new candidate(s)", "整轮重做：已排队 {n} 个新候选"),
+    # 记忆
+    "mem_offer": (
+        "💡 Save this to the project memory?\n“{t}”",
+        "💡 要把这条记进项目记忆吗？\n「{t}」",
+    ),
+    "mem_remember": ("✅ Remember", "✅ 记住"),
+    "mem_ignore": ("Ignore", "忽略"),
+    "mem_accepted": ("Remembered: {t}", "已记住：{t}"),
+    "mem_ignored": ("Ignored: {t}", "已忽略：{t}"),
+    "mem_added": ("Remembered (#{id}): {t}", "已记住（#{id}）：{t}"),
+    "mem_archived": ("Archived #{id}: {t}", "已归档 #{id}：{t}"),
+    "mem_list": (
+        "Project memory:\n{items}{pending}\n/memory add TEXT · /memory del ID",
+        "项目记忆：\n{items}{pending}\n/memory add 文本 · /memory del 编号",
+    ),
+    "mem_pending": (
+        "\n{n} proposal(s) awaiting confirmation (see Projects & Chat)",
+        "\n待确认 {n} 条（控制台“项目与对话”里处理）",
+    ),
+    "empty": ("(empty)", "（空）"),
+    # 命令
+    "paused": (
+        "Paused: the running task finishes, queued ones won't start. /resume to continue.",
+        "已暂停：正在跑的任务会跑完，排队的不再开始。/resume 恢复。",
+    ),
+    "resumed": ("Resumed.", "已恢复出图。"),
+    "cancelled": ("Cancelled {n} queued task(s){x}", "已取消 {n} 个排队任务{x}"),
+    "cancelled_running": (" and interrupted the running one", "，并中断了正在跑的本系统任务"),
+    "mode_now": ("Current mode: {m}\nOptions: {opts}", "当前模式：{m}\n可选：{opts}"),
+    "mode_set": ("Switched to: {m}", "已切换到：{m}"),
+    "no_projects": ("No projects yet", "还没有项目"),
+    "project_now": ("Current project: {n} ({s})", "当前项目：{n}（{s}）"),
+    "project_new": ("Created and switched to “{n}”", "已新建并切换到「{n}」"),
+    "project_use": ("Switched to “{n}”", "已切换到「{n}」"),
+    "project_done": (
+        "Project “{n}” marked complete; history is kept.",
+        "项目「{n}」已标记完成，历史永久保留。",
+    ),
+    "project_usage": (
+        "Usage: /project [new NAME | use NAME | done]",
+        "用法：/project [new 名称 | use 名称 | done]",
+    ),
+    "session_new": (
+        "New session “{t}”. Project memory carries over; earlier chat doesn't.",
+        "已新开会话「{t}」。项目记忆会带过来，之前的对话不会。",
+    ),
+    "session_use": ("Switched to session “{t}”", "已切换到会话「{t}」"),
+    "session_list": (
+        "Sessions (1 = most recent):\n{rows}\n/session new [TITLE] · /session use N",
+        "会话（1 = 最近活跃）：\n{rows}\n/session new [标题] · /session use 序号",
+    ),
+    "session_row": ("{i}. {t} · {n} msgs{cur}", "{i}. {t} · {n} 条{cur}"),
+    "current_mark": (" ← current", " ← 当前"),
+    "no_pack": (
+        "No baseline pack yet. Approve a candidate and lock it.",
+        "当前项目还没有基准包。选中候选后可锁定。",
+    ),
+    "pack_info": ("Baseline pack v{v}: {items}", "基准包 v{v}：{items}"),
+    "no_rounds": ("No rounds in this project yet", "当前项目还没有轮次"),
+    "no_review": ("Nothing to review", "没有待审阅的轮次"),
+    "review_no_tg": (
+        "{n} round(s) to review; Telegram isn't configured — use the console #review page.",
+        "有 {n} 轮待审阅；未配置 Telegram，请在控制台 #review 页审阅。",
+    ),
+    "review_pushed": ("Re-sent {n} round(s) for review.", "已重新推送 {n} 轮待审阅候选。"),
+    "round_usage": (
+        "Usage: /round TEMPLATE [COUNT] [prompt]; templates: {t}",
+        "用法：/round 模板 [数量] [prompt]；模板：{t}",
+    ),
+    "status": (
+        "Project: {p}\nRendering: {r}{paused}, queued {q}\nMemory: {m} GiB free, pressure {pr}\nLLM: {llm}",
+        "项目：{p}\n出图：{r}{paused}，排队 {q}\n内存：可用 {m} GiB，压力 {pr}\nLLM：{llm}",
+    ),
+    "status_running": ("running {t}", "正在跑 {t}"),
+    "status_idle": ("idle", "空闲"),
+    "status_paused": (" (paused)", "（已暂停）"),
+    # 通知
+    "round_ready": (
+        "“{t}”: {ok}/{n} candidate(s) ready for review",
+        "「{t}」{ok}/{n} 个候选待审阅",
+    ),
+    "round_failed": (
+        "“{t}”: every candidate failed — see the console.",
+        "「{t}」这一轮全部失败，请看控制台。",
+    ),
+    "round_ready_tg": ("“{t}”: {n} candidate(s) to review", "「{t}」{n} 个候选待审阅"),
+    "whoami": ("Your chat_id: {id}", "你的 chat_id：{id}"),
+    "error": ("Something went wrong: {e}", "出错了：{e}"),
+    # 按钮
+    "btn_select": ("✅ Pick {i}", "✅ 选{i}"),
+    "btn_refine": ("🔧 Tweak {i}", "🔧 微调{i}"),
+    "btn_redo": ("🎲 Redo round", "🎲 整轮重做"),
+    "btn_reject": ("↩️ Reject + note", "↩️ 打回+批注"),
+    "btn_no_lock": ("Don't lock", "不锁定"),
+    "roles": ("character,scene,style", "角色,场景,风格"),
+    # Studio 记录
+    "log_select": ("Selected #{idx}{lock}", "选中 #{idx}{lock}"),
+    "log_lock_suffix": (", locked as “{r}”", "，锁定为「{r}」"),
+    "log_redo": ("Redo whole round (new seeds)", "整轮重做（换种子）"),
+    "log_refine": ("Tweak #{idx}: {note}", "微调 #{idx}：{note}"),
+    "log_reject": ("Rejected: {note}", "打回：{note}"),
+    "log_no_note": ("(no note)", "（无批注）"),
+    "log_tweak": ("Manual tweak of {id}: {changed}", "手动微调 {id}：{changed}"),
+    "log_no_change": ("no parameter changes", "无参数改动"),
+    "log_pack": ("Baseline pack v{v}: locked “{r}”", "基准包 v{v}：锁定「{r}」"),
+    "log_project_new": ("Created and switched to project “{n}”", "新建并切换到项目「{n}」"),
+    "log_project_done": ("Project “{n}” marked complete", "项目「{n}」已标记完成"),
+    "log_summary": (
+        "Long session: folded {n} earlier exchange(s) into the summary",
+        "会话较长，已把 {n} 轮较早往来压缩进摘要",
+    ),
+    "log_reopen": ("Reopened for review", "重新审阅"),
+    "log_reopen_round": (
+        "Changed decision: “{t}” is back to review",
+        "更改审阅结果：「{t}」回到待审阅",
+    ),
+    "log_unlock": ("Undo lock of “{r}” (decision changed)", "撤销锁定「{r}」（审阅结果已更改）"),
+    "err_not_reopenable": (
+        "Only decided rounds/tasks (approved, rejected, redo, tweak) can be reopened.",
+        "只有已决定（通过 / 打回 / 重做 / 微调）的轮次或任务可以重新审阅。",
+    ),
+    "reopened": ("Back to review: “{t}”.{c}", "已回到待审阅：「{t}」。{c}"),
+    "reopen_children": (
+        " {n} round(s) spawned by the old decision are still running — /cancel if not needed.",
+        "旧决定派生的 {n} 轮仍在生成，不需要可 /cancel。",
+    ),
+    "history_session": ("History", "历史会话"),
+    "session_n": ("Session {n}", "会话 {n}"),
+    "default_project": ("Default project", "默认项目"),
+}
+
+HELP = (
+    """aco_lw commands (no LLM needed):
+/status system and queue status
+/rounds recent rounds
+/round TEMPLATE [COUNT] [prompt]  queue a round directly
+/review re-send rounds waiting for review
+/redo redo the latest round under review
+/reopen [ROUND_ID] change the decision of the latest (or given) decided round
+/pause /resume pause / resume rendering
+/cancel cancel queued tasks (and interrupt our running one)
+/mode [on_demand|session|always|command_only] LLM residency
+/project · /projects · /project new NAME · /project use NAME · /project done
+/session · /session new [TITLE] · /session use N
+/memory · /memory add TEXT · /memory del ID
+/pack current baseline pack
+/whoami show your chat_id
+Anything else: a request or note — wakes the LLM.""",
+    """aco_lw 命令（不唤醒 LLM）：
+/status 系统与队列状态
+/rounds 最近几轮
+/round 模板 [数量] [prompt]  直接出一轮候选
+/review 重新推送待审阅的候选
+/redo 最近一轮待审阅的整轮重做
+/reopen [轮ID] 更改最近一轮（或指定轮）的审阅结果
+/pause /resume 暂停 / 恢复出图
+/cancel 取消排队中的任务（含正在跑的本系统任务）
+/mode [on_demand|session|always|command_only] LLM 驻留模式
+/project · /projects · /project new 名称 · /project use 名称 · /project done
+/session · /session new [标题] · /session use 序号
+/memory · /memory add 文本 · /memory del 编号
+/pack 当前基准包
+/whoami 显示 chat_id
+其它文字：新需求或批注，会唤醒 LLM 理解。""",
+)
+
+STATE = {
+    "draft": ("queued", "排队"),
+    "validated": ("validated", "已校验"),
+    "waiting_memory": ("waiting memory", "等待内存"),
+    "submitted": ("submitted", "已提交"),
+    "running": ("running", "生成中"),
+    "review": ("to review", "待审阅"),
+    "done": ("done", "完成"),
+    "rejected": ("rejected", "打回"),
+    "failed": ("failed", "失败"),
+    "timeout": ("timed out", "超时"),
+    "generating": ("generating", "生成中"),
+    "closed": ("decided", "已决定"),
+    "active": ("active", "进行中"),
+    "archived": ("archived", "已归档"),
+}
+
+MODE = {
+    "on_demand": ("on demand (auto-unload when idle)", "按需唤醒（空闲自动卸载）"),
+    "session": ("session-resident (until switched back)", "会话常驻（直到切回按需）"),
+    "always": ("always resident", "始终常驻"),
+    "command_only": ("command-only (never wakes the LLM)", "纯命令（不唤醒 LLM）"),
+}
+
+
+def set_language(lang: str) -> None:
+    global _LANG
+    _LANG = "zh" if str(lang).lower().startswith("zh") else "en"
+
+
+def language() -> str:
+    return _LANG
+
+
+def _pick(pair: tuple[str, str]) -> str:
+    return pair[1] if _LANG == "zh" else pair[0]
+
+
+def tr(key: str, **kw) -> str:
+    return _pick(M[key]).format(**kw)
+
+
+def help_text() -> str:
+    return _pick(HELP)
+
+
+def state(s: str) -> str:
+    return _pick(STATE[s]) if s in STATE else s
+
+
+def mode(m: str) -> str:
+    return _pick(MODE[m]) if m in MODE else m
+
+
+def roles() -> list[str]:
+    return tr("roles").split(",")

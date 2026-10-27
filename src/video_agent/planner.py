@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from . import llm
 from .backends import ChatResult, FuncBackend, LMStudioBackend, OpenAICompatBackend
 from .config import ROOT, Settings
+from .i18n import tr
 from .registry import Registry
 from .render import TIER_KEYS, ParamError, resolve
 from .store import ROUND_ZH, Store
@@ -394,7 +395,7 @@ class Planner:
         self.store.log_message(
             "system",
             "out",
-            f"会话较长，已把 {len(old)} 条较早消息压缩进摘要",
+            tr("log_summary", n=len(old)),
             session["project_id"],
             session_id=session_id,
         )

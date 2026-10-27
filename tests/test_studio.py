@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from video_agent.daemon import Actions, Worker
+from video_agent.i18n import tr
 from video_agent.planner import Planner
 from video_agent.render import ParamError
 from video_agent.studio import Studio, StudioError
@@ -193,7 +194,7 @@ def test_actions_buttons_and_notes(studio):
     assert studio.store.get_kv("paused") is True
     actions.inbound("telegram", "/mode command_only", reply)
     actions.inbound("telegram", "随便说一句", reply)
-    assert "纯命令模式" in out[-1][0]
+    assert tr("command_only") in out[-1][0]
     hist = studio.store.messages(studio.current_project()["id"])
     assert {m["direction"] for m in hist} == {"in", "out"}
 

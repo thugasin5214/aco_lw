@@ -28,7 +28,7 @@ STATES = [
     "failed",
     "timeout",
 ]
-TERMINAL = {"done", "rejected", "failed", "timeout"}
+TERMINAL = {"done", "rejected", "failed", "timeout"}  # done / rejected 可经 reopen 回到待审阅
 ACTIVE = {"submitted", "running"}
 TRANSITIONS = {
     "draft": {"validated", "failed"},
@@ -37,6 +37,8 @@ TRANSITIONS = {
     "submitted": {"running", "review", "failed", "timeout"},
     "running": {"review", "failed", "timeout"},
     "review": {"done", "rejected"},
+    "done": {"review"},  # 审阅结果可更改：重新打开
+    "rejected": {"review"},
     "timeout": {"review", "failed"},  # 超时只是停止观察；恢复时可能发现已完成
 }
 STATE_ZH = {

@@ -14,12 +14,12 @@ import threading
 import time
 from collections.abc import Callable
 
-from . import config, memory
+from . import config, i18n, memory
 from .comfy import ComfyBusy
+from .i18n import tr
 from .planner import MODES, Planner, PlannerUnavailable
 from .render import ParamError
 from .scheduler import Orchestrator, SchedulerBusy
-from .store import PROJECT_ZH, ROUND_ZH
 from .studio import Studio, StudioError
 from .telegram import TelegramAPI, TelegramBot, lock_buttons
 
@@ -114,20 +114,21 @@ class Actions:
             warned = False
             while self.worker and self.worker.busy_kind == "video" and not stop.is_set():
                 if not warned:
-                    reply("视频生成占着内存，LLM 先排队，生成结束后马上处理。")
+                    reply(tr("llm_queued_video"))
                     warned = True
                 stop.wait(3)
             try:
                 job()
             except (ParamError, StudioError, PlannerUnavailable, ValueError, KeyError) as e:
-                reply(f"没能处理：{e}")
+                reply(tr("cannot", e=e))
             except Exception as e:
                 log.exception("规划任务失败")
-                reply(f"规划器出错：{e}")
+                reply(tr("planner_error", e=e))
 
     def _say(self, channel: str, reply: Reply) -> Reply:
         def say(text: str, buttons=None) -> None:
-            self.studio.log(channel, "out", text)
+            meta = {"buttons": buttons} if buttons else {}
+            self.studio.log(channel, "out", text, **meta)  # 按钮也存下，控制台对话里可点
             reply(text, buttons)
 
         return say
@@ -160,8 +161,13 @@ class Actions:
     def _offer_memories(self, texts: list[str], source: dict, say: Reply) -> None:
         for m in self.studio.propose_memories(texts, source):
             say(
-                f"💡 要把这条记进项目记忆吗？\n「{m['text']}」",
-                [[("✅ 记住", f"m:{m['id']}:accept"), ("忽略", f"m:{m['id']}:ignore")]],
+                tr("mem_offer", t=m["text"]),
+                [
+                    [
+                        (tr("mem_remember"), f"m:{m['id']}:accept"),
+                        (tr("mem_ignore"), f"m:{m['id']}:ignore"),
+                    ]
+                ],
             )
 
     def request(
@@ -173,9 +179,9 @@ class Actions:
         attachments: list[dict] | None = None,
     ) -> None:
         if not self.planner.available():
-            say("当前是纯命令模式，文字不会唤醒 LLM。用 /round 直接出图，或 /mode on_demand。")
+            say(tr("command_only"))
             return
-        say("收到，正在理解……")
+        say(tr("ack"))
         pid, sid = self._ctx()
 
         def job() -> None:
@@ -184,9 +190,9 @@ class Actions:
             ref = plan.round_ref and self.store.get_round(plan.round_ref)
             if plan.action == "select" and ref:
                 rnd = self.studio.select(ref["id"], plan.pick or 1, role=plan.role, origin=channel)
-                say(plan.reply + (f"\n已锁定为「{plan.role}」" if plan.role else ""))
+                say(plan.reply + ("\n" + tr("locked_as", r=plan.role) if plan.role else ""))
                 if not plan.role:
-                    say("要锁进基准包吗？", lock_buttons(rnd["decision"]["task_id"]))
+                    say(tr("ask_lock"), lock_buttons(rnd["decision"]["task_id"]))
                 return
             if plan.action != "round":
                 say(plan.reply)
@@ -210,14 +216,17 @@ class Actions:
                 # 图片档位风险低，允许未实测档位；视频必须用已实测档位（内存）
                 allow_unverified=kind == "image",
             )
-            say(f"{plan.reply}\n已排队：{rnd['n']} 个候选（{rnd['template']} / {rnd['tier']}）")
+            say(
+                f"{plan.reply}\n"
+                + tr("queued_round", n=rnd["n"], tpl=rnd["template"], tier=rnd["tier"])
+            )
 
         self.jobs.put((job, say))
 
     def refine_note(
         self, round_id: str, idx, note: str, channel: str, say: Reply, msg_id: int | None = None
     ) -> None:
-        say(f"收到微调 #{idx}：{note}。正在把批注翻译成参数……")
+        say(tr("refine_ack", idx=idx, note=note))
         rnd = self.store.get_round(round_id)
         task = next(t for t in self.store.round_tasks(round_id) if str(t["idx"]) == str(idx))
         _, sid = self._ctx()
@@ -227,7 +236,7 @@ class Actions:
                 rnd["template"], task["params"], note, rnd["project_id"], sid, msg_id
             )
             new = self.studio.refine(round_id, idx, delta, note, origin=channel)
-            say(f"{why}\n已排队新一轮：{new['n']} 个候选（保留 #{idx} 的种子）")
+            say(f"{why}\n" + tr("queued_refine", n=new["n"], idx=idx))
             self._offer_memories(mems, {"round": round_id, "message": msg_id}, say)
 
         self.jobs.put((job, say))
@@ -236,7 +245,7 @@ class Actions:
         self, round_id: str, note: str, channel: str, say: Reply, msg_id: int | None = None
     ) -> None:
         rnd = self.studio.reject(round_id, note, origin=channel)
-        say(f"已打回。正在按批注调整：{note}")
+        say(tr("reject_ack", note=note))
         _, sid = self._ctx()
 
         def job() -> None:
@@ -255,10 +264,18 @@ class Actions:
                 project_id=rnd["project_id"],
                 allow_unverified=True,
             )
-            say(f"{why}\n已排队新一轮：{new['n']} 个候选")
+            say(f"{why}\n" + tr("queued_new_round", n=new["n"]))
             self._offer_memories(mems, {"round": round_id, "message": msg_id}, say)
 
         self.jobs.put((job, say))
+
+    def reopen(self, round_id: str, channel: str, say: Reply) -> None:
+        """更改审阅结果：轮回到待审阅，并重新推送候选。"""
+        rnd, running = self.studio.reopen(round_id, origin=channel)
+        extra = tr("reopen_children", n=running) if running else ""
+        say(tr("reopened", t=rnd["title"] or rnd["template"], c=extra))
+        if channel == "telegram" and self.push_round:
+            self.push_round(rnd)
 
     def prewarm_current(self) -> None:
         """LLM 被视频卸载后重新加载：后台预热当前会话的前缀缓存。"""
@@ -275,39 +292,42 @@ class Actions:
                 rid, idx = rest.split(":")
                 rnd = self.studio.select(rid, idx, origin=channel)
                 task_id = rnd["decision"]["task_id"]
-                say(f"已选中 #{idx}。要锁进基准包吗？", lock_buttons(task_id))
+                say(tr("selected_ask_lock", idx=idx), lock_buttons(task_id))
                 return True
             if kind == "l":
                 task_id, role = rest.split(":")
                 pack = self.studio.lock(task_id, role)
-                say(f"基准包 v{pack['version']}：已锁定「{role}」。之后可用 @pack:{role} 引用。")
+                say(tr("pack_locked", v=pack["version"], r=role))
                 return True
             if kind == "f":
                 rid, idx = rest.split(":")
                 self.store.set_kv(
                     f"pending:{channel}", {"action": "refine", "round": rid, "idx": idx}
                 )
-                say(f"请发一句对 #{idx} 的微调说明（例如：眼神更忧伤，光打侧面）")
+                say(tr("ask_refine_note", idx=idx))
                 return False
             if kind == "x":
                 self.store.set_kv(f"pending:{channel}", {"action": "reject", "round": rest})
-                say("请发一句打回原因 / 改进方向")
+                say(tr("ask_reject_note"))
                 return False
             if kind == "r":
                 new = self.studio.redo(rest, origin=channel)
-                say(f"整轮重做：已排队 {new['n']} 个新候选")
+                say(tr("redo_queued", n=new["n"]))
+                return True
+            if kind == "o":
+                self.reopen(rest, channel, say)
                 return True
             if kind == "m":
                 mid, act = rest.split(":")
                 m = self.studio.set_memory(int(mid), act)
-                say(("已记住：" if act == "accept" else "已忽略：") + m["text"])
+                say(tr("mem_accepted" if act == "accept" else "mem_ignored", t=m["text"]))
                 return True
             if kind == "noop":
                 return True
         except StudioError as e:
-            say(f"操作没有执行：{e}")
+            say(tr("not_done", e=e))
             return True
-        say(f"未知按钮 {data}")
+        say(tr("unknown_button", d=data))
         return False
 
     # ---- 命令 ----
@@ -316,17 +336,15 @@ class Actions:
         cmd = cmd.split("@")[0].lower()
         s, store = self.studio, self.store
         if cmd in ("/help", "/start"):
-            from .telegram import HELP
-
-            say(HELP)
+            say(i18n.help_text())
         elif cmd == "/status":
             say(self.status_text())
         elif cmd == "/pause":
             store.set_kv("paused", True)
-            say("已暂停：正在跑的任务会跑完，排队的不再开始。/resume 恢复。")
+            say(tr("paused"))
         elif cmd == "/resume":
             store.set_kv("paused", False)
-            say("已恢复出图。")
+            say(tr("resumed"))
         elif cmd == "/cancel":
             n = s.cancel_queued(s.current_project()["id"])
             cur = self.worker and self.worker.current
@@ -337,116 +355,110 @@ class Actions:
                         s.orch.comfy.interrupt(t["prompt_id"])
                     except (ComfyBusy, OSError):
                         pass
-            say(f"已取消 {n} 个排队任务" + ("，并中断了正在跑的本系统任务" if cur else ""))
+            say(tr("cancelled", n=n, x=tr("cancelled_running") if cur else ""))
         elif cmd == "/mode":
             if not args:
-                say(
-                    "当前模式："
-                    + MODES[self.planner.mode]
-                    + "\n可选："
-                    + "，".join(f"{k}（{v}）" for k, v in MODES.items())
-                )
+                opts = ", ".join(f"{k} ({i18n.mode(k)})" for k in MODES)
+                say(tr("mode_now", m=i18n.mode(self.planner.mode), opts=opts))
             else:
                 self.planner.set_mode(args[0])
-                say("已切换到：" + MODES[args[0]])
+                say(tr("mode_set", m=i18n.mode(args[0])))
         elif cmd == "/projects":
-            say(
-                "\n".join(f"{PROJECT_ZH[p['state']]} · {p['name']}" for p in store.list_projects())
-                or "还没有项目"
-            )
+            rows = [f"{i18n.state(p['state'])} · {p['name']}" for p in store.list_projects()]
+            say("\n".join(rows) or tr("no_projects"))
         elif cmd == "/project":
             if not args:
                 p = s.current_project()
-                say(f"当前项目：{p['name']}（{PROJECT_ZH[p['state']]}）")
+                say(tr("project_now", n=p["name"], s=i18n.state(p["state"])))
             elif args[0] == "new" and len(args) > 1:
-                say(f"已新建并切换到「{s.new_project(' '.join(args[1:]))['name']}」")
+                say(tr("project_new", n=s.new_project(" ".join(args[1:]))["name"]))
             elif args[0] == "use" and len(args) > 1:
-                say(f"已切换到「{s.use_project(' '.join(args[1:]))['name']}」")
+                say(tr("project_use", n=s.use_project(" ".join(args[1:]))["name"]))
             elif args[0] == "done":
-                say(f"项目「{s.finish_project()['name']}」已标记完成，历史永久保留。")
+                say(tr("project_done", n=s.finish_project()["name"]))
             else:
-                say("用法：/project [new 名称 | use 名称 | done]")
+                say(tr("project_usage"))
         elif cmd == "/session":
             sub = args[0] if args else ""
             if sub == "new":
-                ns = s.new_session(" ".join(args[1:]) or None)
-                say(f"已新开会话「{ns['title']}」。项目记忆会带过来，之前的对话不会。")
+                say(tr("session_new", t=s.new_session(" ".join(args[1:]) or None)["title"]))
             elif sub == "use" and len(args) > 1:
-                us = s.use_session(args[1])
-                say(f"已切换到会话「{us['title']}」（{us.get('n_messages', '')}）")
+                say(tr("session_use", t=s.use_session(args[1])["title"]))
             else:
                 cur = s.current_session()
                 rows = store.sessions(s.current_project()["id"])
-                say(
-                    "会话（1 = 最近活跃）：\n"
-                    + "\n".join(
-                        f"{i}. {r['title']} · {r['n_messages']} 条"
-                        + (" ← 当前" if r["id"] == cur["id"] else "")
-                        for i, r in enumerate(rows, 1)
+                lines = "\n".join(
+                    tr(
+                        "session_row",
+                        i=i,
+                        t=r["title"],
+                        n=r["n_messages"],
+                        cur=tr("current_mark") if r["id"] == cur["id"] else "",
                     )
-                    + "\n/session new [标题] · /session use 序号"
+                    for i, r in enumerate(rows, 1)
                 )
+                say(tr("session_list", rows=lines))
         elif cmd == "/memory":
             pid = s.current_project()["id"]
             if args and args[0] == "add" and len(args) > 1:
                 m = s.add_memory(" ".join(args[1:]))
-                say(f"已记住（#{m['id']}）：{m['text']}")
+                say(tr("mem_added", id=m["id"], t=m["text"]))
             elif args and args[0] in ("del", "archive") and len(args) > 1:
                 m = s.set_memory(int(args[1]), "archive")
-                say(f"已归档 #{m['id']}：{m['text']}")
+                say(tr("mem_archived", id=m["id"], t=m["text"]))
             else:
                 act = store.memories(pid, "active")
                 prop = store.memories(pid, "proposed")
-                say(
-                    "项目记忆：\n"
-                    + ("\n".join(f"#{m['id']} {m['text']}" for m in act) or "（空）")
-                    + (f"\n待确认 {len(prop)} 条（控制台“项目与对话”里处理）" if prop else "")
-                    + "\n/memory add 文本 · /memory del 编号"
-                )
+                items = "\n".join(f"#{m['id']} {m['text']}" for m in act) or tr("empty")
+                pending = tr("mem_pending", n=len(prop)) if prop else ""
+                say(tr("mem_list", items=items, pending=pending))
         elif cmd == "/pack":
             pack = store.pack(s.current_project()["id"])
             if not pack:
-                say("当前项目还没有基准包。选中候选后可锁定。")
+                say(tr("no_pack"))
             else:
-                say(
-                    f"基准包 v{pack['version']}："
-                    + "，".join(
-                        f"{r}（{a['kind']}，seed {a.get('seed')}）"
-                        for r, a in pack["assets"].items()
-                    )
+                items = ", ".join(
+                    f"{r} ({a['kind']}, seed {a.get('seed')})" for r, a in pack["assets"].items()
                 )
+                say(tr("pack_info", v=pack["version"], items=items))
         elif cmd == "/rounds":
             rows = store.rounds(s.current_project()["id"])[:6]
             say(
                 "\n".join(
-                    f"{ROUND_ZH[r['state']]} · {r['title'] or r['template']} × {r['n']}"
+                    f"{i18n.state(r['state'])} · {r['title'] or r['template']} × {r['n']}"
                     for r in rows
                 )
-                or "当前项目还没有轮次"
+                or tr("no_rounds")
             )
         elif cmd == "/review":
             rows = store.rounds(s.current_project()["id"], "review")
             if not rows:
-                say("当前项目没有待审阅的轮次")
+                say(tr("no_review"))
             elif not self.push_round:
-                say(f"有 {len(rows)} 轮待审阅；未配置 Telegram，请在控制台 #review 页审阅。")
+                say(tr("review_no_tg", n=len(rows)))
             else:
                 for r in reversed(rows):
                     self.push_round(r)
-                say(f"已重新推送 {len(rows)} 轮待审阅候选。")
+                say(tr("review_pushed", n=len(rows)))
+        elif cmd == "/reopen":
+            rows = [
+                r
+                for r in store.rounds(s.current_project()["id"], "closed")
+                if (r["decision"] or {}).get("action") != "cancel"
+            ]
+            if not rows:
+                say(tr("no_rounds"))
+            else:
+                self.reopen(args[0] if args else rows[0]["id"], channel, say)
         elif cmd == "/redo":
             rows = store.rounds(s.current_project()["id"], "review")
             if not rows:
-                say("没有待审阅的轮次")
+                say(tr("no_review"))
             else:
-                new = s.redo(rows[0]["id"], origin=channel)
-                say(f"整轮重做：已排队 {new['n']} 个新候选")
+                say(tr("redo_queued", n=s.redo(rows[0]["id"], origin=channel)["n"]))
         elif cmd == "/round":
             if not args:
-                say(
-                    "用法：/round 模板 [数量] [prompt]；模板："
-                    + "，".join(s.orch.registry.templates)
-                )
+                say(tr("round_usage", t=", ".join(s.orch.registry.templates)))
                 return
             template, rest = args[0], args[1:]
             n = int(rest.pop(0)) if rest and rest[0].isdigit() else None
@@ -454,30 +466,35 @@ class Actions:
             try:
                 rnd = s.start_round(template, params, n, origin=channel)
             except (ParamError, KeyError, ValueError) as e:
-                say(f"参数无效：{e}")
+                say(tr("invalid_params", e=e))
                 return
-            say(f"已排队：{rnd['n']} 个候选（{rnd['template']} / {rnd['tier']}）")
+            say(tr("queued_round", n=rnd["n"], tpl=rnd["template"], tier=rnd["tier"]))
         else:
-            say("不认识这个命令。/help 查看全部命令。")
+            say(tr("unknown_cmd"))
 
     def status_text(self) -> str:
         m = memory.snapshot()
         p = self.studio.current_project()
-        queued = len(self.store.by_state("draft"))
         cur = self.worker and self.worker.current
-        paused = "（已暂停）" if self.store.get_kv("paused") else ""
-        return (
-            f"项目：{p['name']}\n"
-            f"出图：{'正在跑 ' + (cur['title'] or cur['template']) if cur else '空闲'}{paused}"
-            f"，排队 {queued}\n"
-            f"内存：可用 {m['avail_gib']} GiB，压力 {m['pressure']}\n"
-            f"LLM：{MODES[self.planner.mode]}"
+        running = (
+            tr("status_running", t=cur["title"] or cur["template"]) if cur else tr("status_idle")
+        )
+        return tr(
+            "status",
+            p=p["name"],
+            r=running,
+            paused=tr("status_paused") if self.store.get_kv("paused") else "",
+            q=len(self.store.by_state("draft")),
+            m=m["avail_gib"],
+            pr=m["pressure"],
+            llm=i18n.mode(self.planner.mode),
         )
 
 
 class Daemon:
     def __init__(self, cfg: config.Settings):
         self.cfg = cfg
+        i18n.set_language(cfg.language)
         self.stop = threading.Event()
         self.orch = Orchestrator(cfg, log=lambda m: log.info(m))
         self.studio = Studio(self.orch, cfg.round_size)
@@ -500,7 +517,7 @@ class Daemon:
         self.studio.log(
             "system",
             "out",
-            f"「{rnd['title'] or rnd['template']}」{ok}/{len(tasks)} 个候选待审阅",
+            tr("round_ready", t=rnd["title"] or rnd["template"], ok=ok, n=len(tasks)),
             rnd["project_id"],
             round_id=rnd["id"],
         )

@@ -4,6 +4,7 @@ import pytest
 from test_studio import drain, fake_chat, run_jobs
 
 from video_agent.daemon import Actions
+from video_agent.i18n import tr
 from video_agent.planner import Planner
 from video_agent.studio import Studio, StudioError
 
@@ -167,5 +168,42 @@ def test_orphan_messages_become_history_session(studio):
     for s in studio.store.sessions(pid):
         studio.store.update_session(s["id"], state="closed")
     s = studio.current_session(pid)
-    assert s["title"] == "历史会话"
+    assert s["title"] == tr("history_session")
     assert [m["text"] for m in studio.store.session_messages(s["id"])][-1] == "旧消息"
+
+
+def test_change_decision_reverts_pack_and_keeps_history(studio):
+    first = studio.start_round("flux2-t2i", {"seed": 1}, n=1)
+    drain(studio)
+    studio.select(first["id"], 1, role="character")  # pack v1: character ← first
+    rnd = studio.start_round("flux2-t2i", {"seed": 10})
+    drain(studio)
+    studio.select(rnd["id"], 2, role="character")  # pack v2: character ← rnd #2
+    t2 = studio.store.round_tasks(rnd["id"])[1]["id"]
+    assert studio.store.pack(rnd["project_id"])["assets"]["character"]["task_id"] == t2
+
+    reopened, running = studio.reopen(rnd["id"])
+    assert reopened["state"] == "review" and running == 0
+    assert {t["state"] for t in studio.store.round_tasks(rnd["id"])} == {"review"}
+    pack = studio.store.pack(rnd["project_id"])  # v3 restores the earlier asset
+    assert pack["version"] == 3
+    first_task = studio.store.round_tasks(first["id"])[0]["id"]
+    assert pack["assets"]["character"]["task_id"] == first_task
+
+    studio.select(rnd["id"], 1)  # decide again
+    d = studio.store.get_round(rnd["id"])["decision"]
+    assert d["idx"] == 1 and d["history"][0]["idx"] == 2
+    with pytest.raises(StudioError):
+        studio.reopen(studio.start_round("flux2-t2i", {"seed": 99}, n=1)["id"])  # not decided
+
+
+def test_reopen_reports_spawned_rounds_and_standalone_task(studio):
+    rnd = studio.start_round("flux2-t2i", {"seed": 3}, n=1)
+    drain(studio)
+    child = studio.redo(rnd["id"])
+    _, running = studio.reopen(rnd["id"])
+    assert running == 1 and studio.store.get_round(child["id"])["state"] == "generating"
+    t = studio.orch.create("flux2-t2i", {"seed": 55})
+    studio.orch.execute(t["id"])
+    studio.approve_task(t["id"], False)
+    assert studio.reopen_task(t["id"])["state"] == "review"

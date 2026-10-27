@@ -1,26 +1,26 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>aco_lw 控制台</title>
+<title>aco_lw Console</title>
 <style>
 :root{
   --bg:#f5f7fa;--card:#fff;--line:#d5dde8;--text:#14202e;--muted:#5a6879;--accent:#1f5f99;
   --acc-tint:rgba(31,95,153,.10);--ok:#2f7d4f;--ok-tint:rgba(47,125,79,.12);--warn:#9a5b00;
   --warn-tint:rgba(154,91,0,.12);--bad:#b3261e;--bad-tint:rgba(179,38,30,.10);--idle:#8a97a8;
-  --bubble-in:#e6effa;color-scheme:light
+  --bubble-in:#e6effa;--shade:rgba(10,16,24,.45);color-scheme:light
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
   --bg:#0f141c;--card:#18212e;--line:#2f3c50;--text:#e6edf6;--muted:#9fb0c5;--accent:#8ecbff;
   --acc-tint:rgba(142,203,255,.12);--ok:#7fd3a0;--ok-tint:rgba(127,211,160,.12);--warn:#f0c27a;
   --warn-tint:rgba(240,194,122,.12);--bad:#ff9a92;--bad-tint:rgba(255,154,146,.12);--idle:#6f819b;
-  --bubble-in:#1f3550;color-scheme:dark}}
+  --bubble-in:#1f3550;--shade:rgba(0,0,0,.6);color-scheme:dark}}
 :root[data-theme="dark"]{
   --bg:#0f141c;--card:#18212e;--line:#2f3c50;--text:#e6edf6;--muted:#9fb0c5;--accent:#8ecbff;
   --acc-tint:rgba(142,203,255,.12);--ok:#7fd3a0;--ok-tint:rgba(127,211,160,.12);--warn:#f0c27a;
   --warn-tint:rgba(240,194,122,.12);--bad:#ff9a92;--bad-tint:rgba(255,154,146,.12);--idle:#6f819b;
-  --bubble-in:#1f3550;color-scheme:dark}
+  --bubble-in:#1f3550;--shade:rgba(0,0,0,.6);color-scheme:dark}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);
   font:15px/1.6 system-ui,-apple-system,"PingFang SC","Hiragino Sans GB",sans-serif}
@@ -32,7 +32,7 @@ h1{font-size:17px;margin:0;font-weight:650}
 .stat b{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--idle);display:inline-block}
 .dot.ok{background:var(--ok)}.dot.warn{background:var(--warn)}.dot.bad{background:var(--bad)}
-nav{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap}
+nav{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap;align-items:center}
 .tab,.btn{border:1px solid var(--line);background:transparent;color:var(--muted);padding:5px 12px;
   border-radius:8px;cursor:pointer;font-size:13px;white-space:nowrap}
 .tab.on{background:var(--acc-tint);color:var(--accent);border-color:var(--accent)}
@@ -40,22 +40,24 @@ nav{margin-left:auto;display:flex;gap:4px;flex-wrap:wrap}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--card)}
 .btn.primary:hover{opacity:.9;color:var(--card)}
 .btn.danger:hover{border-color:var(--bad);color:var(--bad)}
+.btn.sm{padding:2px 8px;font-size:12px}
 .btn:disabled{opacity:.5;cursor:default}
+.lang{margin-left:6px}
 .count{display:inline-block;min-width:18px;padding:0 5px;margin-left:4px;border-radius:99px;
   background:var(--warn);color:var(--card);font-size:11px;font-weight:700;text-align:center}
 main{padding:18px 20px 60px;max-width:1500px;margin:auto}
 .view{display:none}.view.on{display:block}
 .layout{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:18px}
-.layout.proj{grid-template-columns:minmax(260px,.55fr) minmax(0,1.45fr)}
+.layout.proj{grid-template-columns:minmax(240px,.5fr) minmax(0,1.5fr)}
 @media (max-width:980px){.layout,.layout.proj{grid-template-columns:1fr}}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;min-width:0}
 .card h2{font-size:14px;margin:0 0 12px;color:var(--muted);font-weight:600;display:flex;
   align-items:center;gap:10px;flex-wrap:wrap}
 .card h2 .sp{flex:1}
+h3.sub{font-size:13px;color:var(--muted);margin:16px 0 8px;font-weight:600;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .empty{color:var(--muted);font-size:14px;padding:26px 4px;text-align:center}
 .hint{font-size:12.5px;color:var(--muted)}
-.banner{background:var(--warn-tint);color:var(--warn);border-radius:10px;padding:8px 12px;
-  font-size:13.5px;margin-bottom:14px;display:none}
+.banner{border-radius:10px;padding:8px 12px;font-size:13.5px;margin-bottom:14px;display:none}
 .badge{display:inline-block;font-size:11.5px;padding:1px 8px;border-radius:99px;
   background:var(--acc-tint);color:var(--accent);white-space:nowrap}
 .badge.ok{background:var(--ok-tint);color:var(--ok)}.badge.warn{background:var(--warn-tint);color:var(--warn)}
@@ -63,7 +65,7 @@ main{padding:18px 20px 60px;max-width:1500px;margin:auto}
 .badge.live{animation:pulse 1.4s ease-in-out infinite}
 @keyframes pulse{50%{opacity:.45}}
 @media (prefers-reduced-motion:reduce){.badge.live,.stage.active .ring{animation:none}}
-select.sm{border:1px solid var(--line);background:var(--card);border-radius:8px;padding:4px 8px;font-size:13px}
+select.sm,input.sm{border:1px solid var(--line);background:var(--card);border-radius:8px;padding:4px 8px;font-size:13px}
 /* DAG */
 #dag{position:relative;overflow:auto;min-height:220px;max-height:70vh}
 #dag svg{position:absolute;left:0;top:0;pointer-events:none}
@@ -78,7 +80,7 @@ select.sm{border:1px solid var(--line);background:var(--card);border-radius:8px;
   border:1px solid var(--line);flex:none}
 .thumbs .th.pick{outline:2px solid var(--ok);outline-offset:1px}
 .thumbs .th.dim{opacity:.4}
-/* 流水线 */
+/* pipeline */
 .pipe{display:flex;align-items:flex-start;overflow-x:auto;padding:4px 2px 10px}
 .stage{display:flex;flex-direction:column;align-items:center;min-width:78px;flex:1;position:relative}
 .stage .ring{width:28px;height:28px;border-radius:50%;border:2px solid var(--idle);display:grid;
@@ -87,7 +89,7 @@ select.sm{border:1px solid var(--line);background:var(--card);border-radius:8px;
 .stage.active .ring{border-color:var(--accent);background:var(--acc-tint);color:var(--accent);
   animation:pulse 1.4s ease-in-out infinite}
 .stage.failed .ring{border-color:var(--bad);background:var(--bad-tint);color:var(--bad)}
-.stage .lbl{font-size:12px;margin-top:6px;font-weight:600}
+.stage .lbl{font-size:12px;margin-top:6px;font-weight:600;text-align:center}
 .stage .dur{font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums}
 .stage:not(:last-child)::after{content:"";position:absolute;top:14px;left:calc(50% + 16px);
   right:calc(-50% + 16px);height:2px;background:var(--line)}
@@ -103,8 +105,8 @@ dt{color:var(--muted)}dd{margin:0;overflow-wrap:anywhere;font-variant-numeric:ta
 .cand .idx{font-weight:700;font-size:13px}
 .note{display:none;margin-top:6px}
 .note.on{display:flex;gap:6px}
-.note textarea{flex:1;min-height:38px;border:1px solid var(--line);border-radius:8px;background:var(--bg);
-  padding:6px 8px;resize:vertical;font-size:13.5px}
+textarea.in,.note textarea{flex:1;min-height:38px;border:1px solid var(--line);border-radius:8px;background:var(--bg);
+  padding:6px 8px;resize:vertical;font-size:13.5px;width:100%}
 .events{font-size:12.5px;color:var(--muted);margin:10px 0 0;padding-left:16px}
 details{margin-top:10px}summary{cursor:pointer;color:var(--muted);font-size:13px}
 pre{font-size:12px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;
@@ -113,7 +115,7 @@ pre{font-size:12px;background:var(--bg);border:1px solid var(--line);border-radi
 .review-item{margin-bottom:18px}
 .review-item.active{border-color:var(--accent)}
 .actions{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
-/* 项目 */
+/* projects */
 .plist{display:flex;flex-direction:column;gap:8px}
 .pitem{display:flex;gap:10px;align-items:center;border:1px solid var(--line);border-radius:10px;
   padding:8px;cursor:pointer;background:var(--card)}
@@ -122,6 +124,7 @@ pre{font-size:12px;background:var(--bg);border:1px solid var(--line);border-radi
   border:1px solid var(--line);flex:none}
 .pitem .m{min-width:0;flex:1}.pitem .n{font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pitem .x{font-size:12px;color:var(--muted)}
+.ptabs{display:flex;gap:4px;flex-wrap:wrap;margin:10px 0 4px}
 .packs{display:flex;flex-direction:column;gap:8px}
 .packv{display:flex;gap:10px;align-items:center;font-size:13px;flex-wrap:wrap}
 .packv .v{font-weight:700;color:var(--accent);width:34px}
@@ -129,15 +132,27 @@ pre{font-size:12px;background:var(--bg);border:1px solid var(--line);border-radi
 .packv img,.packv video{width:64px;height:64px;object-fit:cover;border-radius:7px;border:1px solid var(--line);display:block}
 .timeline{font-size:13px;display:flex;flex-direction:column;gap:6px}
 .timeline .r{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.chat{display:flex;flex-direction:column;gap:8px;max-height:52vh;overflow:auto;padding:4px 2px;
+.sessions{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.sess{border:1px solid var(--line);border-radius:99px;padding:2px 10px;font-size:12.5px;cursor:pointer;background:var(--card);color:var(--muted)}
+.sess.on{border-color:var(--accent);color:var(--accent);background:var(--acc-tint)}
+.sess .c{font-variant-numeric:tabular-nums;opacity:.7;margin-left:4px}
+.chat{display:flex;flex-direction:column;gap:8px;max-height:52vh;overflow:auto;
   border:1px solid var(--line);border-radius:10px;background:var(--bg);padding:10px}
 .msg{max-width:82%;padding:7px 11px;border-radius:12px;font-size:13.5px;white-space:pre-wrap;overflow-wrap:anywhere}
 .msg.in{align-self:flex-end;background:var(--bubble-in)}
 .msg.out{align-self:flex-start;background:var(--card);border:1px solid var(--line)}
 .msg.sys{align-self:center;background:transparent;color:var(--muted);font-size:12.5px;padding:2px 6px}
 .msg .meta{display:block;font-size:11px;color:var(--muted);margin-bottom:2px}
-.chatbox{display:flex;gap:8px;margin-top:10px}
-.chatbox input{flex:1;border:1px solid var(--line);border-radius:10px;background:var(--card);padding:8px 12px}
+.msg .btns{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.msg img.att{max-width:140px;border-radius:6px;display:block;margin-top:6px;border:1px solid var(--line)}
+.chatbox{display:flex;gap:8px;margin-top:10px;align-items:center}
+.chatbox input[type=text]{flex:1;border:1px solid var(--line);border-radius:10px;background:var(--card);padding:8px 12px;min-width:0}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.chip{display:flex;gap:6px;align-items:center;border:1px solid var(--line);border-radius:8px;padding:2px 6px;font-size:12px;background:var(--card)}
+.chip img{width:28px;height:28px;object-fit:cover;border-radius:4px}
+.mem{display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px dashed var(--line);font-size:13.5px}
+.mem:last-child{border-bottom:0}.mem .tx{flex:1;overflow-wrap:anywhere}.mem .pin{color:var(--warn)}
+.mem.arch .tx{color:var(--muted);text-decoration:line-through}
 .gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
 .gallery .item{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
 .gallery img,.gallery video{width:100%;display:block;background:#000;aspect-ratio:16/10;object-fit:contain}
@@ -146,24 +161,36 @@ pre{font-size:12px;background:var(--bg);border:1px solid var(--line);border-radi
 .toolbar{display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
 iframe{width:100%;height:calc(100vh - 120px);border:1px solid var(--line);border-radius:12px;background:var(--card)}
 kbd{font:11.5px ui-monospace,monospace;border:1px solid var(--line);border-radius:4px;padding:0 4px;background:var(--bg)}
-@media (max-width:600px){header{padding:10px 16px}main{padding:14px 16px 40px}nav{margin-left:0}}
+/* modal */
+.modal{position:fixed;inset:0;background:var(--shade);display:none;align-items:flex-start;justify-content:center;z-index:20;padding:40px 16px;overflow:auto}
+.modal.on{display:flex}
+.modal .box{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;width:min(760px,100%)}
+.modal .box h2{margin:0 0 12px;font-size:16px;display:flex;gap:8px;align-items:center}
+.form{display:grid;grid-template-columns:max-content 1fr;gap:8px 12px;align-items:center;font-size:13.5px}
+.form label{color:var(--muted)}
+.form input[type=number],.form input[type=text]{border:1px solid var(--line);border-radius:8px;background:var(--bg);padding:5px 8px;width:100%}
+.ctxmsg{border:1px solid var(--line);border-radius:8px;margin:8px 0}
+.ctxmsg .r{font-size:12px;color:var(--muted);padding:4px 8px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between}
+.ctxmsg pre{border:0;margin:0;max-height:260px}
+@media (max-width:600px){header{padding:10px 16px}main{padding:14px 16px 40px}nav{margin-left:0}.form{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
 <header>
-  <h1>aco_lw 控制台</h1>
+  <h1 data-t="title">aco_lw Console</h1>
   <span class="stat"><span class="dot" id="d-daemon"></span><b id="s-daemon">–</b></span>
-  <span class="stat"><span class="dot" id="d-mem"></span>内存 <b id="s-mem">–</b></span>
+  <span class="stat"><span class="dot" id="d-mem"></span><span data-t="memory">Memory</span> <b id="s-mem">–</b></span>
   <span class="stat"><span class="dot" id="d-comfy"></span>ComfyUI <b id="s-comfy">–</b></span>
   <span class="stat"><span class="dot" id="d-llm"></span>LLM <b id="s-llm">–</b></span>
-  <span class="stat">项目 <b id="s-proj">–</b></span>
+  <span class="stat"><span data-t="project">Project</span> <b id="s-proj">–</b></span>
   <nav>
-    <button class="tab on" data-view="flow">任务流</button>
-    <button class="tab" data-view="review">审阅<span class="count" id="c-review" hidden></span></button>
-    <button class="tab" data-view="projects">项目与对话</button>
-    <button class="tab" data-view="gallery">产物</button>
-    <button class="tab" data-view="progress">项目进度</button>
-    <button class="tab" data-view="runbook">手册</button>
+    <button class="tab on" data-view="flow" data-t="tab.flow">Flow</button>
+    <button class="tab" data-view="review"><span data-t="tab.review">Review</span><span class="count" id="c-review" hidden></span></button>
+    <button class="tab" data-view="projects" data-t="tab.projects">Projects &amp; Chat</button>
+    <button class="tab" data-view="gallery" data-t="tab.gallery">Outputs</button>
+    <button class="tab" data-view="progress" data-t="tab.progress">Progress</button>
+    <button class="tab" data-view="runbook" data-t="tab.runbook">Runbook</button>
+    <select class="sm lang" id="lang" aria-label="Language"><option value="en">EN</option><option value="zh">中文</option></select>
   </nav>
 </header>
 <main>
@@ -172,69 +199,185 @@ kbd{font:11.5px ui-monospace,monospace;border:1px solid var(--line);border-radiu
   <section class="view on" id="v-flow">
     <div class="layout">
       <div class="card">
-        <h2>创作流程 DAG <span class="sp"></span>
-          <select class="sm" id="flow-project" aria-label="按项目筛选"><option value="">全部项目</option></select></h2>
+        <h2><span data-t="flow.title">Creative flow (DAG)</span> <span class="sp"></span>
+          <select class="sm" id="flow-project" aria-label="Project filter"></select></h2>
         <div id="dag"></div>
-        <div class="hint" style="margin-top:8px">一个节点 = 一轮候选（或一个独立任务）；箭头 = 由上一轮决定派生（微调 / 重做 / 打回）或引用其产物。绿框 = 选中的候选。</div>
+        <div class="hint" style="margin-top:8px" data-t="flow.hint">One node = one round of candidates (or a standalone task). Arrows = derived from a previous decision (tweak / redo / reject) or reuse of its output. Green outline = selected candidate.</div>
       </div>
-      <div class="card"><h2>详情</h2><div id="detail"><div class="empty">点选左侧节点</div></div></div>
+      <div class="card"><h2 data-t="detail">Details</h2><div id="detail"></div></div>
     </div>
   </section>
 
   <section class="view" id="v-review">
-    <div class="hint" style="margin-bottom:12px">
-      快捷键：<kbd>1</kbd>–<kbd>9</kbd> 高亮候选 · <kbd>Enter</kbd> 通过（按所选锁定角色）· <kbd>F</kbd> 微调 · <kbd>R</kbd> 整轮重做 · <kbd>X</kbd> 打回+批注 · <kbd>J</kbd>/<kbd>K</kbd> 切换审阅项。批注会唤醒 LLM 翻译成参数，结果见“项目与对话”。
-    </div>
+    <div class="hint" style="margin-bottom:12px" data-t="review.keys" data-html="1"></div>
     <div id="review"></div>
   </section>
 
   <section class="view" id="v-projects">
     <div class="layout proj">
       <div class="card">
-        <h2>项目 <span class="sp"></span>
-          <select class="sm" id="proj-filter" aria-label="筛选项目">
-            <option value="">全部</option><option value="active">进行中</option><option value="done">已完成</option>
-          </select>
-          <button class="btn" id="proj-new">新建</button></h2>
+        <h2><span data-t="projects">Projects</span> <span class="sp"></span>
+          <select class="sm" id="proj-filter" aria-label="Filter"></select>
+          <button class="btn" id="proj-new" data-t="new">New</button></h2>
         <div class="plist" id="plist"></div>
       </div>
-      <div class="card" id="pdetail"><div class="empty">选择一个项目查看轮次、基准包与对话历史</div></div>
+      <div class="card" id="pdetail"></div>
     </div>
   </section>
 
   <section class="view" id="v-gallery">
     <div class="toolbar">
-      <button class="tab on" data-kind="all">全部</button>
-      <button class="tab" data-kind="image">图片</button>
-      <button class="tab" data-kind="video">视频</button>
+      <button class="tab on" data-kind="all" data-t="all">All</button>
+      <button class="tab" data-kind="image" data-t="images">Images</button>
+      <button class="tab" data-kind="video" data-t="videos">Videos</button>
     </div>
     <div class="gallery" id="gallery"></div>
   </section>
 
-  <section class="view" id="v-progress"><iframe title="项目进度" data-src="/progress"></iframe></section>
-  <section class="view" id="v-runbook"><iframe title="运行手册" data-src="/runbook"></iframe></section>
+  <section class="view" id="v-progress"><iframe title="Progress" data-src="/progress"></iframe></section>
+  <section class="view" id="v-runbook"><iframe title="Runbook" data-src="/runbook"></iframe></section>
 </main>
+
+<div class="modal" id="modal" role="dialog" aria-modal="true"><div class="box" id="modal-box"></div></div>
+
 <script>
-const STAGES = [["validated","校验"],["waiting_memory","内存门控"],["submitted","提交"],["running","生成"],["review","待审阅"],["final","审阅结果"]];
+/* ================= i18n ================= */
+const I18N = {
+  en: {
+    title: "aco_lw Console", memory: "Memory", project: "Project", detail: "Details", projects: "Projects",
+    "tab.flow": "Flow", "tab.review": "Review", "tab.projects": "Projects & Chat", "tab.gallery": "Outputs",
+    "tab.progress": "Progress", "tab.runbook": "Runbook", new: "New", all: "All", images: "Images", videos: "Videos",
+    "flow.title": "Creative flow (DAG)", "flow.all": "All projects",
+    "flow.hint": "One node = one round of candidates (or a standalone task). Arrows = derived from a previous decision (tweak / redo / reject) or reuse of its output. Green outline = selected candidate.",
+    "flow.empty": "No tasks yet. Describe what you want in “Projects & Chat”, or use Telegram / <code>va round</code>.",
+    "flow.pick": "Click a node on the left",
+    "review.keys": "Shortcuts: <kbd>1</kbd>–<kbd>9</kbd> highlight · <kbd>Enter</kbd> approve (locks with the chosen role) · <kbd>F</kbd> tweak with note · <kbd>R</kbd> redo round · <kbd>X</kbd> reject + note · <kbd>J</kbd>/<kbd>K</kbd> switch item. Notes wake the LLM; replies appear in “Projects & Chat”.",
+    "review.empty": "Nothing to review. New candidates appear here (and are pushed to Telegram).",
+    approve: "✅ Approve", redo: "🎲 Redo", "redo.round": "🎲 Redo round", reject: "↩️ Reject", "reject.note": "↩️ Reject + note",
+    refine: "🔧 Tweak w/ note", send: "Send", "no.lock": "Don't lock", "goto.review": "Go to review →",
+    "note.refine": "What to change in #{n}, e.g. softer eyes, light from the side",
+    "note.reject": "Why rejected / what to change (empty = reject only)", "need.note": "Please write a note",
+    filter_all: "All", filter_active: "Active", filter_done: "Completed",
+    "p.empty": "Pick a project to see its sessions, memory, rounds and pack", current: "current", "set.current": "Make current",
+    "mark.done": "Mark complete", "confirm.done": "Mark complete? History is kept forever; queued tasks are cancelled.",
+    "p.created": "Created {a} · updated {b}", "pt.chat": "Conversation", "pt.memory": "Project memory",
+    "pt.rounds": "Rounds", "pt.pack": "Baseline pack", sessions: "Sessions", "new.session": "+ New session",
+    "ctx.view": "View LLM context", "chat.ph": "Describe what you want, or a command (/help) — same as Telegram",
+    attach: "📎 Image", "chat.readonly": "Read-only history. Make this the current project/session to continue.",
+    "chat.empty": "No messages yet.", "mem.active": "In effect (shared by all sessions)", "mem.proposed": "Proposed by the LLM — confirm to apply",
+    "mem.archived": "Archived", "mem.add": "Add a memory, e.g. Camera stays at 35mm", add: "Add",
+    accept: "Remember", ignore: "Ignore", edit: "Edit", pin: "Pin", unpin: "Unpin", archive: "Archive", restore: "Restore",
+    "mem.empty": "No project memory yet.", "pack.empty": "Nothing locked yet. Approve a candidate and choose a role to lock it.",
+    "rounds.empty": "No rounds yet.", "new.project": "New project name", "rename": "Rename", "rename.ph": "Session title",
+    reopen: "↺ Change decision", "reopen.confirm": "Reopen this round for review? The previous decision is kept in history; a pack lock from it is undone in a new pack version.",
+    "dec.history": "Earlier decisions",
+    "tweak": "✏️ Manual tweak", "tweak.title": "Manual tweak — new round from this task (no LLM)", "tier": "Tier",
+    "count": "Candidates", "unverified": "(unmeasured)", "submit": "Queue round", cancel: "Cancel", close: "Close",
+    "ctx.title": "Context sent to the LLM on the next message", "ctx.note": "Order is cache-friendly: rules + templates + project memory + session summary, then the exact earlier exchanges, then live state. Edit the rules in {f}.",
+    "ctx.chars": "{n} characters", task: "Task", template: "Template", state: "State", exec: "Execution",
+    gate: "Memory gate", genmem: "Memory during run", params: "Parameters", events: "Events", "err": "Error",
+    "gate.v": "needs {r} GiB · waited {w}{a}", "mem.v": "min free {m} GiB · pressure {p} · swap {s} GiB",
+    "fv.v": "sampling {s} · peak {p} GiB", "pipe.of": "Pipeline of candidate #{n}", round: "Round", decision: "Decision",
+    "locked.as": " · locked as {r}", "daemon.off": "daemon not running", paused: "paused", busy: "rendering", idle: "idle",
+    queued: "queued {n}", running: "running", offline: "offline", loaded: "loaded", unloaded: "unloaded",
+    "p.normal": "normal", "p.warn": "warning", "p.crit": "critical", "not.done": "Not done: ", done_ok: "Done",
+    "llm.stats": "{s}s · {t} tok · reused ≈{c}%", "load": " (incl. load {l}s)", "no.outputs": "No outputs",
+    "stage.validated": "Validate", "stage.waiting_memory": "Memory gate", "stage.submitted": "Submit",
+    "stage.running": "Generate", "stage.review": "Review", "stage.final": "Decision",
+    "dec.select": "selected", "dec.refine": "tweaked", "dec.redo": "redo", "dec.reject": "rejected", "dec.cancel": "cancelled",
+    "who.telegram": "Telegram", "who.web": "Console", "who.llm": "LLM", "who.system": "System", "who.cli": "CLI",
+    roles: ["character", "scene", "style"], "uploading": "Uploading…", "x.tasks": "{r} rounds · {t} tasks", "pack.v": " · pack v{v}",
+    "updated": "updated {t}", min: "min", sec: "s",
+    "st.draft": "Queued", "st.validated": "Validated", "st.waiting_memory": "Waiting memory", "st.submitted": "Submitted",
+    "st.running": "Running", "st.review": "To review", "st.done": "Done", "st.rejected": "Rejected", "st.failed": "Failed",
+    "st.timeout": "Timed out", "st.generating": "Generating", "st.closed": "Decided", "st.active": "Active",
+    "st.archived": "Archived", "st.open": "Open",
+  },
+  zh: {
+    title: "aco_lw 控制台", memory: "内存", project: "项目", detail: "详情", projects: "项目",
+    "tab.flow": "任务流", "tab.review": "审阅", "tab.projects": "项目与对话", "tab.gallery": "产物",
+    "tab.progress": "项目进度", "tab.runbook": "手册", new: "新建", all: "全部", images: "图片", videos: "视频",
+    "flow.title": "创作流程 DAG", "flow.all": "全部项目",
+    "flow.hint": "一个节点 = 一轮候选（或一个独立任务）；箭头 = 由上一轮决定派生（微调 / 重做 / 打回）或引用其产物。绿框 = 选中的候选。",
+    "flow.empty": "还没有任务。在“项目与对话”里描述需求，或用 Telegram / <code>va round</code>。",
+    "flow.pick": "点选左侧节点",
+    "review.keys": "快捷键：<kbd>1</kbd>–<kbd>9</kbd> 高亮候选 · <kbd>Enter</kbd> 通过（按所选锁定角色）· <kbd>F</kbd> 微调 · <kbd>R</kbd> 整轮重做 · <kbd>X</kbd> 打回+批注 · <kbd>J</kbd>/<kbd>K</kbd> 切换审阅项。批注会唤醒 LLM，回复见“项目与对话”。",
+    "review.empty": "没有待审阅的内容。新一轮候选出来后会出现在这里（也会推送到 Telegram）。",
+    approve: "✅ 通过", redo: "🎲 重做", "redo.round": "🎲 整轮重做", reject: "↩️ 打回", "reject.note": "↩️ 打回+批注",
+    refine: "🔧 微调", send: "发送", "no.lock": "不锁定", "goto.review": "去审阅 →",
+    "note.refine": "对 #{n} 的微调说明，例如：眼神更柔和，光打侧面",
+    "note.reject": "打回原因 / 改进方向（留空 = 只打回）", "need.note": "请写一句说明",
+    filter_all: "全部", filter_active: "进行中", filter_done: "已完成",
+    "p.empty": "选择一个项目查看会话、项目记忆、轮次与基准包", current: "当前", "set.current": "设为当前",
+    "mark.done": "标记完成", "confirm.done": "标记完成？历史永久保留，排队任务会取消。",
+    "p.created": "创建于 {a} · 更新于 {b}", "pt.chat": "对话", "pt.memory": "项目记忆",
+    "pt.rounds": "轮次", "pt.pack": "基准包", sessions: "会话", "new.session": "+ 新会话",
+    "ctx.view": "查看 LLM 上下文", "chat.ph": "描述需求或输入命令（/help），与 Telegram 相同",
+    attach: "📎 附图", "chat.readonly": "只读历史。设为当前项目 / 会话后才能继续对话。",
+    "chat.empty": "还没有对话。", "mem.active": "生效中（所有会话共享）", "mem.proposed": "LLM 提议，确认后生效",
+    "mem.archived": "已归档", "mem.add": "添加一条记忆，例如：镜头保持 35mm", add: "添加",
+    accept: "记住", ignore: "忽略", edit: "编辑", pin: "置顶", unpin: "取消置顶", archive: "归档", restore: "恢复",
+    "mem.empty": "还没有项目记忆。", "pack.empty": "还没有锁定任何资产。审阅时“通过”并选择角色即可锁定。",
+    "rounds.empty": "还没有轮次", "new.project": "新项目名称", "rename": "重命名", "rename.ph": "会话标题",
+    reopen: "↺ 更改审阅结果", "reopen.confirm": "把这一轮重新打开审阅？之前的决定保留在历史里；它锁进基准包的资产会在新版本中撤销。",
+    "dec.history": "之前的决定",
+    "tweak": "✏️ 手动微调", "tweak.title": "手动微调 —— 以此任务为底开新一轮（不经 LLM）", "tier": "档位",
+    "count": "候选数", "unverified": "（未实测）", "submit": "排队出图", cancel: "取消", close: "关闭",
+    "ctx.title": "下一条消息时发送给 LLM 的上下文", "ctx.note": "顺序按缓存友好排列：规则 + 模板 + 项目记忆 + 会话摘要，然后是逐字复现的历史往来，最后是实时状态。规则在 {f} 里编辑。",
+    "ctx.chars": "{n} 字符", task: "任务", template: "模板", state: "状态", exec: "执行耗时",
+    gate: "内存门控", genmem: "生成期内存", params: "参数", events: "事件", "err": "错误",
+    "gate.v": "需要 {r} GiB · 等待 {w}{a}", "mem.v": "最低可用 {m} GiB · 压力 {p} · swap {s} GiB",
+    "fv.v": "采样 {s} · 峰值 {p} GiB", "pipe.of": "候选 #{n} 的流水线", round: "轮次", decision: "决定",
+    "locked.as": " · 锁定为 {r}", "daemon.off": "daemon 未运行", paused: "已暂停", busy: "出图中", idle: "空闲",
+    queued: "排队 {n}", running: "运行", offline: "离线", loaded: "已加载", unloaded: "未加载",
+    "p.normal": "正常", "p.warn": "警告", "p.crit": "严重", "not.done": "没有执行：", done_ok: "已完成",
+    "llm.stats": "{s}s · {t} token · 复用约 {c}%", "load": "（含加载 {l}s）", "no.outputs": "暂无产物",
+    "stage.validated": "校验", "stage.waiting_memory": "内存门控", "stage.submitted": "提交",
+    "stage.running": "生成", "stage.review": "待审阅", "stage.final": "审阅结果",
+    "dec.select": "选中", "dec.refine": "微调", "dec.redo": "整轮重做", "dec.reject": "打回", "dec.cancel": "取消",
+    "who.telegram": "Telegram", "who.web": "控制台", "who.llm": "LLM", "who.system": "系统", "who.cli": "CLI",
+    roles: ["角色", "场景", "风格"], "uploading": "上传中…", "x.tasks": "{r} 轮 · {t} 个任务", "pack.v": " · 基准包 v{v}",
+    "updated": "更新于 {t}", min: "分", sec: "秒",
+    "st.draft": "排队", "st.validated": "已校验", "st.waiting_memory": "等待内存", "st.submitted": "已提交",
+    "st.running": "生成中", "st.review": "待审阅", "st.done": "完成", "st.rejected": "打回", "st.failed": "失败",
+    "st.timeout": "超时", "st.generating": "生成中", "st.closed": "已决定", "st.active": "进行中",
+    "st.archived": "已归档", "st.open": "进行中",
+  },
+};
+let LANG = "en";
+try { LANG = localStorage.getItem("lang") || ""; } catch {}
+const t = (k, v = {}) => { const s = (I18N[LANG] || I18N.en)[k] ?? I18N.en[k] ?? k;
+  return typeof s === "string" ? s.replace(/\{(\w+)\}/g, (_, x) => v[x] ?? "") : s; };
+function applyStatic(){
+  document.documentElement.lang = LANG === "zh" ? "zh-CN" : "en";
+  document.title = t("title");
+  document.querySelectorAll("[data-t]").forEach(el => { el.dataset.html ? el.innerHTML = t(el.dataset.t) : el.textContent = t(el.dataset.t); });
+  $("#proj-filter").innerHTML = `<option value="">${t("filter_all")}</option><option value="active">${t("filter_active")}</option><option value="done">${t("filter_done")}</option>`;
+  $("#lang").value = LANG;
+}
+
+/* ================= helpers ================= */
+const STAGES = ["validated","waiting_memory","submitted","running","review","final"];
 const TONE = {done:"ok",review:"warn",failed:"bad",timeout:"bad",rejected:"bad",draft:"idle",validated:"idle",
   generating:"",closed:"ok",active:"",archived:"idle"};
 const LIVE = new Set(["running","submitted","waiting_memory","validated","generating"]);
-const ROLES = ["角色","场景","风格"];
-let META = {states:{},round_states:{},project_states:{},templates:{}};
+let META = {templates:{}};
 let SYS = null, GRAPH = [], TASKS = [], PROJECTS = [], REVIEW = [];
-let selNode = null, selTask = null, selProject = null, galleryKind = "all", reviewActive = 0, hlIdx = 1;
-let lastMsgId = 0, detailKey = "", view = "flow";
+let selNode = null, selTask = null, selProject = null, selSession = null, ptab = "chat";
+let galleryKind = "all", reviewActive = 0, hlIdx = 1, detailKey = "", view = "flow", pending = [];
 
-const $ = s => document.querySelector(s);
+function $(s){ return document.querySelector(s); }
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const fmtS = s => s == null ? "" : s < 60 ? `${s.toFixed(1)} s` : `${Math.floor(s/60)} 分 ${Math.round(s%60)} 秒`;
-const fmtT = ts => new Date(ts*1000).toLocaleString("zh-CN",{hour12:false,month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"});
+const fmtS = s => s == null ? "" : s < 60 ? `${s.toFixed(1)} ${t("sec")}` : `${Math.floor(s/60)} ${t("min")} ${Math.round(s%60)} ${t("sec")}`;
+const fmtT = ts => new Date(ts*1000).toLocaleString(LANG === "zh" ? "zh-CN" : "en-US",{hour12:false,month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"});
 const fileUrl = (id, f) => `/files/${encodeURIComponent(id)}/${encodeURIComponent(f)}`;
-const stateName = s => META.states[s] || META.round_states[s] || META.project_states[s] || s;
+const stateName = s => t("st." + s);
 const badge = st => `<span class="badge ${TONE[st] ?? ""} ${LIVE.has(st) ? "live" : ""}">${esc(stateName(st))}</span>`;
-const media = (t, o, cls = "", controls = true) => !o ? `<div class="${cls}"></div>` : o.kind === "video"
-  ? `<video class="${cls}" src="${fileUrl(t.id, o.file)}#t=0.5" ${controls ? "controls" : "muted"} preload="metadata"></video>`
-  : `<img class="${cls}" src="${fileUrl(t.id, o.file)}" alt="" loading="lazy">`;
+const decName = d => d?.action ? t("dec." + d.action) + (d.idx ? " #" + d.idx : "") : "";
+const media = (tk, o, cls = "", controls = true) => !o ? `<div class="${cls}"></div>` : o.kind === "video"
+  ? `<video class="${cls}" src="${fileUrl(tk.id, o.file)}#t=0.5" ${controls ? "controls" : "muted"} preload="metadata"></video>`
+  : `<img class="${cls}" src="${fileUrl(tk.id, o.file)}" alt="" loading="lazy">`;
+const roleSelect = cls => `<select class="sm ${cls || "role"}" aria-label="role"><option value="">${t("no.lock")}</option>${t("roles").map(r => `<option>${esc(r)}</option>`).join("")}</select>`;
 async function api(u, body){
   const r = await fetch(u, body === undefined ? {} : {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
   const j = await r.json().catch(() => ({}));
@@ -245,11 +388,15 @@ function toast(msg, bad){ const b = $("#banner"); b.textContent = msg; b.style.d
   b.style.background = bad ? "var(--bad-tint)" : "var(--ok-tint)"; b.style.color = bad ? "var(--bad)" : "var(--ok)";
   clearTimeout(toast.t); toast.t = setTimeout(() => b.style.display = "none", 4000); }
 async function act(u, body, okMsg){
-  try { const r = await api(u, body); toast((r.messages || []).map(m => m.text).join(" / ") || okMsg); refreshAll(); return r; }
-  catch(e){ toast("没有执行：" + e.message, true); }
+  try { const r = await api(u, body); toast((r.messages || []).map(m => m.text).join(" / ") || okMsg || t("done_ok")); refreshAll(); return r; }
+  catch(e){ toast(t("not.done") + e.message, true); }
 }
+function modal(html){ $("#modal-box").innerHTML = html; $("#modal").classList.add("on"); }
+function closeModal(){ $("#modal").classList.remove("on"); }
+$("#modal").addEventListener("click", e => { if (e.target.id === "modal") closeModal(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
 
-/* ---------- 导航 ---------- */
+/* ================= nav ================= */
 document.querySelectorAll("header .tab").forEach(b => b.onclick = () => show(b.dataset.view));
 function show(v){
   if (!document.getElementById("v-" + v)) v = "flow";
@@ -257,48 +404,49 @@ function show(v){
   document.querySelectorAll("header .tab").forEach(x => x.classList.toggle("on", x.dataset.view === v));
   document.querySelectorAll(".view").forEach(x => x.classList.toggle("on", x.id === "v-" + v));
   const f = document.querySelector(`#v-${v} iframe`); if (f && !f.src) f.src = f.dataset.src;
-  refreshAll();
+  refreshAll(true);
 }
 document.querySelectorAll("#v-gallery .tab").forEach(b => b.onclick = () => {
   galleryKind = b.dataset.kind;
   document.querySelectorAll("#v-gallery .tab").forEach(x => x.classList.toggle("on", x === b));
-  renderGallery();
+  keys.gal = ""; refreshAll();
 });
-$("#flow-project").onchange = () => { selNode = null; refreshAll(); };
+$("#flow-project").onchange = () => { selNode = null; keys.g = ""; refreshAll(); };
 $("#proj-filter").onchange = () => renderProjects();
-$("#proj-new").onclick = async () => { const n = prompt("新项目名称"); if (n) { const p = await act("/api/projects", {name:n}, "已新建"); if (p) selProject = p.id; } };
+$("#proj-new").onclick = async () => { const n = prompt(t("new.project")); if (n) { const p = await act("/api/projects", {name:n}); if (p) { selProject = p.id; selSession = null; } } };
+$("#lang").onchange = e => { LANG = e.target.value; try { localStorage.setItem("lang", LANG); } catch {} applyStatic(); keys = {}; detailKey = ""; refreshAll(true); };
 
-/* ---------- 顶栏 ---------- */
+/* ================= header ================= */
 async function pollSystem(){
   try {
     SYS = await api("/api/system"); const m = SYS.memory;
-    $("#s-mem").textContent = `${m.avail_gib.toFixed(1)} GiB · ${({1:"正常",2:"警告",4:"严重"})[m.pressure] ?? m.pressure}`;
+    $("#s-mem").textContent = `${m.avail_gib.toFixed(1)} GiB · ${({1:t("p.normal"),2:t("p.warn"),4:t("p.crit")})[m.pressure] ?? m.pressure}`;
     $("#d-mem").className = "dot " + (m.pressure >= 4 ? "bad" : m.pressure >= 2 ? "warn" : "ok");
-    $("#s-comfy").textContent = SYS.comfy.online ? `运行 ${SYS.comfy.running} · 排队 ${SYS.comfy.pending}` : "离线";
+    $("#s-comfy").textContent = SYS.comfy.online ? `${t("running")} ${SYS.comfy.running} · ${t("queued", {n: SYS.comfy.pending})}` : t("offline");
     $("#d-comfy").className = "dot " + (!SYS.comfy.online ? "bad" : SYS.comfy.running ? "warn" : "ok");
-    $("#s-llm").textContent = (SYS.llm.loaded ? "已加载" : "未加载") + " · " + SYS.llm.mode_zh.replace(/（.*）/, "");
+    $("#s-llm").textContent = (SYS.llm.loaded ? t("loaded") : t("unloaded")) + " · " + SYS.llm.mode;
     $("#d-llm").className = "dot " + (SYS.llm.loaded ? "ok" : "");
     const d = SYS.daemon;
-    $("#s-daemon").textContent = !d.alive ? "daemon 未运行" : d.paused ? "已暂停" : d.busy ? `出图中 · 排队 ${SYS.queued}` : `空闲 · 排队 ${SYS.queued}`;
+    $("#s-daemon").textContent = !d.alive ? t("daemon.off") : d.paused ? t("paused") : `${d.busy ? t("busy") : t("idle")} · ${t("queued", {n: SYS.queued})}`;
     $("#d-daemon").className = "dot " + (!d.alive ? "bad" : d.paused ? "warn" : "ok");
     $("#s-proj").textContent = SYS.project.name;
     const c = $("#c-review"); c.hidden = !SYS.pending_review; c.textContent = SYS.pending_review;
-  } catch { $("#s-daemon").textContent = "控制台连接失败"; }
+  } catch { $("#s-daemon").textContent = "—"; }
 }
 
-/* ---------- DAG ---------- */
+/* ================= DAG ================= */
 function renderDag(){
   const box = $("#dag");
-  if (!GRAPH.length){ box.innerHTML = `<div class="empty">还没有任务。在“项目与对话”里描述需求，或用 Telegram / <code>va round</code>。</div>`; return; }
+  if (!GRAPH.length){ box.innerHTML = `<div class="empty">${t("flow.empty")}</div>`; return; }
   const byId = Object.fromEntries(GRAPH.map(n => [n.id, n]));
   const kids = {}; GRAPH.forEach(n => n.parents.filter(p => byId[p]).forEach(p => (kids[p] ||= []).push(n)));
   const roots = GRAPH.filter(n => !n.parents.some(p => byId[p])).sort((a,b) => b.created - a.created);
-  const W = 232, GX = 48, GY = 14, Hn = n => n.type === "round" ? 104 : 104, pos = {}, seen = new Set();
+  const W = 232, H = 104, GX = 48, GY = 14, pos = {}, seen = new Set();
   let y = 0;
   const place = (n, depth) => {
     if (seen.has(n.id)) return pos[n.id].y; seen.add(n.id);
     const ch = (kids[n.id] || []).sort((a,b) => a.created - b.created).filter(c => !seen.has(c.id));
-    if (!ch.length){ pos[n.id] = {x: depth*(W+GX), y}; y += Hn(n) + GY; return pos[n.id].y; }
+    if (!ch.length){ pos[n.id] = {x: depth*(W+GX), y}; y += H + GY; return pos[n.id].y; }
     const ys = ch.map(c => place(c, depth+1));
     pos[n.id] = {x: depth*(W+GX), y: (ys[0] + ys[ys.length-1]) / 2};
     return pos[n.id].y;
@@ -313,17 +461,15 @@ function renderDag(){
     edges += `<path d="M${x1} ${y1} C${mx} ${y1},${mx} ${y2},${x2} ${y2}" fill="none" stroke="var(--idle)" stroke-width="1.6" marker-end="url(#arr)"/>`;
   }));
   const nodes = GRAPH.map(n => {
-    const p = pos[n.id];
-    const pick = n.decision?.task_id;
-    const thumbs = n.tasks.slice(0, 5).map(t => {
-      const o = (t.outputs || [])[0];
-      const cls = "th" + (pick === t.id ? " pick" : "") + (["rejected","failed"].includes(t.state) && pick ? " dim" : "");
-      return o ? media(t, o, cls, false) : `<div class="${cls}"></div>`;
+    const p = pos[n.id], pick = n.decision?.task_id;
+    const thumbs = n.tasks.slice(0, 5).map(tk => {
+      const o = (tk.outputs || [])[0];
+      const cls = "th" + (pick === tk.id ? " pick" : "") + (["rejected","failed"].includes(tk.state) && pick ? " dim" : "");
+      return o ? media(tk, o, cls, false) : `<div class="${cls}"></div>`;
     }).join("");
-    const act = n.decision?.action ? `<span>${({select:"选中 #"+n.decision.idx,refine:"微调 #"+n.decision.idx,redo:"重做",reject:"打回",cancel:"取消"})[n.decision.action] || ""}</span>` : "";
-    return `<div class="node ${n.id === selNode ? "sel" : ""}" data-id="${esc(n.id)}" style="left:${p.x}px;top:${p.y}px;width:${W}px;height:${Hn(n)}px">
+    return `<div class="node ${n.id === selNode ? "sel" : ""}" data-id="${esc(n.id)}" style="left:${p.x}px;top:${p.y}px;width:${W}px;height:${H}px">
       <div class="t" title="${esc(n.title)}">${esc(n.title)}</div>
-      <div class="s">${badge(n.state)} <span>${esc(n.tier || "")}${n.type === "round" ? " × " + n.tasks.length : ""}</span> ${act}</div>
+      <div class="s">${badge(n.state)} <span>${esc(n.tier || "")}${n.type === "round" ? " × " + n.tasks.length : ""}</span> <span>${esc(decName(n.decision))}</span></div>
       <div class="thumbs">${thumbs}</div></div>`;
   }).join("");
   box.innerHTML = `<svg width="${maxX}" height="${maxY}"><defs><marker id="arr" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L8 4L0 8z" fill="var(--idle)"/></marker></defs>${edges}</svg>
@@ -331,100 +477,145 @@ function renderDag(){
   box.querySelectorAll(".node").forEach(el => el.onclick = () => { selNode = el.dataset.id; selTask = null; detailKey = ""; renderDag(); renderDetail(); });
 }
 
-function stagesOf(t){
-  const at = {}; t.events.forEach(e => { if (!(e.state in at)) at[e.state] = e.ts; });
+function stagesOf(tk){
+  const at = {}; tk.events.forEach(e => { if (!(e.state in at)) at[e.state] = e.ts; });
   if (at.done || at.rejected) at.final = at.done || at.rejected;
-  const bad = ["failed","timeout"].includes(t.state);
-  const last = STAGES.map(([k]) => k in at).lastIndexOf(true);
-  return STAGES.map(([k, name], i) => {
+  const bad = ["failed","timeout"].includes(tk.state);
+  const last = STAGES.map(k => k in at).lastIndexOf(true);
+  return STAGES.map((k, i) => {
     let cls = "", dur = null;
-    const later = STAGES.slice(i+1).find(([k2]) => k2 in at);
+    const later = STAGES.slice(i+1).find(k2 => k2 in at);
     if (k in at || i < last) cls = "done";
-    if (k in at && later) dur = at[later[0]] - at[k];
-    if (i === last && !bad && !["done","rejected"].includes(t.state) && k !== "final"){ cls = "active"; dur = k === "review" ? null : Date.now()/1000 - at[k]; }
+    if (k in at && later) dur = at[later] - at[k];
+    if (i === last && !bad && !["done","rejected"].includes(tk.state) && k !== "final"){ cls = "active"; dur = k === "review" ? null : Date.now()/1000 - at[k]; }
     if (bad && i === last + 1) cls = "failed";
-    if (k === "final" && t.state === "rejected") cls = "failed";
-    return {name, cls, dur};
+    if (k === "final" && tk.state === "rejected") cls = "failed";
+    return {name: t("stage." + k), cls, dur};
   });
 }
-function taskHtml(t){
-  const pipe = stagesOf(t).map((s, i) => `<div class="stage ${s.cls}"><div class="ring">${s.cls === "failed" ? "!" : s.cls === "done" ? "✓" : i+1}</div><div class="lbl">${s.name}</div><div class="dur">${s.dur != null ? fmtS(s.dur) : ""}</div></div>`).join("");
-  const m = t.metrics || {}, fv = m.freevideo || {}, mem = m.memory || {}, gate = m.gate || {};
-  const rows = [["任务", esc(t.id)], ["模板", esc(`${t.template}（${META.templates[t.template]?.title ?? ""}）`)], ["档位", esc(t.tier)],
-    ["状态", badge(t.state)], ["执行耗时", m.exec_s != null ? fmtS(m.exec_s) : "—"],
-    ["内存门控", gate.required_gib ? esc(`需要 ${gate.required_gib} GiB · 等待 ${fmtS(gate.waited_s)}${gate.actions?.length ? " · " + gate.actions.join("；") : ""}`) : "—"],
-    ["生成期内存", mem.min_avail_gib != null ? esc(`最低可用 ${mem.min_avail_gib} GiB · 压力 ${mem.max_pressure} · swap ${mem.swap_delta_gib >= 0 ? "+" : ""}${mem.swap_delta_gib} GiB`) : "—"]];
-  if (fv.sample_seconds) rows.push(["FreeVideo", esc(`采样 ${fmtS(fv.sample_seconds)} · 峰值 ${(fv.ram_peak_bytes/2**30).toFixed(1)} GiB`)]);
-  const params = {...t.params}; if (params.prompt?.length > 200) params.prompt = params.prompt.slice(0, 200) + "…";
-  const outs = (t.outputs || []).map(o => `<div class="media">${media(t, o)}</div>`).join("");
-  return `<div class="pipe">${pipe}</div>${t.error ? `<div class="err">错误：${esc(t.error)}</div>` : ""}
+function taskHtml(tk){
+  const pipe = stagesOf(tk).map((s, i) => `<div class="stage ${s.cls}"><div class="ring">${s.cls === "failed" ? "!" : s.cls === "done" ? "✓" : i+1}</div><div class="lbl">${s.name}</div><div class="dur">${s.dur != null ? fmtS(s.dur) : ""}</div></div>`).join("");
+  const m = tk.metrics || {}, fv = m.freevideo || {}, mem = m.memory || {}, gate = m.gate || {};
+  const rows = [[t("task"), esc(tk.id)], [t("template"), esc(`${tk.template} (${META.templates[tk.template]?.title ?? ""})`)], [t("tier"), esc(tk.tier)],
+    [t("state"), badge(tk.state)], [t("exec"), m.exec_s != null ? fmtS(m.exec_s) : "—"],
+    [t("gate"), gate.required_gib ? esc(t("gate.v", {r: gate.required_gib, w: fmtS(gate.waited_s), a: gate.actions?.length ? " · " + gate.actions.join("; ") : ""})) : "—"],
+    [t("genmem"), mem.min_avail_gib != null ? esc(t("mem.v", {m: mem.min_avail_gib, p: mem.max_pressure, s: (mem.swap_delta_gib >= 0 ? "+" : "") + mem.swap_delta_gib})) : "—"]];
+  if (fv.sample_seconds) rows.push(["FreeVideo", esc(t("fv.v", {s: fmtS(fv.sample_seconds), p: (fv.ram_peak_bytes/2**30).toFixed(1)}))]);
+  const params = {...tk.params}; if (params.prompt?.length > 200) params.prompt = params.prompt.slice(0, 200) + "…";
+  const outs = (tk.outputs || []).map(o => `<div class="media">${media(tk, o)}</div>`).join("");
+  return `<div class="pipe">${pipe}</div>${tk.error ? `<div class="err">${t("err")}: ${esc(tk.error)}</div>` : ""}
     <dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>
     <div class="grid" style="grid-template-columns:1fr">${outs}</div>
-    ${t.state === "review" && !t.round_id ? reviewButtonsTask(t) : ""}
-    <details><summary>参数</summary><pre>${esc(JSON.stringify(params, null, 2))}</pre></details>
-    <details><summary>事件</summary><ol class="events">${t.events.map(e => `<li>${fmtT(e.ts)} · ${esc(stateName(e.state))}${e.note ? " · " + esc(e.note) : ""}</li>`).join("")}</ol></details>`;
+    <div class="actions" style="margin-top:10px">
+      ${tk.outputs?.length || tk.state === "failed" ? `<button class="btn" onclick="openTweak('${esc(tk.id)}')">${t("tweak")}</button>` : ""}
+      ${tk.state === "review" && !tk.round_id ? reviewButtonsTask(tk) : ""}
+      ${["done","rejected"].includes(tk.state) && !tk.round_id ? `<button class="btn" onclick="if(confirm(t('reopen.confirm'))) act('/api/tasks/${esc(tk.id)}/reopen', {})">${t("reopen")}</button>` : ""}</div>
+    <details><summary>${t("params")}</summary><pre>${esc(JSON.stringify(params, null, 2))}</pre></details>
+    <details><summary>${t("events")}</summary><ol class="events">${tk.events.map(e => `<li>${fmtT(e.ts)} · ${esc(stateName(e.state))}${e.note ? " · " + esc(e.note) : ""}</li>`).join("")}</ol></details>`;
 }
-function reviewButtonsTask(t){
-  return `<div class="actions" style="margin-top:10px">
-    <select class="sm" id="role-${esc(t.id)}"><option value="">不锁定</option>${ROLES.map(r => `<option>${r}</option>`).join("")}</select>
-    <button class="btn primary" onclick="approveTask('${esc(t.id)}', true)">✅ 通过</button>
-    <button class="btn" onclick="act('/api/tasks/${esc(t.id)}/redo', {}, '已排队重做')">🎲 重做</button>
-    <button class="btn danger" onclick="approveTask('${esc(t.id)}', false)">↩️ 打回</button></div>`;
+function reviewButtonsTask(tk){
+  return `${roleSelect("role-" + tk.id)}
+    <button class="btn primary" onclick="approveTask('${esc(tk.id)}', true)">${t("approve")}</button>
+    <button class="btn" onclick="act('/api/tasks/${esc(tk.id)}/redo', {})">${t("redo")}</button>
+    <button class="btn danger" onclick="approveTask('${esc(tk.id)}', false)">${t("reject")}</button>`;
 }
 function approveTask(id, accept){
-  const role = document.getElementById("role-" + id)?.value || null;
-  act(`/api/tasks/${encodeURIComponent(id)}/approve`, {accept, role}, accept ? "已通过" : "已打回");
+  const role = document.querySelector(".role-" + CSS.escape(id))?.value || null;
+  act(`/api/tasks/${encodeURIComponent(id)}/approve`, {accept, role});
 }
 
 async function renderDetail(){
   const n = GRAPH.find(x => x.id === selNode);
-  if (!n){ $("#detail").innerHTML = `<div class="empty">点选左侧节点</div>`; return; }
+  if (!n){ $("#detail").innerHTML = `<div class="empty">${t("flow.pick")}</div>`; return; }
   const tid = selTask || (n.type === "task" ? n.tasks[0].id : null);
-  let t = null; if (tid) { try { t = await api(`/api/tasks/${encodeURIComponent(tid)}`); } catch {} }
-  const key = n.id + n.updated + (t ? t.updated + t.state : "");
-  if (key === detailKey && !(t && LIVE.has(t.state))) return;
-  const playing = [...document.querySelectorAll("#detail video")].some(v => !v.paused);
-  if (playing && key.startsWith(detailKey.slice(0, n.id.length))) return;
+  let tk = null; if (tid) { try { tk = await api(`/api/tasks/${encodeURIComponent(tid)}`); } catch {} }
+  const key = LANG + n.id + n.updated + (tk ? tk.updated + tk.state : "");
+  if (key === detailKey && !(tk && LIVE.has(tk.state))) return;
+  if ([...document.querySelectorAll("#detail video")].some(v => !v.paused) && key.slice(0, 40) === detailKey.slice(0, 40)) return;
   detailKey = key;
   let html = "";
   if (n.type === "round"){
     const d = n.decision || {};
-    html += `<dl><dt>轮次</dt><dd>${esc(n.title)} · ${badge(n.state)}</dd><dt>模板</dt><dd>${esc(n.template)} / ${esc(n.tier || "")}</dd>
-      ${d.action ? `<dt>决定</dt><dd>${esc(({select:"选中",refine:"微调",redo:"整轮重做",reject:"打回",cancel:"取消"})[d.action] || d.action)}${d.idx ? " #" + d.idx : ""}${d.role ? " · 锁定为 " + esc(d.role) : ""}${d.note ? " · " + esc(d.note) : ""}</dd>` : ""}</dl>
+    html += `<dl><dt>${t("round")}</dt><dd>${esc(n.title)} · ${badge(n.state)}</dd><dt>${t("template")}</dt><dd>${esc(n.template)} / ${esc(n.tier || "")}</dd>
+      ${d.action ? `<dt>${t("decision")}</dt><dd>${esc(decName(d))}${d.role ? esc(t("locked.as", {r: d.role})) : ""}${d.note ? " · " + esc(d.note) : ""}</dd>` : ""}</dl>
       <div class="grid">${n.tasks.map(c => `<div class="cand ${c.id === tid ? "hl" : ""} ${d.task_id === c.id ? "picked" : ""}" onclick="selTask='${esc(c.id)}';detailKey='';renderDetail()" style="cursor:pointer">
         <div class="media">${media(c, (c.outputs || [])[0], "", false)}</div>
         <div class="row"><span class="idx">#${c.idx}</span>${badge(c.state)}</div></div>`).join("")}</div>
-      ${n.state === "review" ? `<div class="actions" style="margin-top:10px"><button class="btn" onclick="show('review')">去审阅 →</button></div>` : ""}`;
-    if (t) html += `<h2 style="margin:16px 0 4px;font-size:13px;color:var(--muted)">候选 #${t.idx} 的流水线</h2>` + taskHtml(t);
-  } else if (t) html = taskHtml(t);
+      ${n.state === "review" ? `<div class="actions" style="margin-top:10px"><button class="btn" onclick="show('review')">${t("goto.review")}</button></div>` : ""}
+      ${n.state === "closed" && d.action && d.action !== "cancel" ? `<div class="actions" style="margin-top:10px"><button class="btn" onclick="reopenRound('${esc(n.id)}')">${t("reopen")}</button></div>` : ""}
+      ${(d.history || []).length ? `<details><summary>${t("dec.history")} (${d.history.length})</summary><ol class="events">${d.history.map(h => `<li>${esc(decName(h))}${h.role ? esc(t("locked.as", {r: h.role})) : ""}${h.note ? " · " + esc(h.note) : ""}</li>`).join("")}</ol></details>` : ""}`;
+    if (tk) html += `<h3 class="sub">${t("pipe.of", {n: tk.idx})}</h3>` + taskHtml(tk);
+  } else if (tk) html = taskHtml(tk);
   $("#detail").innerHTML = html;
 }
 
-/* ---------- 审阅 ---------- */
+async function reopenRound(id){
+  if (!confirm(t("reopen.confirm"))) return;
+  await act(`/api/rounds/${encodeURIComponent(id)}/reopen`, {}); detailKey = ""; keys = {};
+}
+
+/* ================= manual tweak (W1) ================= */
+async function openTweak(taskId){
+  let tk, tpl;
+  try { tk = await api(`/api/tasks/${encodeURIComponent(taskId)}`); tpl = await api(`/api/templates/${encodeURIComponent(tk.template)}`); }
+  catch(e){ return toast(t("not.done") + e.message, true); }
+  const field = (name, s) => {
+    const v = tk.params[name];
+    if (s.type === "str") return `<textarea class="in" name="${name}" rows="${name === "prompt" ? 7 : 2}">${esc(v ?? "")}</textarea>`;
+    if (s.type === "bool") return `<input type="checkbox" name="${name}" ${v ? "checked" : ""}>`;
+    if (s.type === "image") return `<input type="text" name="${name}" value="${esc(v ?? "")}" placeholder="@pack:… / @task:… / @upload:… / path">`;
+    const step = s.type === "int" ? (s.multiple_of || 1) : "any";
+    return `<input type="number" name="${name}" value="${esc(v ?? "")}" ${s.min != null ? `min="${s.min}"` : ""} ${s.max != null ? `max="${s.max}"` : ""} step="${step}">`;
+  };
+  const tiers = Object.entries(tpl.tiers).map(([k, v]) => `<option value="${k}" ${k === tk.tier ? "selected" : ""}>${k} ${Object.entries(v).filter(([a]) => a !== "verified").map(([a, b]) => `${a}=${b}`).join(" ")} ${v.verified ? "" : t("unverified")}</option>`).join("");
+  modal(`<h2>${t("tweak.title")}</h2><div class="hint" style="margin-bottom:10px">${esc(tk.template)} · ${esc(tk.id)}</div>
+    <form class="form" id="tweak-form">
+      ${Object.entries(tpl.slots).map(([n, s]) => `<label>${esc(n)}</label><div>${field(n, s)}</div>`).join("")}
+      <label>${t("tier")}</label><div><select class="sm" name="__tier">${tiers}</select></div>
+      <label>${t("count")}</label><div><input type="number" name="__n" value="1" min="1" max="8"></div>
+    </form>
+    <div class="actions" style="margin-top:14px;justify-content:flex-end">
+      <button class="btn" onclick="closeModal()">${t("cancel")}</button>
+      <button class="btn primary" id="tweak-go">${t("submit")}</button></div>`);
+  $("#tweak-go").onclick = async () => {
+    const f = $("#tweak-form"), params = {};
+    Object.entries(tpl.slots).forEach(([n, s]) => {
+      const el = f.elements[n]; if (!el) return;
+      let v = s.type === "bool" ? el.checked : el.value;
+      if (s.type === "int") v = v === "" ? undefined : parseInt(v, 10);
+      if (s.type === "float") v = v === "" ? undefined : parseFloat(v);
+      if (v !== undefined && JSON.stringify(v) !== JSON.stringify(tk.params[n])) params[n] = v;
+    });
+    const r = await act(`/api/tasks/${encodeURIComponent(taskId)}/tweak`, {params, tier: f.elements.__tier.value, n: parseInt(f.elements.__n.value, 10) || 1});
+    if (r) { closeModal(); selNode = r.id; selTask = null; keys.g = ""; }
+  };
+}
+
+/* ================= review ================= */
 function renderReview(){
   const box = $("#review");
-  if (!REVIEW.length){ box.innerHTML = `<div class="empty">没有待审阅的内容。新一轮候选出来后会出现在这里（也会推送到 Telegram）。</div>`; return; }
+  if (!REVIEW.length){ box.innerHTML = `<div class="empty">${t("review.empty")}</div>`; return; }
   reviewActive = Math.min(reviewActive, REVIEW.length - 1);
   const proj = Object.fromEntries(PROJECTS.map(p => [p.id, p.name]));
   box.innerHTML = REVIEW.map((it, i) => {
     const isRound = it.type === "round";
-    const cands = it.tasks.map(t => `<div class="cand ${i === reviewActive && (t.idx || 1) === hlIdx ? "hl" : ""}" data-idx="${t.idx || 1}">
-      <div class="media">${media(t, (t.outputs || [])[0])}</div>
-      <div class="row"><span class="idx">#${t.idx || 1}</span>${badge(t.state)}</div>
-      ${t.state === "review" ? `<div class="row">
-        <select class="sm role" aria-label="锁定角色"><option value="">不锁定</option>${ROLES.map(r => `<option>${r}</option>`).join("")}</select>
-        <button class="btn primary" onclick="pass(${i}, ${t.idx || 1}, this)">✅ 通过</button>
-        ${isRound ? `<button class="btn" onclick="openNote(${i}, 'f', ${t.idx})">🔧 微调</button>` : ""}</div>
-      ${isRound ? `<div class="note" id="note-f-${i}-${t.idx}"><textarea placeholder="对 #${t.idx} 的微调说明，例如：眼神更忧伤，光打侧面"></textarea><button class="btn primary" onclick="sendNote(${i}, 'f', ${t.idx})">发送</button></div>` : ""}` : ""}
-      ${t.error ? `<div class="err">${esc(t.error)}</div>` : ""}</div>`).join("");
+    const cands = it.tasks.map(tk => `<div class="cand ${i === reviewActive && (tk.idx || 1) === hlIdx ? "hl" : ""}" data-idx="${tk.idx || 1}">
+      <div class="media">${media(tk, (tk.outputs || [])[0])}</div>
+      <div class="row"><span class="idx">#${tk.idx || 1}</span>${badge(tk.state)}</div>
+      ${tk.state === "review" ? `<div class="row">${roleSelect()}
+        <button class="btn primary" onclick="pass(${i}, ${tk.idx || 1}, this)">${t("approve")}</button></div>
+      <div class="row">${isRound ? `<button class="btn" onclick="openNote(${i}, 'f', ${tk.idx})">${t("refine")}</button>` : ""}
+        <button class="btn" onclick="openTweak('${esc(tk.id)}')">${t("tweak")}</button></div>
+      ${isRound ? `<div class="note" id="note-f-${i}-${tk.idx}"><textarea placeholder="${esc(t("note.refine", {n: tk.idx}))}"></textarea><button class="btn primary" onclick="sendNote(${i}, 'f', ${tk.idx})">${t("send")}</button></div>` : ""}` : ""}
+      ${tk.error ? `<div class="err">${esc(tk.error)}</div>` : ""}</div>`).join("");
     return `<div class="card review-item ${i === reviewActive ? "active" : ""}" data-i="${i}">
       <h2>${esc(it.title || it.template)} <span class="badge idle">${esc(it.template)} / ${esc(it.tier || "")}</span>
         <span class="hint">${esc(proj[it.project_id] || "")} · ${fmtT(it.created)}</span><span class="sp"></span>
-        ${isRound ? `<button class="btn" onclick="act('/api/rounds/${it.id}/redo', {}, '已排队整轮重做')">🎲 整轮重做</button>
-          <button class="btn danger" onclick="openNote(${i}, 'x')">↩️ 打回+批注</button>`
-        : `<button class="btn" onclick="act('/api/tasks/${it.id}/redo', {}, '已排队重做')">🎲 重做</button>
-          <button class="btn danger" onclick="act('/api/tasks/${it.id}/approve', {accept:false}, '已打回')">↩️ 打回</button>`}</h2>
-      ${isRound ? `<div class="note" id="note-x-${i}"><textarea placeholder="打回原因 / 改进方向（留空 = 只打回不重出）"></textarea><button class="btn primary" onclick="sendNote(${i}, 'x')">发送</button></div>` : ""}
+        ${isRound ? `<button class="btn" onclick="act('/api/rounds/${it.id}/redo', {})">${t("redo.round")}</button>
+          <button class="btn danger" onclick="openNote(${i}, 'x')">${t("reject.note")}</button>`
+        : `<button class="btn" onclick="act('/api/tasks/${it.id}/redo', {})">${t("redo")}</button>
+          <button class="btn danger" onclick="act('/api/tasks/${it.id}/approve', {accept:false})">${t("reject")}</button>`}</h2>
+      ${isRound ? `<div class="note" id="note-x-${i}"><textarea placeholder="${esc(t("note.reject"))}"></textarea><button class="btn primary" onclick="sendNote(${i}, 'x')">${t("send")}</button></div>` : ""}
       <div class="grid">${cands}</div></div>`;
   }).join("");
   box.querySelectorAll(".review-item").forEach(el => el.addEventListener("click", () => {
@@ -439,8 +630,8 @@ function markReview(){
 }
 function pass(i, idx, btn){
   const it = REVIEW[i], role = btn.closest(".cand").querySelector(".role")?.value || null;
-  if (it.type === "round") act(`/api/rounds/${it.id}/select`, {idx, role}, `已通过 #${idx}` + (role ? `，锁定为${role}` : ""));
-  else act(`/api/tasks/${it.id}/approve`, {accept:true, role}, "已通过");
+  if (it.type === "round") act(`/api/rounds/${it.id}/select`, {idx, role});
+  else act(`/api/tasks/${it.id}/approve`, {accept:true, role});
 }
 function openNote(i, kind, idx){
   const el = document.getElementById(kind === "f" ? `note-f-${i}-${idx}` : `note-x-${i}`);
@@ -449,11 +640,11 @@ function openNote(i, kind, idx){
 function sendNote(i, kind, idx){
   const it = REVIEW[i], el = document.getElementById(kind === "f" ? `note-f-${i}-${idx}` : `note-x-${i}`);
   const note = el.querySelector("textarea").value.trim();
-  if (kind === "f"){ if (!note) return toast("请写一句微调说明", true); act(`/api/rounds/${it.id}/refine`, {idx, note}); }
-  else act(`/api/rounds/${it.id}/reject`, {note}, "已打回");
+  if (kind === "f"){ if (!note) return toast(t("need.note"), true); act(`/api/rounds/${it.id}/refine`, {idx, note}); }
+  else act(`/api/rounds/${it.id}/reject`, {note});
 }
 document.addEventListener("keydown", e => {
-  if (view !== "review" || ["TEXTAREA","INPUT","SELECT"].includes(e.target.tagName) || !REVIEW.length) return;
+  if (view !== "review" || $("#modal").classList.contains("on") || ["TEXTAREA","INPUT","SELECT"].includes(e.target.tagName) || !REVIEW.length) return;
   const it = REVIEW[reviewActive], n = it.tasks.length;
   if (/^[1-9]$/.test(e.key) && +e.key <= n){ hlIdx = +e.key; markReview(); }
   else if (e.key === "j" || e.key === "J"){ reviewActive = Math.min(reviewActive + 1, REVIEW.length - 1); hlIdx = 1; markReview(); document.querySelector(".review-item.active")?.scrollIntoView({block:"nearest"}); }
@@ -461,98 +652,172 @@ document.addEventListener("keydown", e => {
   else if (e.key === "Enter"){ const b = document.querySelector(`.review-item.active .cand[data-idx="${hlIdx}"] .btn.primary`); if (b) b.click(); }
   else if ((e.key === "f" || e.key === "F") && it.type === "round"){ e.preventDefault(); openNote(reviewActive, "f", hlIdx); }
   else if (e.key === "x" || e.key === "X"){ e.preventDefault(); if (it.type === "round") openNote(reviewActive, "x"); }
-  else if (e.key === "r" || e.key === "R"){ act(it.type === "round" ? `/api/rounds/${it.id}/redo` : `/api/tasks/${it.id}/redo`, {}, "已排队重做"); }
+  else if (e.key === "r" || e.key === "R"){ act(it.type === "round" ? `/api/rounds/${it.id}/redo` : `/api/tasks/${it.id}/redo`, {}); }
 });
 
-/* ---------- 项目与对话 ---------- */
+/* ================= projects, sessions, memory, chat ================= */
 function renderProjects(){
   const f = $("#proj-filter").value;
   const list = PROJECTS.filter(p => !f || p.state === f);
   $("#plist").innerHTML = list.length ? list.map(p => `<div class="pitem ${p.id === selProject ? "sel" : ""}" data-id="${esc(p.id)}">
       ${p.cover ? `<img src="${fileUrl(p.cover.task_id, p.cover.file)}" alt="" loading="lazy">` : `<div class="ph"></div>`}
-      <div class="m"><div class="n">${esc(p.name)}${SYS && SYS.project.id === p.id ? " · 当前" : ""}</div>
-      <div class="x">${badge(p.state)} ${p.rounds} 轮 · ${p.tasks} 个任务${p.pack_version ? " · 基准包 v" + p.pack_version : ""}</div>
-      <div class="x">更新于 ${fmtT(p.updated)}</div></div></div>`).join("") : `<div class="empty">没有项目</div>`;
-  document.querySelectorAll(".pitem").forEach(el => el.onclick = () => { selProject = el.dataset.id; lastMsgId = 0; renderProjects(); loadProject(true); });
+      <div class="m"><div class="n">${esc(p.name)}${SYS && SYS.project.id === p.id ? " · " + t("current") : ""}</div>
+      <div class="x">${badge(p.state)} ${t("x.tasks", {r: p.rounds, t: p.tasks})}${p.pack_version ? t("pack.v", {v: p.pack_version}) : ""}</div>
+      <div class="x">${t("updated", {t: fmtT(p.updated)})}</div></div></div>`).join("") : `<div class="empty">—</div>`;
+  document.querySelectorAll(".pitem").forEach(el => el.onclick = () => { selProject = el.dataset.id; selSession = null; renderProjects(); loadProject(true); });
 }
+let PDATA = null, MSGS = [], msgKey = "";
 async function loadProject(force){
-  if (!selProject) return;
+  if (!selProject){ $("#pdetail").innerHTML = `<div class="empty">${t("p.empty")}</div>`; return; }
   let p; try { p = await api(`/api/projects/${encodeURIComponent(selProject)}`); } catch { return; }
-  const lastId = p.messages.length ? p.messages[p.messages.length - 1].id : 0;
-  if (!force && lastId === lastMsgId && loadProject.k === p.updated) return;
-  loadProject.k = p.updated;
-  const isCurrent = SYS && SYS.project.id === p.id;
-  const packs = p.packs.length ? p.packs.map(v => `<div class="packv"><span class="v">v${v.version}</span>
+  if (!selSession || !p.sessions.some(s => s.id === selSession)) selSession = p.current_session || p.sessions[0]?.id || null;
+  let msgs = []; if (selSession) { try { msgs = await api(`/api/sessions/${encodeURIComponent(selSession)}/messages`); } catch {} }
+  const k = LANG + ptab + selSession + p.updated + JSON.stringify(p.memories.map(m => m.updated)) + (msgs.at(-1)?.id || 0) + p.sessions.length;
+  if (!force && k === msgKey) return;
+  msgKey = k; PDATA = p; MSGS = msgs;
+  const isCurrentProject = SYS && SYS.project.id === p.id;
+  const canChat = isCurrentProject && selSession === p.current_session && p.state === "active";
+  const chat = $("#pdetail .chat"), atBottom = !chat || chat.scrollHeight - chat.scrollTop - chat.clientHeight < 40;
+  const tabs = ["chat","memory","rounds","pack"].map(x => `<button class="tab ${ptab === x ? "on" : ""}" onclick="ptab='${x}';loadProject(true)">${t("pt." + x)}${x === "memory" && p.memories.some(m => m.status === "proposed") ? ` <span class="count">${p.memories.filter(m => m.status === "proposed").length}</span>` : ""}</button>`).join("");
+  let body = "";
+  if (ptab === "chat") body = chatHtml(p, msgs, canChat);
+  if (ptab === "memory") body = memoryHtml(p);
+  if (ptab === "rounds") body = roundsHtml(p);
+  if (ptab === "pack") body = packHtml(p);
+  $("#pdetail").innerHTML = `<h2>${esc(p.name)} ${badge(p.state)}<span class="sp"></span>
+      ${isCurrentProject ? `<span class="badge ok">${t("current")}</span>` : `<button class="btn" onclick="act('/api/projects/${esc(p.id)}/use', {})">${t("set.current")}</button>`}
+      ${p.state === "active" ? `<button class="btn" onclick="if(confirm(t('confirm.done'))) act('/api/projects/${esc(p.id)}/done', {})">${t("mark.done")}</button>` : ""}</h2>
+    <div class="hint">${t("p.created", {a: fmtT(p.created), b: fmtT(p.updated)})}${p.note ? " · " + esc(p.note) : ""}</div>
+    <div class="ptabs">${tabs}</div>${body}`;
+  const nc = $("#pdetail .chat"); if (nc && (atBottom || force)) nc.scrollTop = nc.scrollHeight;
+  if (ptab === "chat") bindChat();
+}
+function chatHtml(p, msgs, canChat){
+  const sess = p.sessions.map(s => `<span class="sess ${s.id === selSession ? "on" : ""}" onclick="selSession='${esc(s.id)}';loadProject(true)">${esc(s.title || s.id)}${s.id === p.current_session ? " ●" : ""}<span class="c">${s.n_messages}</span></span>`).join("");
+  const bubbles = msgs.map(m => {
+    const cls = m.channel === "system" ? "sys" : m.direction === "in" ? "in" : "out";
+    const st = m.meta || {};
+    const extra = m.channel === "llm" && st.seconds != null ? " · " + t("llm.stats", {s: st.seconds, t: st.prompt_tokens ?? "?", c: st.prompt_tokens ? Math.round(100 * (st.cached_tokens_est || 0) / st.prompt_tokens) : 0}) + (st.load_s ? t("load", {l: st.load_s}) : "") : "";
+    const att = (st.attachments || []).map(a => `<img class="att" src="/uploads/${encodeURIComponent(a.id)}" alt="${esc(a.name)}">`).join("");
+    const btns = canChat && st.buttons ? `<div class="btns">${st.buttons.flat().map(([lbl, data]) => `<button class="btn sm" onclick="pressBtn('${esc(data)}')">${esc(lbl)}</button>`).join("")}</div>` : "";
+    return `<div class="msg ${cls}"><span class="meta">${t("who." + m.channel)} · ${fmtT(m.ts)}${esc(extra)}</span>${esc(m.text)}${att}${btns}</div>`;
+  }).join("") || `<div class="hint">${t("chat.empty")}</div>`;
+  return `<h3 class="sub">${t("sessions")}<span class="sessions">${sess}</span>
+      ${p.state === "active" ? `<button class="btn sm" onclick="newSession()">${t("new.session")}</button>` : ""}
+      ${selSession && selSession !== p.current_session && p.state === "active" ? `<button class="btn sm" onclick="act('/api/sessions/${esc(selSession)}/use', {})">${t("set.current")}</button>` : ""}
+      ${selSession ? `<button class="btn sm" onclick="renameSession()">${t("rename")}</button><button class="btn sm" onclick="showContext()">${t("ctx.view")}</button>` : ""}</h3>
+    <div class="chat">${bubbles}</div>
+    ${canChat ? `<form class="chatbox" id="chatform"><label class="btn" style="margin:0">${t("attach")}<input type="file" id="chat-file" accept="image/*,video/mp4" hidden multiple></label>
+      <input type="text" id="chat-in" placeholder="${esc(t("chat.ph"))}" autocomplete="off"><button class="btn primary">${t("send")}</button></form>
+      <div class="chips" id="chips"></div>` : `<div class="hint" style="margin-top:8px">${t("chat.readonly")}</div>`}`;
+}
+function bindChat(){
+  const f = $("#chatform"); if (!f) return;
+  renderChips();
+  f.onsubmit = async e => {
+    e.preventDefault(); const inp = $("#chat-in"), text = inp.value.trim(); if (!text && !pending.length) return;
+    inp.value = ""; const atts = pending.map(x => x.id); pending = [];
+    await act("/api/chat", {text: text || "(image)", attachments: atts}); loadProject(true);
+  };
+  $("#chat-file").onchange = async e => {
+    for (const file of e.target.files){
+      toast(t("uploading"));
+      try {
+        const r = await fetch(`/api/upload?name=${encodeURIComponent(file.name)}`, {method:"POST", body:file});
+        const j = await r.json(); if (!r.ok) throw new Error(j.detail || r.status);
+        pending.push(j); renderChips();
+      } catch(err){ toast(t("not.done") + err.message, true); }
+    }
+    e.target.value = "";
+  };
+}
+function renderChips(){
+  const c = $("#chips"); if (!c) return;
+  c.innerHTML = pending.map((x, i) => `<span class="chip"><img src="/uploads/${encodeURIComponent(x.id)}" alt="">${esc(x.name)} <button class="btn sm" onclick="pending.splice(${i},1);renderChips()">×</button></span>`).join("");
+}
+async function pressBtn(data){ await act("/api/action", {data}); loadProject(true); }
+async function newSession(){ const title = prompt(t("rename.ph")); const s = await act("/api/sessions", {title: title || null}); if (s) { selSession = s.id; loadProject(true); } }
+async function renameSession(){ const title = prompt(t("rename.ph")); if (title) { await act(`/api/sessions/${encodeURIComponent(selSession)}/rename`, {title}); loadProject(true); } }
+async function showContext(){
+  let c; try { c = await api(`/api/sessions/${encodeURIComponent(selSession)}/context`); } catch(e){ return toast(t("not.done") + e.message, true); }
+  modal(`<h2>${t("ctx.title")}<span class="sp" style="flex:1"></span><span class="badge idle">${t("ctx.chars", {n: c.chars})}</span></h2>
+    <div class="hint">${esc(t("ctx.note", {f: c.rules_file}))}</div>
+    ${c.messages.map((m, i) => `<div class="ctxmsg"><div class="r"><b>${i + 1}. ${esc(m.role)}</b><span>${m.content.length}</span></div><pre>${esc(m.content)}</pre></div>`).join("")}
+    <div class="actions" style="justify-content:flex-end"><button class="btn" onclick="closeModal()">${t("close")}</button></div>`);
+}
+function memoryHtml(p){
+  const by = s => p.memories.filter(m => m.status === s);
+  const row = (m, ops) => `<div class="mem ${m.status === "archived" ? "arch" : ""}"><span class="tx">${m.pinned ? '<span class="pin">📌 </span>' : ""}${esc(m.text)} <span class="hint">#${m.id}</span></span>
+    <span class="actions">${ops.map(op => `<button class="btn sm" onclick="memOp(${m.id}, '${op}')">${t(op)}</button>`).join("")}</span></div>`;
+  const active = by("active"), prop = by("proposed"), arch = by("archived");
+  return `${prop.length ? `<h3 class="sub">${t("mem.proposed")}</h3>${prop.map(m => row(m, ["accept","ignore"])).join("")}` : ""}
+    <h3 class="sub">${t("mem.active")}</h3>${active.map(m => row(m, ["edit", m.pinned ? "unpin" : "pin", "archive"])).join("") || `<div class="hint">${t("mem.empty")}</div>`}
+    ${p.state === "active" ? `<form class="chatbox" onsubmit="addMem(event)"><input type="text" id="mem-in" placeholder="${esc(t("mem.add"))}"><button class="btn primary">${t("add")}</button></form>` : ""}
+    ${arch.length ? `<details><summary>${t("mem.archived")} (${arch.length})</summary>${arch.map(m => row(m, ["restore"])).join("")}</details>` : ""}`;
+}
+async function memOp(id, op){
+  let text = null;
+  if (op === "edit"){ const m = PDATA.memories.find(x => x.id === id); text = prompt(t("edit"), m?.text || ""); if (!text) return; }
+  await act(`/api/memories/${id}/${op}`, {text}); loadProject(true);
+}
+async function addMem(e){ e.preventDefault(); const v = $("#mem-in").value.trim(); if (v) { await act("/api/memories", {text: v}); loadProject(true); } }
+function roundsHtml(p){
+  return `<div class="timeline">${p.rounds.map(r => `<div class="r">${badge(r.state)} <a href="#" onclick="selNode='${esc(r.id)}';$('#flow-project').value='${esc(p.id)}';show('flow');return false">${esc(r.title || r.template)}</a>
+      <span class="hint">× ${r.n} · ${fmtT(r.created)}${r.decision?.action ? " · " + esc(decName(r.decision)) : ""}${r.request ? " · “" + esc(r.request.slice(0, 50)) + "”" : ""}</span>
+      ${r.state === "closed" && r.decision?.action && r.decision.action !== "cancel" && p.state === "active" ? `<button class="btn sm" onclick="reopenRound('${esc(r.id)}')">${t("reopen")}</button>` : ""}</div>`).join("") || `<div class="hint">${t("rounds.empty")}</div>`}</div>`;
+}
+function packHtml(p){
+  return `<div class="packs">${p.packs.map(v => `<div class="packv"><span class="v">v${v.version}</span>
       ${Object.entries(v.assets).map(([role, a]) => {
         const name = a.file.split("/").pop(), u = `/packfile/${encodeURIComponent(p.id)}/v${v.version}/${encodeURIComponent(name)}`;
         return `<figure>${a.kind === "video" ? `<video src="${u}" muted preload="metadata"></video>` : `<img src="${u}" alt="${esc(role)}">`}${esc(role)}</figure>`;
-      }).join("")}<span class="hint">${esc(v.note || "")} · ${fmtT(v.created)}</span></div>`).join("") : `<div class="hint">还没有锁定任何资产。审阅时“通过”并选择角色即可锁定。</div>`;
-  const rounds = p.rounds.length ? p.rounds.map(r => `<div class="r">${badge(r.state)} <a href="#" onclick="selNode='${esc(r.id)}';$('#flow-project').value='${esc(p.id)}';show('flow');return false">${esc(r.title || r.template)}</a>
-      <span class="hint">× ${r.n} · ${fmtT(r.created)}${r.decision?.action ? " · " + esc(({select:"选中 #" + r.decision.idx, refine:"微调 #" + r.decision.idx, redo:"重做", reject:"打回", cancel:"取消"})[r.decision.action] || "") : ""}${r.request ? " · “" + esc(r.request.slice(0, 40)) + "”" : ""}</span></div>`).join("") : `<div class="hint">还没有轮次</div>`;
-  const msgs = p.messages.map(m => {
-    const cls = m.channel === "system" ? "sys" : m.direction === "in" ? "in" : "out";
-    const who = {telegram:"Telegram", web:"控制台", llm:"LLM", system:"系统", cli:"CLI"}[m.channel] || m.channel;
-    const extra = m.channel === "llm" && m.meta?.seconds != null ? ` · ${m.meta.seconds}s${m.meta.load_s ? "（含加载 " + m.meta.load_s + "s）" : ""}` : "";
-    return `<div class="msg ${cls}"><span class="meta">${who} · ${fmtT(m.ts)}${extra}</span>${esc(m.text)}</div>`;
-  }).join("") || `<div class="hint">还没有对话。</div>`;
-  const chat = $("#pdetail .chat"), atBottom = !chat || chat.scrollHeight - chat.scrollTop - chat.clientHeight < 40;
-  $("#pdetail").innerHTML = `<h2>${esc(p.name)} ${badge(p.state)}<span class="sp"></span>
-      ${isCurrent ? `<span class="badge ok">当前项目</span>` : `<button class="btn" onclick="act('/api/projects/${esc(p.id)}/use', {}, '已切换')">设为当前</button>`}
-      ${p.state === "active" ? `<button class="btn" onclick="if(confirm('标记完成？历史会永久保留，排队任务会取消。')) act('/api/projects/${esc(p.id)}/done', {}, '已标记完成')">标记完成</button>` : ""}</h2>
-    <div class="hint">创建于 ${fmtT(p.created)} · 更新于 ${fmtT(p.updated)}${p.note ? " · " + esc(p.note) : ""}</div>
-    <h2 style="margin-top:16px">导演基准包</h2><div class="packs">${packs}</div>
-    <h2 style="margin-top:16px">轮次</h2><div class="timeline">${rounds}</div>
-    <h2 style="margin-top:16px">对话历史</h2><div class="chat">${msgs}</div>
-    ${isCurrent ? `<form class="chatbox" onsubmit="sendChat(event)"><input id="chat-in" placeholder="描述需求或输入命令（/help），与 Telegram 相同" autocomplete="off"><button class="btn primary">发送</button></form>`
-      : `<div class="hint" style="margin-top:8px">只读历史。要继续对话，先“设为当前”。</div>`}`;
-  const nc = $("#pdetail .chat"); if (atBottom || force) nc.scrollTop = nc.scrollHeight;
-  lastMsgId = lastId;
-}
-async function sendChat(e){
-  e.preventDefault(); const inp = $("#chat-in"), text = inp.value.trim(); if (!text) return;
-  inp.value = ""; await act("/api/chat", {text}); loadProject(true);
+      }).join("")}<span class="hint">${esc(v.note || "")} · ${fmtT(v.created)}</span></div>`).join("") || `<div class="hint">${t("pack.empty")}</div>`}</div>`;
 }
 
-/* ---------- 画廊 ---------- */
+/* ================= gallery ================= */
 function renderGallery(){
-  const items = TASKS.flatMap(t => (t.outputs || []).map(o => ({t, o}))).filter(x => galleryKind === "all" || x.o.kind === galleryKind);
-  $("#gallery").innerHTML = items.length ? items.map(({t, o}) => `<div class="item">${media(t, o)}
-      <div class="cap"><span title="${esc(t.title || t.template)}">${esc(t.title || t.template)}</span>${badge(t.state)}</div></div>`).join("")
-    : `<div class="empty">还没有产物</div>`;
+  const items = TASKS.flatMap(tk => (tk.outputs || []).map(o => ({tk, o}))).filter(x => galleryKind === "all" || x.o.kind === galleryKind);
+  $("#gallery").innerHTML = items.length ? items.map(({tk, o}) => `<div class="item">${media(tk, o)}
+      <div class="cap"><span title="${esc(tk.title || tk.template)}">${esc(tk.title || tk.template)}</span>${badge(tk.state)}</div></div>`).join("")
+    : `<div class="empty">${t("no.outputs")}</div>`;
 }
 
-/* ---------- 刷新 ---------- */
+/* ================= refresh ================= */
 let keys = {};
-async function refreshAll(){
+async function refreshAll(force){
   await pollSystem();
   try { PROJECTS = await api("/api/projects"); } catch {}
   const sel = $("#flow-project"), cur = sel.value;
-  sel.innerHTML = `<option value="">全部项目</option>` + PROJECTS.map(p => `<option value="${esc(p.id)}">${esc(p.name)}（${esc(stateName(p.state))}）</option>`).join("");
+  sel.innerHTML = `<option value="">${t("flow.all")}</option>` + PROJECTS.map(p => `<option value="${esc(p.id)}">${esc(p.name)} (${esc(stateName(p.state))})</option>`).join("");
   sel.value = cur;
   if (view === "flow"){
     try { GRAPH = await api("/api/graph" + (sel.value ? `?project=${encodeURIComponent(sel.value)}` : "")); } catch { return; }
-    const k = GRAPH.map(n => n.id + n.updated + n.tasks.map(t => t.updated).join()).join("|");
-    if (k !== keys.g){ keys.g = k; renderDag(); }
+    const k = LANG + GRAPH.map(n => n.id + n.updated + n.tasks.map(x => x.updated).join()).join("|");
+    if (force || k !== keys.g){ keys.g = k; renderDag(); }
     if (!selNode && GRAPH.length){ selNode = [...GRAPH].sort((a,b) => b.updated - a.updated)[0].id; renderDag(); }
     renderDetail();
   } else if (view === "review"){
     try { REVIEW = await api("/api/review"); } catch { return; }
-    const k = REVIEW.map(r => r.id + r.tasks.map(t => t.updated).join()).join("|");
-    if (k !== keys.r){ keys.r = k; renderReview(); }
+    const k = LANG + REVIEW.map(r => r.id + r.tasks.map(x => x.updated).join()).join("|");
+    if (force || k !== keys.r){ keys.r = k; renderReview(); }
   } else if (view === "projects"){
-    const k = PROJECTS.map(p => p.id + p.updated).join("|") + (SYS && SYS.project.id);
-    if (k !== keys.p){ keys.p = k; renderProjects(); }
-    if (!selProject && SYS){ selProject = SYS.project.id; renderProjects(); loadProject(true); }
-    else loadProject(false);
+    const k = LANG + PROJECTS.map(p => p.id + p.updated).join("|") + (SYS && SYS.project.id);
+    if (force || k !== keys.p){ keys.p = k; renderProjects(); }
+    if (!selProject && SYS){ selProject = SYS.project.id; renderProjects(); }
+    loadProject(!!force);
   } else if (view === "gallery"){
     try { TASKS = await api("/api/tasks"); } catch { return; }
-    const k = TASKS.map(t => t.id + t.updated).join("|") + galleryKind;
-    if (k !== keys.gal){ keys.gal = k; renderGallery(); }
+    const k = LANG + TASKS.map(x => x.id + x.updated).join("|") + galleryKind;
+    if (force || k !== keys.gal){ keys.gal = k; renderGallery(); }
   }
 }
 (async () => {
   try { META = await api("/api/meta"); } catch {}
-  show(location.hash.slice(1) || "flow"); setInterval(refreshAll, 3000);
+  if (!LANG){ try { LANG = (await api("/api/settings")).language || "en"; } catch { LANG = "en"; } }
+  if (!I18N[LANG]) LANG = "en";
+  applyStatic();
+  show(location.hash.slice(1) || "flow");
+  setInterval(() => { if (!$("#modal").classList.contains("on") && !(document.activeElement && ["INPUT","TEXTAREA"].includes(document.activeElement.tagName))) refreshAll(); }, 3000);
 })();
 </script>
 </body>

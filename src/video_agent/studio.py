@@ -10,6 +10,7 @@ import random
 import shutil
 from pathlib import Path
 
+from .i18n import tr
 from .render import TIER_KEYS
 from .scheduler import Orchestrator
 from .store import Store
@@ -36,14 +37,14 @@ class Studio:
         if p and p["state"] == "active":
             return p
         actives = [p for p in self.store.list_projects() if p["state"] == "active"]
-        p = actives[0] if actives else self.store.create_project("默认项目")
+        p = actives[0] if actives else self.store.create_project(tr("default_project"))
         self.store.set_kv("current_project", p["id"])
         return p
 
     def new_project(self, name: str, note: str | None = None) -> dict:
         p = self.store.create_project(name, note)
         self.store.set_kv("current_project", p["id"])
-        self.log("system", "out", f"新建并切换到项目「{name}」", p["id"])
+        self.log("system", "out", tr("log_project_new", n=name), p["id"])
         return p
 
     def use_project(self, key: str) -> dict:
@@ -60,7 +61,7 @@ class Studio:
         pid = project_id or self.current_project()["id"]
         self.cancel_queued(pid, "项目已完成")
         p = self.store.update_project(pid, state="done", note=note)
-        self.log("system", "out", f"项目「{p['name']}」已标记完成", pid)
+        self.log("system", "out", tr("log_project_done", n=p["name"]), pid)
         if self.store.get_kv("current_project") == pid:
             self.store.set_kv("current_project", None)
         return p
@@ -86,20 +87,25 @@ class Studio:
         s = sid and self.store.get_session(sid)
         if s and s["state"] == "open":
             return s
+        self._adopt_history(pid)
         existing = [x for x in self.store.sessions(pid) if x["state"] == "open"]
-        if existing:
-            s = existing[0]
-        else:
-            s = self.store.create_session(pid, "历史会话")
-            if not self.store.adopt_orphan_messages(pid, s["id"]):
-                s = self.store.update_session(s["id"], title="会话 1")
+        s = existing[0] if existing else self.store.create_session(pid, tr("session_n", n=1))
         self.store.set_kv(f"session:{pid}", s["id"])
         return s
 
+    def _adopt_history(self, pid: str) -> None:
+        """旧版本没有会话的消息，统一归入一个“历史会话”。"""
+        if self.store.db.execute(
+            "SELECT 1 FROM messages WHERE project_id=? AND session_id IS NULL LIMIT 1", (pid,)
+        ).fetchone():
+            h = self.store.create_session(pid, tr("history_session"))
+            self.store.adopt_orphan_messages(pid, h["id"])
+
     def new_session(self, title: str | None = None, project_id: str | None = None) -> dict:
         pid = project_id or self.current_project()["id"]
+        self._adopt_history(pid)
         n = len(self.store.sessions(pid)) + 1
-        s = self.store.create_session(pid, title or f"会话 {n}")
+        s = self.store.create_session(pid, title or tr("session_n", n=n))
         self.store.set_kv(f"session:{pid}", s["id"])
         return s
 
@@ -198,17 +204,21 @@ class Studio:
             base,
             n,
             tier or task["tier"],
-            (task["title"] or task["template"]).split(" #")[0] + " · 手动微调",
+            (task["title"] or task["template"]).split(" #")[0] + " · tweak",
             origin=origin,
-            request="手动微调",
+            request="manual tweak",
             project_id=task["project_id"],
             seeds=seeds,
             allow_unverified=True,
             parent_task=task_id,
         )
-        changed = ", ".join(f"{k}" for k in params) or "无参数改动"
+        changed = ", ".join(params) or tr("log_no_change")
         self.log(
-            origin, "in", f"手动微调 {task_id}：{changed}", task["project_id"], round_id=rnd["id"]
+            origin,
+            "in",
+            tr("log_tweak", id=task_id, changed=changed),
+            task["project_id"],
+            round_id=rnd["id"],
         )
         return rnd
 
@@ -319,6 +329,9 @@ class Studio:
                 self.store.transition(t["id"], "done", note or "选中")
             else:
                 self.store.transition(t["id"], "rejected", decision["action"])
+        prev = (rnd.get("decision") or {}).get("history")
+        if prev:  # 重新审阅过的轮：保留之前的决定历史
+            decision = {**decision, "history": prev}
         return self.store.update_round(rnd["id"], state="closed", decision=decision)
 
     def _task_in_round(self, tasks: list[dict], key: str | int) -> dict:
@@ -352,7 +365,7 @@ class Studio:
         self.log(
             origin,
             "in",
-            f"选中 #{task['idx']}" + (f"，锁定为「{role}」" if role else ""),
+            tr("log_select", idx=task["idx"], lock=tr("log_lock_suffix", r=role) if role else ""),
             rnd["project_id"],
         )
         return rnd
@@ -361,7 +374,7 @@ class Studio:
         """重做：整轮不要，同参数换种子再来一轮。"""
         rnd, tasks = self._review_round(round_id)
         self._close(rnd, tasks, None, {"action": "redo", "origin": origin}, None)
-        self.log(origin, "in", "整轮重做（换种子）", rnd["project_id"])
+        self.log(origin, "in", tr("log_redo"), rnd["project_id"])
         return self.start_round(
             rnd["template"],
             rnd["base_params"],
@@ -396,7 +409,12 @@ class Studio:
             "origin": origin,
         }
         self._close(rnd, tasks, None, decision, note)
-        self.log(origin, "in", f"微调 #{base_task['idx']}：{note or delta}", rnd["project_id"])
+        self.log(
+            origin,
+            "in",
+            tr("log_refine", idx=base_task["idx"], note=note or delta),
+            rnd["project_id"],
+        )
         params = {k: v for k, v in base_task["params"].items() if k not in TIER_KEYS}
         params.update(delta)
         seed = params.pop("seed", None)
@@ -422,7 +440,7 @@ class Studio:
         rnd = self._close(
             rnd, tasks, None, {"action": "reject", "note": note, "origin": origin}, note
         )
-        self.log(origin, "in", f"打回：{note or '（无批注）'}", rnd["project_id"])
+        self.log(origin, "in", tr("log_reject", note=note or tr("log_no_note")), rnd["project_id"])
         return rnd
 
     def approve_task(
@@ -462,6 +480,69 @@ class Studio:
             allow_unverified=True,
         )
 
+    def reopen(self, round_id: str, origin: str = "web") -> tuple[dict, int]:
+        """更改审阅结果：已决定的轮回到待审阅。旧决定进历史；若曾锁进基准包，
+        新建一个基准包版本把该角色恢复为锁定前的资产。返回 (轮, 仍在生成的派生轮数)。"""
+        rnd = self.store.get_round(round_id)
+        if rnd is None:
+            raise StudioError(f"round {round_id} not found")
+        d = rnd["decision"] or {}
+        if rnd["state"] != "closed" or d.get("action") not in (
+            "select",
+            "redo",
+            "refine",
+            "reject",
+        ):
+            raise StudioError(tr("err_not_reopenable"))
+        for t in self.store.round_tasks(round_id):
+            if t["state"] in ("done", "rejected"):
+                self.store.transition(t["id"], "review", tr("log_reopen"))
+        if d.get("action") == "select" and d.get("role"):
+            self._unlock(rnd["project_id"], d["role"], d["task_id"])
+        history = [*d.get("history", []), {k: v for k, v in d.items() if k != "history"}]
+        rnd = self.store.update_round(round_id, state="review", decision={"history": history})
+        children = [
+            r
+            for r in self.store.rounds(rnd["project_id"])
+            if r["parent_round"] == round_id and r["state"] == "generating"
+        ]
+        self.log(
+            origin,
+            "in",
+            tr("log_reopen_round", t=rnd["title"] or rnd["template"]),
+            rnd["project_id"],
+            round_id=round_id,
+        )
+        return rnd, len(children)
+
+    def reopen_task(self, task_id: str, origin: str = "web") -> dict:
+        task = self.store.get(task_id)
+        if task is None:
+            raise StudioError(f"task {task_id} not found")
+        if task["round_id"]:
+            return self.reopen(task["round_id"], origin)[0]
+        if task["state"] not in ("done", "rejected"):
+            raise StudioError(tr("err_not_reopenable"))
+        return self.store.transition(task_id, "review", tr("log_reopen"))
+
+    def _unlock(self, pid: str, role: str, task_id: str) -> None:
+        """撤销某次锁定：新版本里该角色恢复为上一次不是这个任务的资产；没有则移除。"""
+        cur = self.store.pack(pid)
+        if not cur or cur["assets"].get(role, {}).get("task_id") != task_id:
+            return
+        previous = None
+        for v in self.store.pack_history(pid)[1:]:
+            a = v["assets"].get(role)
+            if a and a["task_id"] != task_id:
+                previous = a
+                break
+        assets = dict(cur["assets"])
+        if previous:
+            assets[role] = previous
+        else:
+            assets.pop(role)
+        self.store.add_pack_version(pid, assets, tr("log_unlock", r=role))
+
     # ---- 导演基准包 ----
     def lock(
         self, task_id: str, role: str, note: str | None = None, project_id: str | None = None
@@ -488,5 +569,5 @@ class Studio:
             "params": {k: v for k, v in task["params"].items() if k != "image"},
         }
         pack = self.store.add_pack_version(pid, assets, note or f"锁定 {role} ← {task_id}")
-        self.log("system", "out", f"基准包 v{pack['version']}：锁定「{role}」", pid)
+        self.log("system", "out", tr("log_pack", v=pack["version"], r=role), pid)
         return pack
