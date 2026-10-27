@@ -1,6 +1,6 @@
 # aco_lw 运行手册（Runbook）
 
-更新于 2026-10-26 · 适用于阶段 2.5（`va daemon` + 控制台 + Telegram + 会话与项目记忆）· English: [runbook.md](runbook.md)
+更新于 2026-10-26 · 适用于阶段 2.5 + W2（`va daemon` + 控制台 + Telegram + 会话与项目记忆）· English: [runbook.md](runbook.md)
 
 本手册回答三件事：**怎么开 / 关**、**日常怎么用**、**出问题怎么查**。设计取舍见 `docs/design.html`，计划与进度见 `PLAN.md` / `docs/progress.html`，实测数据见 `docs/baseline.md`。
 
@@ -17,7 +17,7 @@
 | 代码 | `~/workplace/video-agent`（GitHub 私有仓库 `aco_lw`） | |
 | 配置 | `config.toml`（gitignore，权限 600） | token 等敏感项只在这里 |
 | 规划器规则 | `prompts/planner_rules.md` | 可直接编辑；改动会让 LLM 前缀缓存失效一次 |
-| 数据 | `data/` | `tasks.sqlite`（索引）、`jobs/<任务ID>/`（manifest + 产物）、`packs/<项目ID>/v<N>/`（基准包）、`uploads/<项目ID>/`（参考图）、`daemon.log` |
+| 数据 | `data/` | `templates/`（晋升的模板）、`variants/`（导入的 workflow）、`tasks.sqlite`（索引）、`jobs/<任务ID>/`（manifest + 产物）、`packs/<项目ID>/v<N>/`（基准包）、`uploads/<项目ID>/`（参考图）、`daemon.log` |
 
 ## 2. 启动与停止
 
@@ -101,6 +101,17 @@ uv run va release                       # 队列空闲时释放 ComfyUI 模型
 
 ### 3.5 语言
 控制台默认**英文**，顶栏 EN / 中文 切换（记在浏览器里）。系统消息与 Telegram 文字跟随 `config.toml` 的 `language`（默认 `en`，中文填 `zh`）。规划器用你说话的语言回复。
+
+### 3.6 在 ComfyUI 里改 workflow（高级）
+参数表达不了的改动——加节点、改连线、换模型、加 LoRA：
+1. 打开一个任务（任务流 → 节点 → 候选），点 **⬇ 导出 workflow**，得到这个任务实际运行的 API workflow。
+2. 点 **打开 ComfyUI ↗**，把文件拖到画布上（或 Ctrl+O）。节点 ID 会保留。
+3. 改完后在 ComfyUI 里选 **Workflow → Export (API)**。
+4. 回到同一个任务，点 **⬆ 导入改好的 workflow** 选这个文件。aco_lw 只显示*你的*改动（相对你导出的版本），列出哪些模板槽位仍能对应，并用 ComfyUI 的 `/object_info` 校验每个节点、取值和连线。有问题则标为*无效*。
+5. 在「项目与对话 → Workflow」里：**▶ 试跑** 用你改过的图里的取值、按最低档出一张（只有尺寸取自档位）。
+6. 试跑通过后 **⭐ 晋升**，起一个名字（小写字母、数字、连字符）。它成为所有项目可用的正式模板，存在 `data/templates/`；只有试跑过的档位标为已实测。**✕ 否决** 则丢弃并取消它排队中的任务。
+
+候选变体不会被规划器自动选用；晋升前只能手动使用（`/round <变体名>`、手动微调）。
 
 ## 4. 资源与内存策略（自动执行）
 

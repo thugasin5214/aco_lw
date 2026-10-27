@@ -128,7 +128,7 @@ def make_orch(tmp_path, no_side_effects):
             cfg,
             comfy=comfy,
             store=Store(cfg.db_path, cfg.jobs_dir),
-            registry=Registry(cfg.templates_dir),
+            registry=Registry.from_settings(cfg),
             log=lambda m: None,
             sleep=lambda s: None,
         )

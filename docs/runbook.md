@@ -1,6 +1,6 @@
 # aco_lw Runbook
 
-Updated 2026-10-26 · applies to phase 2.5 (`va daemon` + console + Telegram + sessions & project memory) · 中文版：[runbook.zh-CN.md](runbook.zh-CN.md)
+Updated 2026-10-26 · applies to phase 2.5 + W2 (`va daemon` + console + Telegram + sessions & project memory) · 中文版：[runbook.zh-CN.md](runbook.zh-CN.md)
 
 This runbook answers three questions: **how to start / stop**, **how to use it day to day**, and **what to check when something goes wrong**. Design rationale is in `docs/design.html`, plan and progress in `PLAN.md` / `docs/progress.html`, measurements in `docs/baseline.md`.
 
@@ -17,7 +17,7 @@ This runbook answers three questions: **how to start / stop**, **how to use it d
 | Code | `~/workplace/video-agent` (private GitHub repo `aco_lw`) | |
 | Config | `config.toml` (git-ignored, mode 600) | Secrets such as the bot token live only here |
 | Planner rules | `prompts/planner_rules.md` | Editable; changing it invalidates the LLM prefix cache once |
-| Data | `data/` | `tasks.sqlite` (index), `jobs/<task>/` (manifest + outputs), `packs/<project>/v<N>/` (baseline pack), `uploads/<project>/` (reference images), `daemon.log` |
+| Data | `data/` | `templates/` (promoted templates), `variants/` (imported workflows), `tasks.sqlite` (index), `jobs/<task>/` (manifest + outputs), `packs/<project>/v<N>/` (baseline pack), `uploads/<project>/` (reference images), `daemon.log` |
 
 ## 2. Start and stop
 
@@ -101,6 +101,17 @@ uv run va release                        # free ComfyUI models when its queue is
 
 ### 3.5 Language
 The console defaults to **English**; switch with the EN / 中文 selector in the header (remembered per browser). System messages and Telegram texts follow `language` in `config.toml` (`en` default, `zh` for Chinese). The planner replies in the language you write in.
+
+### 3.6 Edit a workflow in ComfyUI (advanced)
+For changes the parameters can't express — new nodes, different wiring, another model, a LoRA:
+1. Open a task (Flow → node → candidate) and click **⬇ Export workflow**. You get the exact API workflow that task ran.
+2. Click **Open ComfyUI ↗**, drag the file onto the canvas (or Ctrl+O). Node IDs are preserved.
+3. Edit it, then in ComfyUI choose **Workflow → Export (API)**.
+4. Back on the same task, click **⬆ Import edited workflow** and pick that file. aco_lw shows only *your* changes (diff against what you exported), which template slots still map, and checks every node, value and link against ComfyUI's `/object_info`. Problems → status *Invalid*.
+5. In *Projects & Chat → Workflows*: **▶ Run trial** renders one candidate at the lowest tier using the values from your edited graph (only the size comes from the tier).
+6. If the trial passes, **⭐ Promote** with a name (lowercase, digits, dashes). It becomes a normal template for all projects, stored in `data/templates/`; only the tier you trialled is marked as measured. **✕ Reject** discards it and cancels its queued tasks.
+
+Candidates are never picked by the planner; you can run them manually (`/round <variant-name>`, manual tweak) until promoted.
 
 ## 4. Resources and memory policy (automatic)
 

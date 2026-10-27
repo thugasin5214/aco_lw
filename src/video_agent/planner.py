@@ -156,7 +156,7 @@ class Planner:
     # ---- 上下文组装 ----
     def _templates_text(self) -> str:
         lines = []
-        for t in self.registry.templates.values():
+        for t in self.registry.builtin_and_user().values():
             slots = ", ".join(
                 f"{n}:{s.type}" + (f"[{s.min:g}..{s.max:g}]" if s.min is not None and s.max else "")
                 for n, s in t.slots.items()

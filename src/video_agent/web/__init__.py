@@ -12,7 +12,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import Body, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from .. import llm
 from ..config import ROOT, Settings
@@ -21,6 +21,7 @@ from ..planner import MODES
 from ..render import TIER_KEYS
 from ..store import PROJECT_ZH, ROUND_ZH, STATE_ZH, TransitionError
 from ..studio import StudioError
+from ..variants import Workshop
 
 STATIC = Path(__file__).parent / "index.html"
 RUNBOOK_PAGE = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
@@ -158,7 +159,7 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
             "round_states": ROUND_ZH,
             "project_states": PROJECT_ZH,
             "templates": {
-                n: {"title": t.title, "kind": t.kind, "model": t.model}
+                n: {"title": t.title, "kind": t.kind, "model": t.model, "origin": t.origin}
                 for n, t in registry.templates.items()
             },
         }
@@ -452,7 +453,41 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
 
     @app.get("/api/settings")
     def settings() -> dict:
-        return {"language": cfg.language}
+        return {"language": cfg.language, "comfy_url": cfg.comfy_url}
+
+    # ---- W2：导出到 ComfyUI 编辑、导回为候选变体、试跑、晋升 ----
+    workshop = Workshop(studio)
+
+    @app.get("/api/tasks/{task_id}/workflow")
+    def export_workflow(task_id: str) -> Response:
+        name, data = guard(lambda: workshop.export(task_id))
+        return Response(
+            data,
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{name}"'},
+        )
+
+    @app.post("/api/variants/import")
+    async def import_workflow(request: Request, base: str, task: str | None = None) -> dict:
+        data = await request.body()
+        t = store.get(task) if task else None
+        return guard(lambda: workshop.import_graph(data, base, t and t["project_id"], task))
+
+    @app.get("/api/variants")
+    def variants(project: str | None = None) -> list[dict]:
+        return workshop.list(project)
+
+    @app.post("/api/variants/{vid}/trial")
+    def variant_trial(vid: str) -> dict:
+        return guard(lambda: workshop.trial(vid))
+
+    @app.post("/api/variants/{vid}/promote")
+    def variant_promote(vid: str, name: str = Body(...), title: str | None = Body(None)) -> dict:
+        return guard(lambda: workshop.promote(vid, name, title))
+
+    @app.post("/api/variants/{vid}/reject")
+    def variant_reject(vid: str) -> dict:
+        return guard(lambda: workshop.reject(vid))
 
     @app.get("/api/messages")
     def messages(project: str | None = None, after: int = 0) -> list[dict]:

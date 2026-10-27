@@ -99,7 +99,9 @@ def check_graph(graph: dict, object_info: dict) -> list[str]:
             if field not in spec:
                 problems.append(f"节点 {nid}: {node['class_type']} 没有字段 {field}")
                 continue
-            if isinstance(v, list):  # 连线
+            if isinstance(v, list):  # 连线：必须指向存在的节点
+                if v and str(v[0]) not in graph:
+                    problems.append(f"节点 {nid}.{field} 连到不存在的节点 {v[0]}")
                 continue
             kind = spec[field][0]
             opts = spec[field][1] if len(spec[field]) > 1 else {}

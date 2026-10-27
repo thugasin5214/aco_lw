@@ -59,7 +59,7 @@ class Orchestrator:
         self.cfg = cfg
         self.comfy = comfy or Comfy(cfg.comfy_url)
         self.store = store or Store(cfg.db_path, cfg.jobs_dir)
-        self.registry = registry or Registry(cfg.templates_dir)
+        self.registry = registry or Registry.from_settings(cfg)
         self.log = log
         self.sleep = sleep
         self._object_info: dict | None = None

@@ -292,6 +292,16 @@ const I18N = {
     "st.running": "Running", "st.review": "To review", "st.done": "Done", "st.rejected": "Rejected", "st.failed": "Failed",
     "st.timeout": "Timed out", "st.generating": "Generating", "st.closed": "Decided", "st.active": "Active",
     "st.archived": "Archived", "st.open": "Open",
+    "wf.export": "⬇ Export workflow", "wf.open": "Open ComfyUI ↗", "wf.import": "⬆ Import edited workflow",
+    "wf.howto": "Edit in ComfyUI: export this task's workflow, drag the file onto the ComfyUI canvas (or Ctrl+O), change it, then Workflow → Export (API) and import that file here.",
+    "pt.workflows": "Workflows", "wf.empty": "No imported workflows yet. Open a task, export its workflow, edit it in ComfyUI and import it back.",
+    "wf.base": "based on {b}", "wf.trial": "▶ Run trial (lowest tier)", "wf.promote": "⭐ Promote to template", "wf.reject": "✕ Reject",
+    "wf.promote.ask": "Template name (lowercase, digits, dashes)", "wf.problems": "Validation problems", "wf.dropped": "Slots no longer mapped: {s}",
+    "wf.diff": "Changes vs {b}: +{a} nodes, −{r} nodes, {c} values, {w} wiring, {t} retyped", "wf.trial.running": "Trial running…",
+    "wf.trial.ok": "Trial OK · {s}{m}", "wf.trial.fail": "Trial failed: {e}", "wf.promoted": "Promoted as template {n}",
+    "wf.imported": "Imported as {n}", "wf.trial.round": "trial round",
+    "vs.candidate": "Candidate", "vs.trial_ok": "Trial passed", "vs.promoted": "Promoted", "vs.rejected": "Rejected", "vs.invalid": "Invalid",
+
   },
   zh: {
     title: "aco_lw 控制台", memory: "内存", project: "项目", detail: "详情", projects: "项目",
@@ -342,6 +352,16 @@ const I18N = {
     "st.running": "生成中", "st.review": "待审阅", "st.done": "完成", "st.rejected": "打回", "st.failed": "失败",
     "st.timeout": "超时", "st.generating": "生成中", "st.closed": "已决定", "st.active": "进行中",
     "st.archived": "已归档", "st.open": "进行中",
+    "wf.export": "⬇ 导出 workflow", "wf.open": "打开 ComfyUI ↗", "wf.import": "⬆ 导入改好的 workflow",
+    "wf.howto": "在 ComfyUI 里改：导出这个任务的 workflow，把文件拖到 ComfyUI 画布上（或 Ctrl+O），改完后用 Workflow → Export (API) 导出，再在这里导入。",
+    "pt.workflows": "Workflow", "wf.empty": "还没有导入的 workflow。打开一个任务，导出它的 workflow，在 ComfyUI 里改完再导回来。",
+    "wf.base": "基于 {b}", "wf.trial": "▶ 试跑（最低档）", "wf.promote": "⭐ 晋升为正式模板", "wf.reject": "✕ 否决",
+    "wf.promote.ask": "模板名（小写字母、数字、连字符）", "wf.problems": "校验问题", "wf.dropped": "不再能对应的槽位：{s}",
+    "wf.diff": "相对 {b} 的改动：+{a} 个节点，−{r} 个节点，{c} 处取值，{w} 处连线，{t} 个换类型", "wf.trial.running": "试跑中……",
+    "wf.trial.ok": "试跑通过 · {s}{m}", "wf.trial.fail": "试跑失败：{e}", "wf.promoted": "已晋升为模板 {n}",
+    "wf.imported": "已导入为 {n}", "wf.trial.round": "试跑轮",
+    "vs.candidate": "候选", "vs.trial_ok": "试跑通过", "vs.promoted": "已晋升", "vs.rejected": "已否决", "vs.invalid": "无效",
+
   },
 };
 let LANG = "en";
@@ -509,6 +529,9 @@ function taskHtml(tk){
     <div class="grid" style="grid-template-columns:1fr">${outs}</div>
     <div class="actions" style="margin-top:10px">
       ${tk.outputs?.length || tk.state === "failed" ? `<button class="btn" onclick="openTweak('${esc(tk.id)}')">${t("tweak")}</button>` : ""}
+      ${tk.prompt_id ? `<a class="btn" href="/api/tasks/${encodeURIComponent(tk.id)}/workflow" title="${esc(t("wf.howto"))}">${t("wf.export")}</a>
+        <a class="btn" href="${esc(COMFY_URL)}" target="_blank" rel="noopener">${t("wf.open")}</a>
+        <label class="btn" title="${esc(t("wf.howto"))}">${t("wf.import")}<input type="file" accept=".json,application/json" hidden onchange="importWorkflow(this, '${esc(tk.id)}', '${esc(tk.template)}')"></label>` : ""}
       ${tk.state === "review" && !tk.round_id ? reviewButtonsTask(tk) : ""}
       ${["done","rejected"].includes(tk.state) && !tk.round_id ? `<button class="btn" onclick="if(confirm(t('reopen.confirm'))) act('/api/tasks/${esc(tk.id)}/reopen', {})">${t("reopen")}</button>` : ""}</div>
     <details><summary>${t("params")}</summary><pre>${esc(JSON.stringify(params, null, 2))}</pre></details>
@@ -553,6 +576,50 @@ async function renderDetail(){
 async function reopenRound(id){
   if (!confirm(t("reopen.confirm"))) return;
   await act(`/api/rounds/${encodeURIComponent(id)}/reopen`, {}); detailKey = ""; keys = {};
+}
+
+/* ================= W2: workflow round-trip ================= */
+let COMFY_URL = "http://127.0.0.1:8188";
+async function importWorkflow(input, taskId, base){
+  const f = input.files[0]; input.value = ""; if (!f) return;
+  try {
+    const r = await fetch(`/api/variants/import?base=${encodeURIComponent(base)}&task=${encodeURIComponent(taskId)}`, {method:"POST", body:f});
+    const j = await r.json(); if (!r.ok) throw new Error(j.detail || r.status);
+    toast(t("wf.imported", {n: j.name}) + (j.problems?.length ? ` — ${t("wf.problems")}: ${j.problems.length}` : ""), !!j.problems?.length);
+    selProject = j.project_id; ptab = "workflows"; show("projects");
+  } catch(e){ toast(t("not.done") + e.message, true); }
+}
+function workflowsHtml(list){
+  if (!list.length) return `<div class="hint">${t("wf.empty")}</div><div class="hint" style="margin-top:6px">${t("wf.howto")}</div>`;
+  return list.map(v => {
+    const d = v.diff || {}, tr = v.trial, res = tr?.result;
+    const st = {candidate:"", trial_ok:"ok", promoted:"ok", rejected:"bad", invalid:"bad"}[v.status];
+    const trial = !tr ? "" : !res ? `<span class="badge live">${t("wf.trial.running")}</span>`
+      : res.ok ? `<span class="badge ok">${esc(t("wf.trial.ok", {s: res.exec_s != null ? fmtS(res.exec_s) : "", m: res.peak_gib ? ` · ${res.peak_gib} GiB` : ""}))}</span>`
+      : `<span class="badge bad">${esc(t("wf.trial.fail", {e: res.error || "?"}))}</span>`;
+    const rows = [...(d.added || []).map(x => `+ ${x.id} ${x.class}`), ...(d.removed || []).map(x => `− ${x.id} ${x.class}`),
+      ...(d.retyped || []).map(x => `~ ${x.id} ${x.from} → ${x.to}`),
+      ...(d.changed || []).map(x => `  ${x.id}.${x.field}: ${JSON.stringify(x.from)?.slice(0, 80)} → ${JSON.stringify(x.to)?.slice(0, 80)}`),
+      ...(d.rewired || []).map(x => `⇄ ${x.id}.${x.field}: ${JSON.stringify(x.from)} → ${JSON.stringify(x.to)}`)];
+    const live = ["candidate","trial_ok"].includes(v.status);
+    return `<div class="mem" style="flex-direction:column;align-items:stretch">
+      <div class="actions"><b>${esc(v.name)}</b> <span class="badge ${st}">${t("vs." + v.status)}</span> <span class="hint">${esc(t("wf.base", {b: v.base}))} · ${fmtT(v.created)}</span> ${trial}
+        ${v.promoted_as ? `<span class="badge ok">${esc(t("wf.promoted", {n: v.promoted_as}))}</span>` : ""}</div>
+      <div class="hint">${esc(t("wf.diff", {b: v.base, a: (d.added||[]).length, r: (d.removed||[]).length, c: (d.changed||[]).length, w: (d.rewired||[]).length, t: (d.retyped||[]).length}))}</div>
+      ${v.dropped_slots?.length ? `<div class="hint">${esc(t("wf.dropped", {s: v.dropped_slots.join(", ")}))}</div>` : ""}
+      ${v.problems?.length ? `<div class="err">${t("wf.problems")}:<br>${v.problems.map(esc).join("<br>")}</div>` : ""}
+      ${rows.length ? `<details><summary>diff</summary><pre>${esc(rows.join("\n"))}</pre></details>` : ""}
+      ${live ? `<div class="actions" style="margin-top:6px">
+        <button class="btn" onclick="act('/api/variants/${v.id}/trial', {})">${t("wf.trial")}</button>
+        ${v.status === "trial_ok" ? `<button class="btn primary" onclick="promoteVariant('${v.id}')">${t("wf.promote")}</button>` : ""}
+        <button class="btn danger" onclick="act('/api/variants/${v.id}/reject', {})">${t("wf.reject")}</button>
+        ${tr ? `<a href="#" onclick="selNode='${esc(tr.round_id)}';show('flow');return false">${t("wf.trial.round")}</a>` : ""}</div>` : ""}
+    </div>`;
+  }).join("");
+}
+async function promoteVariant(id){
+  const name = prompt(t("wf.promote.ask")); if (!name) return;
+  await act(`/api/variants/${id}/promote`, {name}); try { META = await api("/api/meta"); } catch {}
 }
 
 /* ================= manual tweak (W1) ================= */
@@ -673,18 +740,20 @@ async function loadProject(force){
   let p; try { p = await api(`/api/projects/${encodeURIComponent(selProject)}`); } catch { return; }
   if (!selSession || !p.sessions.some(s => s.id === selSession)) selSession = p.current_session || p.sessions[0]?.id || null;
   let msgs = []; if (selSession) { try { msgs = await api(`/api/sessions/${encodeURIComponent(selSession)}/messages`); } catch {} }
-  const k = LANG + ptab + selSession + p.updated + JSON.stringify(p.memories.map(m => m.updated)) + (msgs.at(-1)?.id || 0) + p.sessions.length;
+  let wfs = []; if (ptab === "workflows") { try { wfs = await api(`/api/variants?project=${encodeURIComponent(p.id)}`); } catch {} }
+  const k = LANG + ptab + selSession + p.updated + JSON.stringify(wfs.map(v => [v.id, v.status, v.updated])) + JSON.stringify(p.memories.map(m => m.updated)) + (msgs.at(-1)?.id || 0) + p.sessions.length;
   if (!force && k === msgKey) return;
   msgKey = k; PDATA = p; MSGS = msgs;
   const isCurrentProject = SYS && SYS.project.id === p.id;
   const canChat = isCurrentProject && selSession === p.current_session && p.state === "active";
   const chat = $("#pdetail .chat"), atBottom = !chat || chat.scrollHeight - chat.scrollTop - chat.clientHeight < 40;
-  const tabs = ["chat","memory","rounds","pack"].map(x => `<button class="tab ${ptab === x ? "on" : ""}" onclick="ptab='${x}';loadProject(true)">${t("pt." + x)}${x === "memory" && p.memories.some(m => m.status === "proposed") ? ` <span class="count">${p.memories.filter(m => m.status === "proposed").length}</span>` : ""}</button>`).join("");
+  const tabs = ["chat","memory","rounds","pack","workflows"].map(x => `<button class="tab ${ptab === x ? "on" : ""}" onclick="ptab='${x}';loadProject(true)">${t("pt." + x)}${x === "memory" && p.memories.some(m => m.status === "proposed") ? ` <span class="count">${p.memories.filter(m => m.status === "proposed").length}</span>` : ""}</button>`).join("");
   let body = "";
   if (ptab === "chat") body = chatHtml(p, msgs, canChat);
   if (ptab === "memory") body = memoryHtml(p);
   if (ptab === "rounds") body = roundsHtml(p);
   if (ptab === "pack") body = packHtml(p);
+  if (ptab === "workflows") body = workflowsHtml(wfs);
   $("#pdetail").innerHTML = `<h2>${esc(p.name)} ${badge(p.state)}<span class="sp"></span>
       ${isCurrentProject ? `<span class="badge ok">${t("current")}</span>` : `<button class="btn" onclick="act('/api/projects/${esc(p.id)}/use', {})">${t("set.current")}</button>`}
       ${p.state === "active" ? `<button class="btn" onclick="if(confirm(t('confirm.done'))) act('/api/projects/${esc(p.id)}/done', {})">${t("mark.done")}</button>` : ""}</h2>
@@ -818,7 +887,7 @@ async function refreshAll(force){
 }
 (async () => {
   try { META = await api("/api/meta"); } catch {}
-  if (!LANG){ try { LANG = (await api("/api/settings")).language || "en"; } catch { LANG = "en"; } }
+  try { const st = await api("/api/settings"); COMFY_URL = st.comfy_url || COMFY_URL; if (!LANG) LANG = st.language || "en"; } catch { if (!LANG) LANG = "en"; }
   if (!I18N[LANG]) LANG = "en";
   applyStatic();
   show(location.hash.slice(1) || "flow");

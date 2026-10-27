@@ -56,6 +56,8 @@ class Template(BaseModel):
     default_tier: str
     graph: dict = {}
     sha: str = ""
+    origin: Literal["builtin", "user", "variant"] = "builtin"  # 内置 / 用户晋升 / 候选变体
+    meta: dict = {}  # 变体的元数据（基础模板、项目、状态、差异、试跑结果）
 
 
 class ModelInfo(BaseModel):
@@ -65,32 +67,66 @@ class ModelInfo(BaseModel):
     exclusive_llm: bool = False
 
 
-def load_template(dir_: Path) -> Template:
+def load_template(dir_: Path, origin: str = "builtin") -> Template:
     raw = yaml.safe_load((dir_ / "template.yaml").read_text())
     api = (dir_ / "api.json").read_bytes()
-    t = Template(name=dir_.name, graph=json.loads(api), **raw)
+    meta_path = dir_ / "meta.json"
+    meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+    name = raw.pop("name", dir_.name)
+    t = Template(name=name, graph=json.loads(api), origin=origin, meta=meta, **raw)
     t.sha = hashlib.sha256(api + (dir_ / "template.yaml").read_bytes()).hexdigest()[:12]
-    for name, s in t.slots.items():
+    for slot_name, s in t.slots.items():
         node = t.graph.get(s.node)
         if node is None or s.field not in node["inputs"]:
-            raise ValueError(f"{t.name}: 槽位 {name} 指向不存在的 {s.node}.{s.field}")
+            raise ValueError(f"{t.name}: 槽位 {slot_name} 指向不存在的 {s.node}.{s.field}")
     if t.default_tier not in t.tiers:
         raise ValueError(f"{t.name}: default_tier {t.default_tier} 未定义")
     return t
 
 
 class Registry:
-    def __init__(self, templates_dir: Path):
-        self.templates = {
-            d.name: load_template(d)
-            for d in sorted(templates_dir.iterdir())
-            if (d / "template.yaml").exists()
-        }
-        models = yaml.safe_load((templates_dir / "models.yaml").read_text())
+    """内置模板（仓库 templates/）+ 用户晋升的模板（data/templates/）+ 候选变体（data/variants/）。
+
+    候选变体只在状态为 candidate / trial_ok 时加载；规划器默认看不到它们（见 builtin_and_user）。
+    """
+
+    def __init__(
+        self, templates_dir: Path, user_dir: Path | None = None, variants_dir: Path | None = None
+    ):
+        self.templates_dir, self.user_dir, self.variants_dir = templates_dir, user_dir, variants_dir
+        self.reload()
+
+    @classmethod
+    def from_settings(cls, cfg) -> Registry:
+        return cls(cfg.templates_dir, cfg.data_dir / "templates", cfg.data_dir / "variants")
+
+    def reload(self) -> None:
+        templates: dict[str, Template] = {}
+        sources = [
+            (self.templates_dir, "builtin"),
+            (self.user_dir, "user"),
+            (self.variants_dir, "variant"),
+        ]
+        for root, origin in sources:
+            if not root or not root.exists():
+                continue
+            for d in sorted(root.iterdir()):
+                if not (d / "template.yaml").exists():
+                    continue
+                t = load_template(d, origin)
+                if origin == "variant" and t.meta.get("status") not in ("candidate", "trial_ok"):
+                    continue
+                templates[t.name] = t
+        models = yaml.safe_load((self.templates_dir / "models.yaml").read_text())
         self.models = {k: ModelInfo(**v) for k, v in models.items()}
-        for t in self.templates.values():
+        for t in templates.values():
             if t.model not in self.models:
                 raise ValueError(f"{t.name}: 模型 {t.model} 未在 models.yaml 登记")
+        self.templates = templates
+
+    def builtin_and_user(self) -> dict[str, Template]:
+        """规划器可用的模板：不含未晋升的候选变体。"""
+        return {k: t for k, t in self.templates.items() if t.origin != "variant"}
 
     def template(self, name: str) -> Template:
         if name not in self.templates:
