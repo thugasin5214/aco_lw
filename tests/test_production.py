@@ -579,3 +579,33 @@ def test_done_production_reactivates_when_work_reappears(prod):
     assert p.plan(pr["id"])["production"]["state"] == "active"
     run_skills(p)
     assert stage(p.plan(pr["id"]), "adaptation")["state"] == "review"
+
+
+def test_pause_holds_queued_work_and_resume_continues(prod):
+    p = prod
+    pr = p.create("novel-to-film", "x", {"source": "..."})
+    run_skills(p)
+    p.review(pr["id"], "adaptation", "approve")
+    run_skills(p)
+    p.review(pr["id"], "bible", "approve")  # 定妆、场景排队中
+    drafts = p.store.by_state("draft")
+    assert drafts and not any(p.holds(t) for t in drafts)
+    p.pause(pr["id"])
+    assert all(p.holds(t) for t in drafts)  # Worker 跳过它们，队列原样保留
+    assert p.store.by_state("draft") == drafts
+    p.store.update_production(pr["id"], state="paused")
+    assert p.plan(pr["id"])["production"]["state"] == "paused"  # 计划不会把它改回进行中
+    p.fake_llm.out["adaptation"] = [ADAPT]
+    p.review(pr["id"], "adaptation", "redo", note="x")  # 暂停期间排的 LLM 作业也不执行
+    assert p.pending_skill_jobs() == []
+    p.resume(pr["id"])
+    assert not any(p.holds(t) for t in p.store.by_state("draft"))
+    assert len(p.pending_skill_jobs()) == 1
+
+
+def test_pause_can_stop_the_running_task(prod):
+    stopped = []
+    prod.stop_running = lambda pid: stopped.append(pid) or {"id": "t1"}
+    pr = prod.create("novel-to-film", "x", {"source": "..."})
+    out = prod.pause(pr["id"], stop_running=True)
+    assert stopped == [pr["id"]] and out["interrupted"] == "t1"

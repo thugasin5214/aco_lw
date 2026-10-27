@@ -698,6 +698,26 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
             raise HTTPException(404)
         return _safe_file(base, path)
 
+    @app.post("/api/productions/{pid}/pause")
+    def production_pause(pid: str, stop_running: bool = Body(False, embed=True)) -> dict:
+        return guard(lambda: _production().pause(pid, stop_running))
+
+    @app.post("/api/productions/{pid}/resume")
+    def production_resume(pid: str) -> dict:
+        return guard(lambda: _production().resume(pid))
+
+    @app.post("/api/pause")
+    def pause_all(stop_running: bool = Body(False, embed=True)) -> dict:
+        """全局暂停：Worker 不再取新任务（队列保留）；stop_running 时中断正在跑的那个。"""
+        store.set_kv("paused", True)
+        cur = actions.worker.stop_current() if stop_running and actions and actions.worker else None
+        return {"paused": True, "interrupted": cur and cur["id"]}
+
+    @app.post("/api/resume")
+    def resume_all() -> dict:
+        store.set_kv("paused", False)
+        return {"paused": False}
+
     @app.post("/api/productions/{pid}/settings")
     def production_settings(pid: str, settings: dict = Body(..., embed=True)) -> dict:  # noqa: B008
         return guard(lambda: _production().update_settings(pid, settings))

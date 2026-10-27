@@ -229,6 +229,7 @@ class Production:
         self.workflows, self.llm, self.log = workflows, llm, log
         self.work_dir = work_dir or (self.store.jobs_dir.parent / "productions")
         self.listeners: list[Callable[[dict], None]] = []  # 阶段进入待审阅 / 失败 / 完成 → 通知
+        self.stop_running: Callable[[str], dict | None] = lambda pid: None  # 由 daemon 注入：中断该制片正在跑的任务
         self._lock = threading.RLock()
         self._wake = threading.Event()
         studio.round_listeners.append(self._on_round_created)
@@ -261,6 +262,44 @@ class Production:
         """改制片设置（例如对白语言、视频档位）。不会自动重跑已通过的产物——下次开跑的条目按新设置。"""
         prod = self._prod(production_id)
         return self.store.update_production(production_id, settings={**prod["settings"], **changes})
+
+    # ---- 暂停 / 继续 ----
+    def task_production(self, task: dict) -> str | None:
+        art = self.store.artifact_by_round(task["round_id"]) if task.get("round_id") else None
+        return art and art["production_id"]
+
+    def holds(self, task: dict) -> bool:
+        """Worker 取任务前问一句：所属制片暂停了就先不执行（队列保留，继续后照常跑）。"""
+        pid = self.task_production(task)
+        if pid is None:
+            return False
+        prod = self.store.get_production(pid)
+        return bool(prod and prod["state"] == "paused")
+
+    def pause(self, production_id: str, stop_running: bool = False) -> dict:
+        """暂停：不再开跑新条目、排着的渲染与 LLM 作业都先不执行；可选立即中断正在跑的那个。"""
+        prod = self._prod(production_id)
+        if prod["state"] not in ("active", "done", "paused"):
+            raise ProductionError(f"制片状态 {prod['state']}，不能暂停")
+        prod = self.store.update_production(production_id, state="paused")
+        stopped = self.stop_running(production_id) if stop_running else None
+        self.log(f"production {production_id}: paused" + (f", interrupted {stopped['id']}" if stopped else ""))
+        return {**prod, "interrupted": stopped and stopped["id"]}
+
+    def resume(self, production_id: str) -> dict:
+        prod = self._prod(production_id)
+        if prod["state"] != "paused":
+            raise ProductionError("这个制片没有暂停")
+        prod = self.store.update_production(production_id, state="active")
+        plan = self.plan(production_id)  # 可能已经全部完成
+        for s in plan["stages"]:  # 暂停时被中断而失败的渲染条目：继续时重跑一次
+            failed = [i["key"] for i in s["items"] if i["state"] == "failed"]
+            if s["kind"] == "render" and failed and s["state"] != "blocked":
+                self.run_stage(production_id, s["id"], failed, "resumed after pause", "production")
+        self.advance(production_id)
+        self._wake.set()
+        self.log(f"production {production_id}: resumed")
+        return self.store.get_production(production_id)
 
     def _wf(self, prod: dict) -> Workflow:
         return self.workflows[prod["workflow"]]

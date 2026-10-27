@@ -43,6 +43,7 @@ class Worker(threading.Thread):
         self.store = orch.store
         self.busy_kind: str | None = None
         self.current: dict | None = None
+        self.hold: Callable[[dict], bool] = lambda task: False  # True：先别执行（例如所属制片已暂停）
 
     def run(self) -> None:
         try:
@@ -65,7 +66,8 @@ class Worker(threading.Thread):
                         rnd, ready = self.studio.refresh_round(t["round_id"])
                         if ready:
                             self.notify(rnd)
-            task = self.orch.resources.choose_next(self.store.by_state("draft"))
+            drafts = [t for t in self.store.by_state("draft") if not self.hold(t)]
+            task = self.orch.resources.choose_next(drafts)
             if task is None:
                 self.stop.wait(2)
                 continue
@@ -84,6 +86,20 @@ class Worker(threading.Thread):
             finally:
                 self.current, self.busy_kind = None, None
             self._after(task)
+
+    def stop_current(self, only: Callable[[dict], bool] = lambda task: True) -> dict | None:
+        """中断正在执行的任务（只中断自己提交的那个 job）；返回被中断的任务。"""
+        cur = self.current
+        if not cur or not only(cur):
+            return None
+        t = self.store.get(cur["id"])
+        if t["prompt_id"]:
+            try:
+                tpl = self.orch.registry.template(t["template"])
+                self.orch.executor_for(tpl).cancel(t["prompt_id"])
+            except (ComfyBusy, OSError) as e:
+                log.warning("Interrupting %s failed: %s", t["id"], e)
+        return t
 
     def heartbeat(self) -> None:
         """独立线程写心跳：渲染时 Worker 卡在一次长任务里，心跳不能跟着停。"""
@@ -451,7 +467,8 @@ class Actions:
             say(self.status_text())
         elif cmd == "/pause":
             store.set_kv("paused", True)
-            say(tr("paused"))
+            cur = self.worker.stop_current() if self.worker and args[:1] == ["now"] else None
+            say(tr("paused") + (" " + tr("cancelled_running") if cur else ""))
         elif cmd == "/resume":
             store.set_kv("paused", False)
             say(tr("resumed"))
@@ -462,15 +479,8 @@ class Actions:
             ):
                 if r["project_id"] == s.current_project()["id"]:
                     self.runtime.cancel(r["id"])
-            cur = self.worker and self.worker.current
-            if cur and cur.get("project_id") == s.current_project()["id"]:
-                t = store.get(cur["id"])
-                if t["prompt_id"]:
-                    try:
-                        tpl = s.orch.registry.template(t["template"])
-                        s.orch.executor_for(tpl).cancel(t["prompt_id"])
-                    except (ComfyBusy, OSError):
-                        pass
+            pid = s.current_project()["id"]
+            cur = self.worker and self.worker.stop_current(lambda t: t.get("project_id") == pid)
             say(tr("cancelled", n=n, x=tr("cancelled_running") if cur else ""))
         elif cmd == "/mode" and args and args[0] in ("simple", "agent"):
             store.set_kv("planner_style", args[0])
@@ -634,6 +644,10 @@ class Daemon:
         self.orch.resources.listeners.append(self.production.wake)  # 渲染结束 → 排队的 skill 再试
         self.actions.production = self.production
         self.actions.runtime.production = self.production
+        self.worker.hold = self.production.holds
+        self.production.stop_running = lambda pid: self.worker.stop_current(
+            lambda t: self.production.task_production(t) == pid
+        )
         if cfg.telegram_token:
             self.bot = TelegramBot(
                 TelegramAPI(cfg.telegram_token), self.actions, cfg.telegram_chat_ids

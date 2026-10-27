@@ -214,7 +214,8 @@ kbd{font:11.5px ui-monospace,monospace;border:1px solid var(--line);border-radiu
 <body>
 <header>
   <h1 data-t="title">aco_lw Console</h1>
-  <span class="stat"><span class="dot" id="d-daemon"></span><b id="s-daemon">–</b></span>
+  <span class="stat"><span class="dot" id="d-daemon"></span><b id="s-daemon">–</b>
+    <button class="btn sm" id="pause-all" data-t="pause.all">Pause all</button></span>
   <span class="stat"><span class="dot" id="d-mem"></span><span data-t="memory">Memory</span> <b id="s-mem">–</b></span>
   <span class="stat"><span class="dot" id="d-comfy"></span>ComfyUI <b id="s-comfy">–</b></span>
   <span class="stat"><span class="dot" id="d-llm"></span>LLM <b id="s-llm">–</b></span>
@@ -373,7 +374,10 @@ const I18N = {
     "st.draft": "Queued", "st.validated": "Validated", "st.waiting_memory": "Waiting memory", "st.submitted": "Submitted",
     "st.running": "Running", "st.review": "To review", "st.done": "Done", "st.rejected": "Rejected", "st.failed": "Failed",
     "st.timeout": "Timed out", "st.generating": "Generating", "st.closed": "Decided", "st.active": "Active",
-    "st.archived": "Archived", "st.open": "Open",
+    "st.archived": "Archived", "st.open": "Open", "st.paused": "Paused",
+    "pause.all": "Pause all", "resume.all": "Resume", "pause.prod": "Pause", "resume.prod": "Resume",
+    "pause.ask": "Pause — queued work is kept and nothing new starts.", "pause.soft": "Pause (let the running task finish)",
+    "pause.hard": "Pause and stop the running task now",
     "tab.queue": "Queue", "q.now": "Now", "q.mem": "Memory (last 30 min)", "q.runs": "Agent runs", "q.plan": "Queue & ETA",
     "q.idle": "No render running.", "q.rendering": "Rendering {k}: {t}", "q.family": "Resident model family: {f}",
     "q.llm": "LLM: {l}{f}", "q.inflight": " · answering now", "q.empty": "Nothing queued.", "q.noruns": "No agent run is waiting.",
@@ -461,7 +465,10 @@ const I18N = {
     "st.draft": "排队", "st.validated": "已校验", "st.waiting_memory": "等待内存", "st.submitted": "已提交",
     "st.running": "生成中", "st.review": "待审阅", "st.done": "完成", "st.rejected": "打回", "st.failed": "失败",
     "st.timeout": "超时", "st.generating": "生成中", "st.closed": "已决定", "st.active": "进行中",
-    "st.archived": "已归档", "st.open": "进行中",
+    "st.archived": "已归档", "st.open": "进行中", "st.paused": "已暂停",
+    "pause.all": "全部暂停", "resume.all": "继续", "pause.prod": "暂停", "resume.prod": "继续",
+    "pause.ask": "暂停——排队的任务保留，不再开始新的。", "pause.soft": "暂停（让正在跑的跑完）",
+    "pause.hard": "暂停，并立即停止正在跑的任务",
     "tab.queue": "队列", "q.now": "当前", "q.mem": "内存（最近 30 分钟）", "q.runs": "Agent 运行", "q.plan": "排队与预计时间",
     "q.idle": "没有渲染在跑。", "q.rendering": "正在渲染{k}：{t}", "q.family": "常驻模型族：{f}",
     "q.llm": "LLM：{l}{f}", "q.inflight": " · 正在回答", "q.empty": "没有排队的任务。", "q.noruns": "没有在等待的 agent 运行。",
@@ -497,7 +504,7 @@ function applyStatic(){
 /* ================= helpers ================= */
 const STAGES = ["validated","waiting_memory","submitted","running","review","final"];
 const TONE = {done:"ok",review:"warn",failed:"bad",timeout:"bad",rejected:"bad",draft:"idle",validated:"idle",
-  generating:"",closed:"ok",active:"",archived:"idle"};
+  generating:"",closed:"ok",active:"",archived:"idle",paused:"warn"};
 const LIVE = new Set(["running","submitted","waiting_memory","validated","generating"]);
 let META = {templates:{}};
 let SYS = null, GRAPH = [], TASKS = [], PROJECTS = [], REVIEW = [];
@@ -568,6 +575,7 @@ async function pollSystem(){
     const d = SYS.daemon;
     $("#s-daemon").textContent = !d.alive ? t("daemon.off") : d.paused ? t("paused") : `${d.busy ? t("busy") : t("idle")} · ${t("queued", {n: SYS.queued})}`;
     $("#d-daemon").className = "dot " + (!d.alive ? "bad" : d.paused ? "warn" : "ok");
+    const pb = $("#pause-all"); pb.textContent = t(d.paused ? "resume.all" : "pause.all"); pb.classList.toggle("primary", !!d.paused); pb.dataset.paused = d.paused ? "1" : "";
     $("#s-proj").textContent = SYS.project.name;
     const c = $("#c-review"); c.hidden = !SYS.pending_review; c.textContent = SYS.pending_review;
   } catch { $("#s-daemon").textContent = "—"; }
@@ -1144,6 +1152,7 @@ async function renderProdDetail(){
   const final = arts.filter(a => a.stage === "final" && a.status === "current" && a.data).pop();
   const fv = final && final.data.outputs.find(o => o.kind === "video");
   box.innerHTML = `<h2>${esc(PLAN.production.title)} <span class="hint">${esc(PLAN.workflow.title)}</span><span class="sp"></span>
+      <button class="btn sm ${PLAN.production.state === "paused" ? "primary" : ""}" id="prod-pause">${t(PLAN.production.state === "paused" ? "resume.prod" : "pause.prod")}</button>
       <button class="btn sm" id="prod-settings">${t("prod.settings")}</button>${badge(PLAN.production.state)}</h2>
     <div class="nexta">${t("prod.next")}: ${esc(nat)}</div>
     ${fv ? `<video controls style="width:100%;max-height:420px;border-radius:10px;background:#000" src="${fileUrl(final.data.task_id, fv.file)}"></video>` : ""}
@@ -1159,6 +1168,8 @@ async function renderProdDetail(){
     <div id="prod-art"></div>`;
   const pid = PLAN.production.id, url = `/api/productions/${encodeURIComponent(pid)}`;
   box.querySelectorAll("[data-run]").forEach(b => b.onclick = () => act(url + "/run", {stage: b.dataset.run}));
+  $("#prod-pause").onclick = () => PLAN.production.state === "paused" ? act(url + "/resume", {})
+    : askPause(hard => act(url + "/pause", {stop_running: hard}));
   $("#prod-settings").onclick = () => {
     modal(`<h3>${t("prod.settings")}</h3><div class="hint">${t("prod.settings.hint")}</div>
       <textarea class="json" id="ps-json">${esc(JSON.stringify(PLAN.production.settings, null, 2))}</textarea>
@@ -1282,6 +1293,19 @@ $("#prod-new").onclick = async () => {
       settings: {video_tier: $("#pn-vt").value, image_candidates: +$("#pn-n").value || 4, subtitles: $("#pn-subs").checked, language: $("#pn-lang").value.trim()}};
     closeModal(); const p = await act("/api/productions", body); if (p) { selProd = p.id; refreshAll(true); }
   };
+};
+
+/* ---- 暂停 / 继续 ---- */
+function askPause(onPick){
+  modal(`<h3>${t("pause.ask")}</h3><div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">
+    <button class="btn" id="pz-soft">${t("pause.soft")}</button><button class="btn danger" id="pz-hard">${t("pause.hard")}</button>
+    <button class="btn" onclick="closeModal()">${t("cancel")}</button></div>`);
+  $("#pz-soft").onclick = () => { closeModal(); onPick(false); };
+  $("#pz-hard").onclick = () => { closeModal(); onPick(true); };
+}
+$("#pause-all").onclick = () => {
+  if ($("#pause-all").dataset.paused) return act("/api/resume", {});
+  askPause(hard => act("/api/pause", {stop_running: hard}));
 };
 async function refreshAll(force){
   await pollSystem();
