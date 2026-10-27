@@ -233,3 +233,29 @@ def test_unmeasured_video_tier_falls_back_with_opt_in_button(studio):
     a.button("web", btn, reply)  # 用户确认后才跑 hd
     tiers = sorted(r["tier"] for r in studio.store.rounds(state="generating"))
     assert tiers == ["hd", "smoke"]
+
+
+def test_explicit_tier_in_user_text_is_honoured(studio):
+    from video_agent.daemon import explicit_tier
+
+    assert explicit_tier("做成hd，1分钟", "hd") and explicit_tier("高清版", "hd")
+    assert explicit_tier("hd 60s please", "hd-60s") and not explicit_tier("hd please", "hd-60s")
+    assert not explicit_tier("make a video", "hd")
+    img = studio.start_round("flux2-t2i", {"seed": 1}, n=1)
+    drain(studio)
+    a, _p, out, reply = actions_with(
+        studio,
+        [
+            plan_reply(
+                action="round",
+                template="h3-i2v",
+                prompt="p",
+                tier="hd",
+                image=f"@task:{studio.store.round_tasks(img['id'])[0]['id']}",
+            )
+        ],
+    )
+    a.inbound("web", "做成hd", reply)
+    run_jobs(a)
+    assert studio.store.rounds(state="generating")[0]["tier"] == "hd"  # 不降档
+    assert not any(b for _t, b in out)  # 不再弹“也试一下”

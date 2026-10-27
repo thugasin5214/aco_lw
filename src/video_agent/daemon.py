@@ -49,15 +49,6 @@ class Worker(threading.Thread):
             log.warning("Startup reconcile skipped: %s", e)
         self._refresh_rounds()
         while not self.stop.is_set():
-            self.store.set_kv(
-                "daemon",
-                {
-                    "pid": os.getpid(),
-                    "ts": time.time(),
-                    "busy": self.current and self.current["id"],
-                    "paused": bool(self.store.get_kv("paused")),
-                },
-            )
             if self.store.get_kv("paused"):
                 self.stop.wait(2)
                 continue
@@ -81,6 +72,20 @@ class Worker(threading.Thread):
                 self.current, self.busy_kind = None, None
             self._after(task)
 
+    def heartbeat(self) -> None:
+        """独立线程写心跳：渲染时 Worker 卡在一次长任务里，心跳不能跟着停。"""
+        while not self.stop.is_set():
+            self.store.set_kv(
+                "daemon",
+                {
+                    "pid": os.getpid(),
+                    "ts": time.time(),
+                    "busy": self.current and self.current["id"],
+                    "paused": bool(self.store.get_kv("paused")),
+                },
+            )
+            self.stop.wait(5)
+
     def _after(self, task: dict) -> None:
         if task["round_id"]:
             rnd, ready = self.studio.refresh_round(task["round_id"])
@@ -93,6 +98,18 @@ class Worker(threading.Thread):
             rnd, ready = self.studio.refresh_round(r["id"])
             if ready:
                 self.notify(rnd)
+
+
+EXPLICIT_HD = ("高清", "1080", "720p", "4k", "full hd")
+
+
+def explicit_tier(text: str, tier: str) -> bool:
+    """你在这句话里明确点名了档位（如 hd、高清、10s），视为批准使用未实测档位。"""
+    t = text.lower()
+    parts = tier.lower().split("-")
+    if all(p in t for p in parts):  # “hd” / “hd-60s” 需要 hd 与 60s 都出现
+        return True
+    return parts[0] == "hd" and any(k in t for k in EXPLICIT_HD)
 
 
 class Actions:
@@ -204,8 +221,13 @@ class Actions:
                     self.studio.reject(ref["id"], text, origin=channel)
             tpl = self.studio.orch.registry.template(plan.template)
             kind, tier, asked = tpl.kind, plan.tier, None
-            if kind == "video" and tier in tpl.tiers and not tpl.tiers[tier].verified:
-                # 视频的未实测档位可能超出内存预算：先用已实测档位出，未实测档位要你点按钮确认
+            approved = bool(tier) and explicit_tier(text, tier)  # 你在原话里点名了档位
+            if (
+                kind == "video"
+                and tier in tpl.tiers
+                and not tpl.tiers[tier].verified
+                and not approved
+            ):  # 视频的未实测档位可能超出内存预算：先用已实测档位出，未实测档位要你点按钮确认
                 asked = tier
                 tier = next((k for k, v in tpl.tiers.items() if v.verified), tpl.default_tier)
             rnd = self.studio.start_round(
@@ -219,7 +241,7 @@ class Actions:
                 parent_round=parent,
                 project_id=pid,
                 # 图片档位风险低，允许未实测档位；视频必须用已实测档位（内存）
-                allow_unverified=kind == "image",
+                allow_unverified=kind == "image" or approved,
             )
             say(
                 f"{plan.reply}\n"
@@ -553,6 +575,7 @@ class Daemon:
 
     def start(self) -> None:
         self.worker.start()
+        threading.Thread(target=self.worker.heartbeat, name="heartbeat", daemon=True).start()
         threading.Thread(
             target=self.actions.planner_loop, args=(self.stop,), name="planner", daemon=True
         ).start()
