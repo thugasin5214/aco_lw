@@ -298,16 +298,20 @@ class Orchestrator:
         return self._finish(task_id, poll, ex)
 
     def _finish(self, task_id: str, poll: Poll, ex: Executor) -> dict:
-        metrics = dict(self.store.get(task_id)["metrics"])
+        task = self.store.get(task_id)
+        metrics, job_id = dict(task["metrics"]), task["prompt_id"]
         if poll.state == "failed":
             detail = ex.failure_detail(poll.result)
-            ex.collect(task_id, poll.result, self.store.task_dir(task_id), metrics)
+            ex.collect(job_id, poll.result, self.store.task_dir(task_id), metrics)
             self.store.update(task_id, metrics=metrics)
             return self.store.transition(
                 task_id, "failed", f"{ex.name} 执行失败：{detail}", error=detail[:2000]
             )
-        outputs = ex.collect(task_id, poll.result, self.store.task_dir(task_id), metrics)
+        outputs = ex.collect(job_id, poll.result, self.store.task_dir(task_id), metrics)
         self.store.update(task_id, metrics=metrics)
+        if not outputs:  # 报告完成却没有产物：按失败处理，别进待审阅
+            msg = f"{ex.name} reported success but produced no output"
+            return self.store.transition(task_id, "failed", msg, error=msg)
         return self.store.transition(
             task_id, "review", f"收集 {len(outputs)} 个产物", outputs=outputs
         )

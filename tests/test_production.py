@@ -401,3 +401,34 @@ def test_manual_rerun_of_an_approved_item_keeps_it_until_replaced(prod):
     select_all(p)
     items = {i["key"]: i for i in stage(p.plan(pr["id"]), "keyframes")["items"]}
     assert items["sh01"]["state"] == "current" and items["sh01"]["current_version"] == old["version"] + 1
+
+
+def test_ffmpeg_assemble_through_orchestrator_collects_outputs(make_orch, fake, tmp_path):
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("no ffmpeg")
+    clip = tmp_path / "c.mp4"
+    subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "color=red:s=320x240:d=1:r=24",
+         "-pix_fmt", "yuv420p", str(clip)],
+        check=True,
+    )
+    tl = tmp_path / "tl.json"
+    tl.write_text(json.dumps({"width": 320, "height": 240, "clips": [{"file": str(clip)}, {"file": str(clip)}],
+                              "subtitles": [{"start": 0, "end": 1, "text": "你好"}]}))
+    orch = make_orch(fake)
+    orch.sleep = lambda s: __import__("time").sleep(0.05)
+    task = orch.create("ffmpeg-assemble", {"timeline": str(tl), "subtitles": True})
+    done = orch.execute(task["id"])
+    assert done["state"] == "review", done
+    assert {o["file"] for o in done["outputs"]} == {"final.mp4", "final.srt"}
+    assert abs(probe_seconds(orch.store.task_dir(task["id"]) / "final.mp4") - 2.0) < 0.2
+    assert fake.frees == 0  # cpu 资源类：不释放 ComfyUI
+
+
+def test_executor_success_without_outputs_fails(make_orch, fake):
+    orch = make_orch(fake)
+    ex = orch.executors["comfy"]
+    ex.collect = lambda *a, **k: []
+    task = orch.create("flux2-t2i", {"prompt": "x"})
+    done = orch.execute(task["id"])
+    assert done["state"] == "failed" and "no output" in done["error"]

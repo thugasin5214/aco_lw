@@ -13,6 +13,7 @@ CPU 资源类：不经内存闸门，不卸载 LLM，不释放 ComfyUI。
 from __future__ import annotations
 
 import json
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -131,19 +132,27 @@ class FFmpegExecutor:
         cmd = build_command(prepared.payload["timeline"], d / "final.mp4", srt)
         (d / "command.json").write_text(json.dumps(cmd, ensure_ascii=False))
         log = (d / "ffmpeg.log").open("w")
-        self.jobs[job_id] = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT)
+        # 退出码写进 rc 文件：daemon 重启后仍能判断作业是否完成（不重提）
+        script = shlex.join(cmd) + '; echo $? > "$0/rc"'
+        self.jobs[job_id] = subprocess.Popen(
+            ["/bin/sh", "-c", script, str(d)], stdout=log, stderr=subprocess.STDOUT
+        )
 
     def poll(self, job_id: str) -> Poll:
+        d = self.work / job_id
         p = self.jobs.get(job_id)
-        if p is None:  # 进程重启后找不到：便宜，按丢失处理（不自动重提）
-            return Poll("lost")
-        rc = p.poll()
-        if rc is None:
+        if p is not None and p.poll() is None:
             return Poll("running")
-        return Poll("done" if rc == 0 else "failed", result={"rc": rc})
+        rc_file = d / "rc"
+        if not rc_file.exists():
+            return Poll("lost")  # 进程没了也没留下退出码（被杀）；便宜，交给你重跑
+        rc = int(rc_file.read_text().strip() or 1)
+        return Poll("done" if rc == 0 else "failed", result={"rc": rc, "dir": str(d)})
 
     def failure_detail(self, result: Any) -> str:
-        return f"ffmpeg exit {result.get('rc')}"  # 详细输出在 aco_lw_ffmpeg/<job>/ffmpeg.log
+        log = Path(result.get("dir", "")) / "ffmpeg.log"
+        tail = log.read_text()[-800:].strip() if log.exists() else ""
+        return f"ffmpeg exit {result.get('rc')}" + (f": {tail}" if tail else "")
 
     def collect(self, job_id: str, result: Any, dest: Path, metrics: dict) -> list[dict]:
         d = self.work / job_id
