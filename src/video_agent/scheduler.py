@@ -9,6 +9,8 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import json
+import shutil
+import subprocess
 import time
 import uuid
 from collections.abc import Callable, Iterator
@@ -127,11 +129,58 @@ class Orchestrator:
             return pack["assets"][role]["file"]
         if value.startswith("@task:"):
             src = self.store.get(value[len("@task:") :])
-            img = src and next((o for o in src["outputs"] if o["kind"] == "image"), None)
-            if img is None:
-                raise ValueError(f"{value} 没有图片产物")
-            return str(self.store.task_dir(src["id"]) / img["file"])
+            if src is None:
+                raise ValueError(f"找不到任务 {value[len('@task:') :]}")
+            img = next((o for o in src["outputs"] if o["kind"] == "image"), None)
+            if img is not None:
+                return str(self.store.task_dir(src["id"]) / img["file"])
+            vid = next((o for o in src["outputs"] if o["kind"] == "video"), None)
+            if vid is not None:
+                return str(self._video_frame(self.store.task_dir(src["id"]) / vid["file"]))
+            raise ValueError(f"任务 {src['id']} 还没有可用作参考的图片或视频产物")
         return value
+
+    @staticmethod
+    def _video_frame(video: Path) -> Path:
+        """视频任务用作参考图时，取中间一帧（缓存在任务目录）。"""
+        frame = video.with_name(video.stem + "_mid.png")
+        if frame.exists():
+            return frame
+        if shutil.which("ffmpeg") is None:
+            raise ValueError("需要 ffmpeg 才能从视频取参考帧（brew install ffmpeg）")
+        dur = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "csv=p=0",
+                str(video),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        mid = float(dur) / 2 if dur else 0.0
+        subprocess.run(
+            [
+                "ffmpeg",
+                "-loglevel",
+                "error",
+                "-y",
+                "-ss",
+                f"{mid:.2f}",
+                "-i",
+                str(video),
+                "-frames:v",
+                "1",
+                str(frame),
+            ],
+            check=True,
+        )
+        return frame
 
     def _inherit_image(self, t: Template, params: dict, parent: dict) -> None:
         """子任务未指定图片时，用父任务的第一张图片产物（例如定妆图 → 图生视频）。"""

@@ -272,3 +272,23 @@ def test_worker_runs_round_and_notifies(studio):
     stop.set()
     w.join(5)
     assert notified and notified[0]["id"] == rnd["id"] and notified[0]["state"] == "review"
+
+
+def test_video_task_reference_uses_mid_frame(studio, monkeypatch):
+    from video_agent.scheduler import Orchestrator
+
+    rnd = studio.start_round("h3-t2v", {"seed": 4})
+    drain(studio)
+    vid = studio.store.round_tasks(rnd["id"])[0]
+    studio.store.update(vid["id"], outputs=[{"file": "v.mp4", "kind": "video"}])
+    seen = {}
+
+    def fake_frame(video):
+        seen["video"] = video
+        return video.with_name("v_mid.png")
+
+    monkeypatch.setattr(Orchestrator, "_video_frame", staticmethod(fake_frame))
+    path = studio.orch.resolve_ref(f"@task:{vid['id']}", None)
+    assert path.endswith("v_mid.png") and seen["video"].name == "v.mp4"
+    with pytest.raises(ValueError, match="找不到任务"):
+        studio.orch.resolve_ref("@task:nope", None)

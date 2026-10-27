@@ -119,7 +119,7 @@ class Actions:
                 stop.wait(3)
             try:
                 job()
-            except (ParamError, StudioError, PlannerUnavailable) as e:
+            except (ParamError, StudioError, PlannerUnavailable, ValueError, KeyError) as e:
                 reply(f"没能处理：{e}")
             except Exception as e:
                 log.exception("规划任务失败")
@@ -168,6 +168,8 @@ class Actions:
                 origin=channel,
                 request=text,
                 project_id=pid,
+                # 图片档位风险低，允许未实测档位；视频必须用已实测档位（内存）
+                allow_unverified=self.studio.orch.registry.template(plan.template).kind == "image",
             )
             say(f"{plan.reply}\n已排队：{rnd['n']} 个候选（{rnd['template']} / {rnd['tier']}）")
 
