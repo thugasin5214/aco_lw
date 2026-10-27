@@ -49,10 +49,20 @@ class Worker(threading.Thread):
         except SchedulerBusy as e:
             log.warning("Startup reconcile skipped: %s", e)
         self._refresh_rounds()
+        last_reconcile = 0.0
         while not self.stop.is_set():
             if self.store.get_kv("paused"):
                 self.stop.wait(2)
                 continue
+            if time.monotonic() - last_reconcile > 120:  # 定期收回“观察超时”后才跑完的任务
+                last_reconcile = time.monotonic()
+                for tid, state in self.orch.reconcile_timeouts():
+                    log.info("Collected %s after timeout: %s", tid, state)
+                    t = self.store.get(tid)
+                    if t["round_id"]:
+                        rnd, ready = self.studio.refresh_round(t["round_id"])
+                        if ready:
+                            self.notify(rnd)
             task = self.orch.resources.choose_next(self.store.by_state("draft"))
             if task is None:
                 self.stop.wait(2)

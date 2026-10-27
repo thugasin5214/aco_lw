@@ -257,6 +257,11 @@ class Orchestrator:
         job_id = task["prompt_id"]
         start = time.monotonic()
         lost = 0
+        # 观察时限随预计耗时放大（未实测的大档位可能要几个小时），至少保留配置值
+        est = self.resources.estimator.estimate(
+            self.registry.template(task["template"]), task["tier"]
+        )
+        limit = max(self.cfg.task_timeout_s, est.exec_s * 3)
         poll: Poll | None = None
         with Sampler() as sampler:
             while True:
@@ -269,7 +274,7 @@ class Orchestrator:
                 task = self.store.get(task_id)
                 if task["state"] == "submitted" and poll.state == "running":
                     self.store.transition(task_id, "running")
-                if time.monotonic() - start > self.cfg.task_timeout_s:
+                if time.monotonic() - start > limit:
                     poll = None
                     break
                 self.sleep(self.cfg.poll_interval_s)
@@ -325,6 +330,18 @@ class Orchestrator:
             for task in stuck:
                 results.append((task["id"], self._reconcile(task)))
         return results
+
+    def reconcile_timeouts(self) -> list[tuple[str, str]]:
+        """把“观察超时”但执行端已跑完的任务收回来（不阻塞：还在跑的留到下次）。"""
+        out = []
+        for task in self.store.by_state("timeout"):
+            if not task["prompt_id"]:
+                continue
+            ex = self.executor_for(self.registry.template(task["template"]))
+            poll = ex.poll(task["prompt_id"])
+            if poll.state in ("done", "failed"):
+                out.append((task["id"], self._finish(task["id"], poll, ex)["state"]))
+        return out
 
     def _reconcile(self, task: dict) -> str:
         tid, pid, state = task["id"], task["prompt_id"], task["state"]

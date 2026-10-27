@@ -105,3 +105,24 @@ def test_parent_image_inherited(make_orch, fake):
     child = o.create("h3-i2v", {"seed": 1}, parent_id=parent["id"], allow_unverified=True)
     assert child["params"]["image"].endswith(parent["outputs"][0]["file"])
     assert o.execute(child["id"])["state"] == "review"
+
+
+def test_timeout_scales_with_estimate_and_late_results_are_collected(make_orch):
+    from conftest import FakeComfy
+
+    fake = FakeComfy(history_after=4)
+    o = make_orch(fake)
+    o.cfg.task_timeout_s = 0  # 配置时限为 0 时，按预计耗时放大的时限仍然生效
+    t = o.execute(o.create("flux2-t2i", {"seed": 31})["id"])
+    assert t["state"] == "review"
+    # 观察超时后才完成的任务：定期对账收回
+    fake2 = FakeComfy(history_after=1000)
+    o2 = make_orch(fake2)
+    o2.cfg.task_timeout_s = 0
+    o2.resources.estimator.estimate = lambda tpl, tier: type(
+        "E", (), {"exec_s": 0.0, "peak_gib": 16, "family": "f", "source": "t"}
+    )()
+    t2 = o2.execute(o2.create("flux2-t2i", {"seed": 32})["id"])
+    assert t2["state"] == "timeout" and o2.reconcile_timeouts() == []  # 还在跑：留到下次
+    fake2.history_after = 0
+    assert o2.reconcile_timeouts() == [(t2["id"], "review")]
