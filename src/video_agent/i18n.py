@@ -40,8 +40,8 @@ M: dict[str, tuple[str, str]] = {
         "🎬 {p}：{s} 的输出未通过校验，请手改或重做",
     ),
     "film_needs_approval": (
-        "🎬 {p}: FreeVideo asks you to approve starting the film — open the FreeVideo page and approve; filming starts right after.",
-        "🎬 {p}：FreeVideo 要你批准开拍——打开 FreeVideo 页面点批准，批准后马上开拍。",
+        "🎬 {p}: FreeVideo asks you to approve starting the film — open ComfyUI (http://127.0.0.1:8188) → Extensions → FreeVideo, and approve the card in its agent chat; filming starts within a minute.",
+        "🎬 {p}：FreeVideo 要你批准开拍——打开 ComfyUI（http://127.0.0.1:8188）→ 顶部菜单 Extensions → FreeVideo，在它的 agent 对话里点批准卡片；一分钟内开拍。",
     ),
     "stage_failed": ("🎬 {p}: {s} failed", "🎬 {p}：{s} 失败"),
     # 规划结果

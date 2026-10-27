@@ -213,7 +213,11 @@ def test_start_waits_for_freevideo_approval_then_retries_same_ref(film_prod):
     assert all(m["meta"]["pending_ref"] and not m["meta"]["film"] for m in made)
     assert notes == ["film_needs_approval"]
     assert stage(p.plan(pr["id"]), "clips")["state"] == "active"
+    p.film._last_retry.clear()
     p.film.tick()  # 还没批准
+    p.film.tick()  # 60 秒内不重发
+    assert len(refs) == 2
+    p.film._last_retry.clear()
     p.film.tick()  # 批准了：原样重发（同一个 ref）
     assert len(set(refs)) == 1 and len(refs) == 3
     arts = p.store.artifacts(pr["id"], "clips")

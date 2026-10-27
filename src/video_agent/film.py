@@ -26,6 +26,7 @@ if TYPE_CHECKING:  # pragma: no cover
 TERMINAL_JOB = ("succeeded", "failed", "cancelled", "interrupted")
 TAKE_TEMPLATE = "freevideo-take"
 MIN_CONTINUE_S = 10.0
+RETRY_S = 60.0  # 等你在 FreeVideo 页面批准时，多久重发一次开拍请求
 _FIX = re.compile(r"Use /screenplay/shots/(\d+)/seconds ([\d.]+)")
 
 
@@ -34,9 +35,9 @@ class FilmDriver:
         self.engine, self.fv = engine, client
         self.store = engine.store
         self.notify_round = lambda rnd: None  # daemon 注入：导入的一轮推送到控制台 / Telegram
-        self.notify_text = lambda prod, key: (
-            None
-        )  # daemon 注入：给你发一条提醒（例如去 FreeVideo 批准）
+        # daemon 注入：给你发一条提醒（例如去 FreeVideo 批准）
+        self.notify_text = lambda prod, key: None
+        self._last_retry: dict[str, float] = {}
 
     # ---- 角色卡 ----
     def cards_tool(self, prod: dict, st: Stage, inputs: dict) -> dict:
@@ -324,10 +325,14 @@ class FilmDriver:
         if head is None:
             return
         req = head["meta"]["pending_start"]
+        now = time.monotonic()
+        if now - self._last_retry.get(req["ref"], 0) < RETRY_S:
+            return  # 别每轮都重发（每次都会在 FreeVideo 对话里记一条“需要确认”）
+        self._last_retry[req["ref"]] = now
         try:
             film = self.fv.start_film(req["screenplay"], takes=req["takes"], ref=req["ref"])
         except FreeVideoError as e:
-            if e.code != "needs_confirmation":
+            if e.code != "needs_confirmation":  # 包括你点了拒绝（declined_by_user）：不再重发
                 self.engine.log(f"film start for {prod['id']} failed: {e}")
                 for a in arts:
                     self.store.update_artifact(a["id"], status="failed", note=str(e)[:500])
