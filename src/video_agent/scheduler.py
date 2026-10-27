@@ -330,8 +330,9 @@ class Orchestrator:
         """进程重启后对账；只观察与收集，不重新提交。"""
         results = []
         with self.lock():
+            # 排队中（draft）的任务从未发出过：原样留在队列里，重启后照常执行
             stuck = self.store.by_state(
-                "draft", "validated", "waiting_memory", "submitted", "running", "timeout"
+                "validated", "waiting_memory", "submitted", "running", "timeout"
             )
             for task in stuck:
                 results.append((task["id"], self._reconcile(task)))
@@ -351,7 +352,7 @@ class Orchestrator:
 
     def _reconcile(self, task: dict) -> str:
         tid, pid, state = task["id"], task["prompt_id"], task["state"]
-        if state in ("draft", "validated"):
+        if state == "validated":
             self.store.transition(tid, "failed", "中断于提交前；可重新提交", error="interrupted")
             return "failed（提交前中断）"
         if not pid:

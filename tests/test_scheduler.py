@@ -126,3 +126,11 @@ def test_timeout_scales_with_estimate_and_late_results_are_collected(make_orch):
     assert t2["state"] == "timeout" and o2.reconcile_timeouts() == []  # 还在跑：留到下次
     fake2.history_after = 0
     assert o2.reconcile_timeouts() == [(t2["id"], "review")]
+
+
+def test_recover_keeps_queued_drafts(make_orch, fake):
+    orch = make_orch(fake)
+    t = orch.create("flux2-t2i", {"prompt": "x"})
+    assert orch.recover() == []
+    assert orch.store.get(t["id"])["state"] == "draft"  # 从未提交：重启后仍在队列里
+    assert fake.submits == 0
