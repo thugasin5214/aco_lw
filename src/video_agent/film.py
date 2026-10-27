@@ -353,10 +353,13 @@ class FilmDriver:
         if not takes:
             return 0
         jobs = {}
+        if any(t.get("state") in ("queued", "running", "waiting") for t in takes):
+            return 0  # 这一镜还有 take 在拍：等齐了一起审（不必逐条查询）
         for t in takes:
-            job = self.fv.call("GET", f"/jobs/{t['job']}").get("job") or {}
+            # take 的 job 是幂等键；真正的任务 ID 在 task 字段
+            job = self.fv.call("GET", f"/jobs/{t.get('task') or t['job']}").get("job") or {}
             if job.get("status") not in TERMINAL_JOB:
-                return 0  # 这一镜还有 take 在拍：等齐了一起审
+                return 0
             jobs[t["take"]] = job
         st = self.engine._wf(prod).stage(art["stage"])
         rnd = self.store.create_round(

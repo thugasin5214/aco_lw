@@ -44,6 +44,8 @@ class FakeFV:
 
     def call(self, method, path, body=None, **params):
         jid = path.rsplit("/", 1)[1]
+        if jid not in self.jobs:
+            raise AssertionError(f"looked up {jid}: not a job id")
         return {"job": self.jobs[jid]}
 
     def download(self, url, dest):
@@ -64,8 +66,8 @@ class FakeFV:
         sh = next(s for s in self.film_state["shots"] if s["id"] == shot)
         start = len(sh["takes"])
         for i in range(start + 1, start + n + 1):
-            jid = f"j{shot}{i:02d}"
-            sh["takes"].append({"take": i, "job": jid})
+            jid, ref = f"j{shot}{i:02d}", f"d1:{shot}:t{i}"  # 真实结构：job 是幂等键，task 才是任务 ID
+            sh["takes"].append({"take": i, "job": ref, "task": jid, "state": "done"})
             self.jobs[jid] = {"status": status, "result": {"video": {"url": f"/v/{jid}.mp4"}}}
 
 
