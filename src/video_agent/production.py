@@ -231,6 +231,11 @@ class Production:
         self.advance(prod["id"])
         return prod
 
+    def update_settings(self, production_id: str, changes: dict) -> dict:
+        """改制片设置（例如对白语言、视频档位）。不会自动重跑已通过的产物——下次开跑的条目按新设置。"""
+        prod = self._prod(production_id)
+        return self.store.update_production(production_id, settings={**prod["settings"], **changes})
+
     def _wf(self, prod: dict) -> Workflow:
         return self.workflows[prod["workflow"]]
 
@@ -305,8 +310,10 @@ class Production:
         }
 
     def _ctx(self, prod: dict, wf: Workflow, idx) -> dict:
+        lang = (prod["settings"].get("language") or "").strip()
         ctx = {
-            "settings": prod["settings"],
+            # speech_hint：由 language 派生，供视频提示词使用（H3 会生成人声）
+            "settings": {**prod["settings"], "speech_hint": f" Dialogue and speech in {lang}." if lang else ""},
             "production": {"id": prod["id"], "title": prod["title"]},
         }
         for st in wf.stages:
@@ -845,9 +852,12 @@ class Production:
                 self.store.log_message(origin, "in", f"approved {stage_id}", prod["project_id"])
                 self.advance(production_id)
                 return art
-            self.store.update_artifact(art["id"], status="rejected", note=note)
             if action == "redo":
-                return self.run_stage(production_id, stage_id, None, note or "redo", origin)[0]
+                # 已通过的版本在新版本通过前继续有效（下游不受影响）；待审 / 无效的那份作废
+                if art["status"] != "current":
+                    self.store.update_artifact(art["id"], status="rejected", note=note)
+                return self.run_stage(production_id, stage_id, [key], note or "redo", origin)[0]
+            self.store.update_artifact(art["id"], status="rejected", note=note)
             return self.store.get_artifact(art["id"])
 
     def pending_reviews(self, project_id: str | None = None) -> list[dict]:

@@ -330,3 +330,42 @@ def test_pending_reviews_list_planning_stages(prod):
     assert r["data"]["logline"] == ADAPT["logline"]
     prod.review(pr["id"], "adaptation", "approve")
     assert [x["stage"] for x in prod.pending_reviews()] == []
+
+
+def _to_keyframes(p):
+    pr = p.create("novel-to-film", "Lost cat", {"source": "..."}, {"language": "Mandarin Chinese"})
+    run_skills(p)
+    p.review(pr["id"], "adaptation", "approve")
+    run_skills(p)
+    p.review(pr["id"], "bible", "approve")
+    select_all(p)
+    run_skills(p)
+    p.review(pr["id"], "storyboard", "approve")
+    select_all(p)
+    return pr
+
+
+def test_language_reaches_video_prompts(prod):
+    pr = _to_keyframes(prod)
+    prod.run_stage(pr["id"], "clips")
+    (t,) = prod.store.round_tasks(prod.store.rounds(None, "generating")[0]["id"])
+    assert t["params"]["prompt"].endswith("Dialogue and speech in Mandarin Chinese.")
+    prod.update_settings(pr["id"], {"language": ""})
+    assert prod.store.get_production(pr["id"])["settings"]["video_tier"] == "smoke"  # 合并，不覆盖
+
+
+def test_redo_of_approved_storyboard_keeps_downstream_until_new_version(prod):
+    p = prod
+    pr = _to_keyframes(p)
+    board2 = json.loads(json.dumps(BOARD))
+    board2["shots"][1]["frame"] = "陈师傅抬头"  # 只改 sh02
+    p.fake_llm.out["storyboard"] = [board2]
+    p.review(pr["id"], "storyboard", "redo", note="all shots in Mandarin")
+    cur = p._current(p._index(pr["id"]), "storyboard")
+    assert cur and cur["version"] == 1  # 旧版本在新版本通过前仍然有效
+    run_skills(p)
+    user = json.loads(p.fake_llm.calls[-1][1][1]["content"])
+    assert user["revision_request"] == "all shots in Mandarin" and user["previous_output"] == BOARD
+    p.review(pr["id"], "storyboard", "approve")
+    kf = {i["key"]: i["state"] for i in stage(p.plan(pr["id"]), "keyframes")["items"]}
+    assert kf == {"sh01": "current", "sh02": "running"}  # 只有文字变了的镜头重出

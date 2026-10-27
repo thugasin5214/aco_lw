@@ -420,6 +420,10 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
             }
         )
 
+    def update_production_settings(ctx, a):
+        prod = _prod().update_settings(a["production_id"], a["settings"])
+        return Done({"settings": prod["settings"]})
+
     round_id = {"round_id": S}
     tools = [
         Tool(
@@ -588,7 +592,9 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
         Tool(
             "review_stage",
             "Relay the user's review of a planning stage: approve, redo (with note), reject, or "
-            "keep (still valid although upstream changed). Render stages are reviewed on their rounds.",
+            "keep (still valid although upstream changed). A change that concerns many shots (e.g. "
+            "'all shots in Mandarin') is a redo of the storyboard stage with that note; only shots "
+            "whose text changes get re-rendered. Render stages are reviewed on their rounds.",
             _obj(
                 {
                     "production_id": S,
@@ -601,6 +607,14 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
             ),
             "act",
             review_stage,
+        ),
+        Tool(
+            "update_production_settings",
+            "Change a production's settings (e.g. language for dialogue, video_tier). Applies to "
+            "items run from now on; approved ones are not re-rendered automatically.",
+            _obj({"production_id": S, "settings": {"type": "object"}}, ["production_id", "settings"]),
+            "act",
+            update_production_settings,
         ),
         Tool(
             "ask_user",

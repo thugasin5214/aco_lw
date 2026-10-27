@@ -142,6 +142,8 @@ llm_fallback = ["anthropic", "claude_code", "codex"]  # 依次尝试
 
 - **控制台 → 制片 → 新建**：贴原文，选视频档位（默认 `smoke`，已实测）和图片候选数。规划阶段马上开始（本地 LLM；视频渲染期间排队，除非设了 `allow_online` + `llm_fallback`）。
 - **改上游只影响依赖它的下游**：改一个人物，只重出该人物的定妆图和用到它的镜头；其他镜头保持已通过。输入变了的规划阶段会显示“上游变了——保留还是重做？”。
+- **对白语言**：新建制片时填写（或之后在「设置」里改）。分镜和剪辑会用它写画面、动作和台词，每条视频提示词也会要求用它说话——H3 按提示词的语言生成人声。
+- **影响很多镜头的修改**（“所有镜头用普通话”“整体调暗”）：打开「分镜」阶段，点「重做…」写上这条意见。新分镜通过前，已通过的旧分镜继续有效；通过后只有文字变了的镜头会重出（关键帧自动，视频等你点开始）。在单条视频轮上打回写的意见只影响那一轮。
 - 规划阶段待审核时 Telegram 会收到消息；渲染轮照常带按钮推送。
 - 对话里的 agent（以及经 MCP 的 Claude Code / Codex）可用 `create_production`、`get_production_plan`、`run_stage`、`review_stage` 驱动制片；视频阶段仍需你点头。
 - 扩展：工作流是 `workflows/`（或 `data/workflows/`）下的 YAML，输出契约是 `workflows/schemas/` 里的 JSON Schema，skill 是 Claude Code 格式的 `SKILL.md` 目录，放在 `skills/`（你自己的放 `data/skills/`）。新类型的片子 = 新 YAML + skill，不改代码。

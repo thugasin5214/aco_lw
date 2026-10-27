@@ -25,11 +25,17 @@ image (edited from a reference sheet) and then one image-to-video clip of a few 
 - `dialogue`: the line spoken in this shot, if any (becomes a subtitle).
 - `continuity`: what must match the previous shot (screen direction, props, light).
 
+## Language
+Write `frame`, `motion`, `camera` and `dialogue` in `settings.language` when it is set (for
+example Mandarin Chinese); otherwise in the language of the source. The video model voices the
+dialogue in the language the prompt is written in, so this decides what the characters speak.
+
 ## Craft rules
 - Open each scene with an establishing or orienting shot; vary shot sizes; respect the 180° rule.
 - Aim for 6–12 shots for a 1-minute film; never exceed 24.
 - Keep `frame` free of camera words and `camera` free of content words.
 
 ## Revisions
-Apply `revision_request`; keep ids and text of untouched shots identical so their approved
-keyframes and clips stay valid.
+Apply `revision_request` — it may concern one shot or all of them (e.g. "every shot in
+Mandarin"). Keep ids stable, and keep the text of shots the request does not touch identical so
+their approved keyframes and clips stay valid.

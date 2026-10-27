@@ -9,6 +9,7 @@ settings:
   image_candidates: 4
   video_candidates: 1
   subtitles: true
+  language: ""              # 对白与画面描述的语言，例如 "Mandarin Chinese (普通话)"；留空 = 跟原文一致
   auto_advance: true        # 上一阶段通过后自动开跑下一阶段（confirm 的阶段除外）
   width: 1280
   height: 720
@@ -88,7 +89,7 @@ stages:
       n: "{settings.video_candidates}"
       params:
         image: "@art:keyframes/{item.id}"
-        prompt: "{item.motion}. Camera: {item.camera}. {item.frame}"
+        prompt: "{item.motion}. Camera: {item.camera}. {item.frame}{settings.speech_hint}"
 
   - id: edit
     title: Edit (order · trims · transitions · subtitles)

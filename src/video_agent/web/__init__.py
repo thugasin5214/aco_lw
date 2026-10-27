@@ -664,6 +664,10 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
     ) -> list[dict]:
         return guard(lambda: _production().run_stage(pid, stage, keys, note, origin="web"))
 
+    @app.post("/api/productions/{pid}/settings")
+    def production_settings(pid: str, settings: dict = Body(..., embed=True)) -> dict:  # noqa: B008
+        return guard(lambda: _production().update_settings(pid, settings))
+
     @app.post("/api/productions/{pid}/review")
     def production_review(
         pid: str,

@@ -41,5 +41,6 @@ execution:
     get_production_plan: {allow: true}
     run_stage: {allow: true}           # stages marked confirm (videos) also need user_confirmed
     review_stage: {allow: true}
+    update_production_settings: {allow: true}
     shell: {allow: false}              # not implemented; would need a command whitelist + workdir
     web_search: {allow: false}         # phase 7

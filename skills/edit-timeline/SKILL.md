@@ -14,7 +14,8 @@ FFmpeg commands — the pipeline renders your list deterministically.
   - `shot`: a shot id that exists in `inputs.clips`. You may drop weak shots or reorder for rhythm.
   - `in` / `out` (seconds, optional): trim dead frames at the head or tail; omit to use the
     whole clip. Clips are about 3 s at the smoke tier — trim at most ~0.5 s per side.
-  - `subtitle`: the shot's dialogue (from the storyboard), if any. Keep it short.
+  - `subtitle`: the shot's dialogue (from the storyboard), if any, in `settings.language` when
+    set. Keep it short.
 - `transition`: `{type: "cut"}` by default; use `fade` / `dissolve` (0.2–0.6 s) only for
   time or place jumps.
 - `notes`: one or two lines on the cut for the reviewer.

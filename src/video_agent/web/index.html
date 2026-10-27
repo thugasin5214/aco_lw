@@ -314,7 +314,8 @@ const I18N = {
     "prod.new": "New production", "prod.workflow": "Workflow", "prod.title": "Title", "prod.source": "Source text",
     "prod.vtier": "Video tier", "prod.ncand": "Image candidates", "prod.subs": "Subtitles", "prod.create": "Create",
     "prod.run": "Run", "prod.start": "Start (long render)", "prod.rerun": "Re-run", "prod.approve": "Approve", "prod.redo": "Redo…",
-    "prod.reject": "Reject", "prod.keep": "Keep (still valid)", "prod.edit": "Edit JSON", "prod.save": "Approve edited",
+    "prod.reject": "Reject", "prod.lang": "Dialogue language", "prod.lang.ph": "same as the source", "prod.settings": "Settings", save: "Save",
+    "prod.settings.hint": "Applies to items run from now on (language, tiers, candidates…). Approved items are not re-rendered automatically; to change all shots, redo the storyboard with a note.", "prod.keep": "Keep (still valid)", "prod.edit": "Edit JSON", "prod.save": "Approve edited",
     "prod.note": "What should change?", "prod.next": "Next", "prod.none": "Nothing to do — waiting or done.",
     "prod.open_review": "Open in Review", "prod.blocked": "waiting for {s}", "prod.versions": "Versions",
     "na.run_stage": "Run “{s}”", "na.review": "Review “{s}”", "na.wait": "Working on “{s}”…", "na.stale": "“{s}”: upstream changed — keep or redo?", "na.none": "Done",
@@ -395,7 +396,8 @@ const I18N = {
     "prod.new": "新建制片", "prod.workflow": "工作流", "prod.title": "标题", "prod.source": "原文",
     "prod.vtier": "视频档位", "prod.ncand": "图片候选数", "prod.subs": "字幕", "prod.create": "创建",
     "prod.run": "开跑", "prod.start": "开始（渲染较久）", "prod.rerun": "重跑", "prod.approve": "通过", "prod.redo": "重做…",
-    "prod.reject": "打回", "prod.keep": "保留（仍然适用）", "prod.edit": "手改 JSON", "prod.save": "按修改通过",
+    "prod.reject": "打回", "prod.lang": "对白语言", "prod.lang.ph": "与原文相同", "prod.settings": "设置", save: "保存",
+    "prod.settings.hint": "对之后开跑的条目生效（语言、档位、候选数……）。已通过的不会自动重出；要改全部镜头，请带意见重做「分镜」。", "prod.keep": "保留（仍然适用）", "prod.edit": "手改 JSON", "prod.save": "按修改通过",
     "prod.note": "要改什么？", "prod.next": "下一步", "prod.none": "暂无操作——等待中或已完成。",
     "prod.open_review": "去审阅", "prod.blocked": "等待 {s}", "prod.versions": "版本",
     "na.run_stage": "开跑「{s}」", "na.review": "审核「{s}」", "na.wait": "「{s}」进行中……", "na.stale": "「{s}」的上游变了——保留还是重做？", "na.none": "已完成",
@@ -1114,7 +1116,8 @@ async function renderProdDetail(){
   const nat = na.type === "none" ? (PLAN.done ? t("na.none") : t("prod.none")) : t("na." + na.type, {s: sTitle(na.stage)});
   const final = arts.filter(a => a.stage === "final" && a.status === "current" && a.data).pop();
   const fv = final && final.data.outputs.find(o => o.kind === "video");
-  box.innerHTML = `<h2>${esc(PLAN.production.title)} <span class="hint">${esc(PLAN.workflow.title)}</span><span class="sp"></span>${badge(PLAN.production.state)}</h2>
+  box.innerHTML = `<h2>${esc(PLAN.production.title)} <span class="hint">${esc(PLAN.workflow.title)}</span><span class="sp"></span>
+      <button class="btn sm" id="prod-settings">${t("prod.settings")}</button>${badge(PLAN.production.state)}</h2>
     <div class="nexta">${t("prod.next")}: ${esc(nat)}</div>
     ${fv ? `<video controls style="width:100%;max-height:420px;border-radius:10px;background:#000" src="${fileUrl(final.data.task_id, fv.file)}"></video>` : ""}
     <div class="pipe">${PLAN.stages.map((s, i) => `<div class="pstage ${esc(s.state)}">
@@ -1129,6 +1132,14 @@ async function renderProdDetail(){
     <div id="prod-art"></div>`;
   const pid = PLAN.production.id, url = `/api/productions/${encodeURIComponent(pid)}`;
   box.querySelectorAll("[data-run]").forEach(b => b.onclick = () => act(url + "/run", {stage: b.dataset.run}));
+  $("#prod-settings").onclick = () => {
+    modal(`<h3>${t("prod.settings")}</h3><div class="hint">${t("prod.settings.hint")}</div>
+      <textarea class="json" id="ps-json">${esc(JSON.stringify(PLAN.production.settings, null, 2))}</textarea>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px"><button class="btn" onclick="closeModal()">${t("cancel")}</button>
+      <button class="btn primary" id="ps-save">${t("save")}</button></div>`);
+    $("#ps-save").onclick = async () => { let st; try { st = JSON.parse($("#ps-json").value); } catch(e){ toast(e.message, true); return; }
+      closeModal(); await act(url + "/settings", {settings: st}); };
+  };
   box.querySelectorAll("[data-goto]").forEach(b => b.onclick = () => show(b.dataset.goto));
   box.querySelectorAll("[data-view-art]").forEach(b => b.onclick = () => { prodArt = b.dataset.viewArt; showArtifact(arts); });
   box.querySelectorAll(".chip").forEach(b => b.onclick = () => {
@@ -1180,12 +1191,13 @@ $("#prod-new").onclick = async () => {
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;align-items:center">
       <label class="hint">${t("prod.vtier")} <select id="pn-vt">${vt.map(x => `<option ${x === "smoke" ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></label>
       <label class="hint">${t("prod.ncand")} <input id="pn-n" type="number" min="1" max="8" value="4" style="width:60px"></label>
-      <label class="hint"><input id="pn-subs" type="checkbox" checked> ${t("prod.subs")}</label></div>
+      <label class="hint"><input id="pn-subs" type="checkbox" checked> ${t("prod.subs")}</label>
+      <label class="hint">${t("prod.lang")} <input id="pn-lang" placeholder="${esc(t("prod.lang.ph"))}" value="${LANG === "zh" ? "Mandarin Chinese (普通话)" : ""}" style="width:200px"></label></div>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px"><button class="btn" onclick="closeModal()">${t("cancel")}</button>
       <button class="btn primary" id="pn-go">${t("prod.create")}</button></div>`);
   $("#pn-go").onclick = async () => {
     const body = {workflow: $("#pn-wf").value, title: $("#pn-title").value.trim() || "Untitled", inputs: {source: $("#pn-src").value},
-      settings: {video_tier: $("#pn-vt").value, image_candidates: +$("#pn-n").value || 4, subtitles: $("#pn-subs").checked}};
+      settings: {video_tier: $("#pn-vt").value, image_candidates: +$("#pn-n").value || 4, subtitles: $("#pn-subs").checked, language: $("#pn-lang").value.trim()}};
     if (!body.inputs.source.trim()) { toast(t("prod.source"), true); return; }
     closeModal(); const p = await act("/api/productions", body); if (p) { selProd = p.id; refreshAll(true); }
   };
