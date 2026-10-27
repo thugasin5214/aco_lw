@@ -222,7 +222,7 @@ def test_cli_commands_are_locked_down(env, tmp_path):  # noqa: F811
     cmd = AgentCLI("claude_code", studio.orch.cfg).command("r1", "http://x", tmp_path)
     assert cmd[cmd.index("--tools") + 1] == ""  # 没有任何内置工具
     assert "--strict-mcp-config" in cmd and cmd[cmd.index("--allowedTools") + 1] == "mcp__aco_lw"
-    mcp = json.loads((tmp_path / "mcp.json").read_text())["mcpServers"]["aco_lw"]
+    mcp = json.loads((tmp_path / "r1.mcp.json").read_text())["mcpServers"]["aco_lw"]
     assert mcp["args"][:2] == ["-m", "video_agent.mcp_server"]
     cx = AgentCLI("codex", studio.orch.cfg).command("r1", "http://x", tmp_path)
     assert cx[cx.index("-s") + 1] == "read-only" and cx[-1] == "-"
@@ -349,3 +349,11 @@ def test_openrouter_backend(env, monkeypatch):  # noqa: F811
     )
     assert res.tool_calls[0]["name"] == "get_status" and res.cached_tokens == 800
     assert res.backend == "openrouter"
+
+
+def test_codex_error_is_read_from_event_stream():
+    from video_agent.agent_cli import AgentCLI
+
+    out = '{"type":"thread.started"}\n{"type":"turn.failed","error":{"message":"{\\"error\\":{\\"message\\":\\"model not supported\\"}}"}}'
+    assert AgentCLI._codex_error(out) == "model not supported"
+    assert AgentCLI._codex_error('{"type":"turn.completed"}') is None

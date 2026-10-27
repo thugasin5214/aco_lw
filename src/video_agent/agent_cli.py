@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -41,7 +42,7 @@ class AgentCLI:
     def command(self, run_id: str, url: str, workdir: Path) -> list[str]:
         spec = self.mcp_server(run_id, url)
         if self.name == "claude_code":
-            cfg_file = workdir / "mcp.json"
+            cfg_file = workdir / f"{run_id}.mcp.json"
             cfg_file.write_text(json.dumps({"mcpServers": {"aco_lw": spec}}))
             cmd = [
                 self.cfg.claude_cmd,
@@ -54,8 +55,9 @@ class AgentCLI:
                 "--mcp-config",
                 str(cfg_file),
                 "--allowedTools",
-                "mcp__aco_lw",
-            ]  # 只自动批准 aco_lw 的工具
+                "mcp__aco_lw",  # 只自动批准 aco_lw 的工具
+                "--no-session-persistence",  # 不写进你的 Claude Code 会话历史
+            ]
             if self.cfg.claude_model:
                 cmd += ["--model", self.cfg.claude_model]
             return cmd
@@ -74,15 +76,17 @@ class AgentCLI:
             "-c",
             'approval_policy="never"',
             "-o",
-            str(workdir / "last_message.txt"),
+            str(workdir / f"{run_id}.last_message.txt"),
         ]
         if self.cfg.codex_model:
             cmd += ["-m", self.cfg.codex_model]
         return [*cmd, "-"]  # 指令从 stdin 读
 
     def run(self, run_id: str, prompt: str, url: str) -> tuple[str, dict]:
-        workdir = self.cfg.data_dir / "agent_cli" / run_id  # 空目录：不给它看任何项目文件
-        workdir.mkdir(parents=True, exist_ok=True)
+        # 仓库之外的空临时目录：CLI 拿不到任何项目文件或 git 信息（实测：在仓库里会带上提交记录）
+        # 固定一个目录（不每次新建，免得 CLI 为每个目录建一份记忆）；每次运行一个子文件只放配置
+        workdir = Path(tempfile.gettempdir()) / "aco_lw_agent_cli"
+        workdir.mkdir(exist_ok=True)
         t = time.monotonic()
         proc = subprocess.run(
             self.command(run_id, url, workdir),
@@ -105,7 +109,30 @@ class AgentCLI:
                 raise AgentCLIError(str(obj.get("result") or obj)[:500])
             stats.update(cost_usd=obj.get("total_cost_usd"), turns=obj.get("num_turns"))
             return obj.get("result") or "", stats
-        last = workdir / "last_message.txt"
-        if proc.returncode != 0 and not last.exists():
-            raise AgentCLIError(f"codex exited {proc.returncode}: {proc.stderr[-500:]}")
+        last = workdir / f"{run_id}.last_message.txt"
+        error = self._codex_error(proc.stdout)
+        if error or (proc.returncode != 0 and not last.exists()):
+            raise AgentCLIError(
+                f"codex: {error or proc.stderr[-500:] or f'exit {proc.returncode}'}"
+            )
         return (last.read_text().strip() if last.exists() else ""), stats
+
+    @staticmethod
+    def _codex_error(stdout: str) -> str | None:
+        """codex exec --json 把错误放在事件流里（turn.failed / error），而不是 stderr。"""
+        for line in reversed(stdout.splitlines()):
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if ev.get("type") in ("turn.failed", "error"):
+                msg = (
+                    (ev.get("error") or {}).get("message") if ev.get("error") else ev.get("message")
+                )
+                try:  # 内层常常还是一段 JSON
+                    inner = json.loads(msg)
+                    msg = (inner.get("error") or {}).get("message") or msg
+                except (TypeError, json.JSONDecodeError):
+                    pass
+                return str(msg)[:500]
+        return None
