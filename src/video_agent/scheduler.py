@@ -56,6 +56,7 @@ class Orchestrator:
         self.sleep = sleep
         self.on_llm_restored: Callable[[], None] | None = None  # 由 daemon 注入：恢复后预热会话缓存
         self.resources = ResourceManager(cfg, self.registry, self.store, log, sleep)
+        self.resources.executors = self.executors
 
     def executor_for(self, t: Template) -> Executor:
         if t.executor not in self.executors:

@@ -18,6 +18,8 @@ import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 
+import httpx
+
 from . import llm
 from .memory import snapshot
 from .registry import ModelInfo, Template
@@ -155,6 +157,7 @@ class ResourceManager:
         self.resident_family: str | None = None
         self.listeners: list[Callable[[], None]] = []  # 渲染结束 → 唤醒被暂存的 LLM 作业
         self.history: collections.deque = collections.deque(maxlen=720)  # 约 1 小时（5 s 一次）
+        self.executors: dict | None = None  # 由编排器注入：跨进程把关时直接问执行端
 
         self._lock = threading.RLock()
 
@@ -172,12 +175,49 @@ class ResourceManager:
         return snapshot()  # 运行时查找，测试可替换模块级 snapshot
 
     # ---- LLM 把关 ----
+    def exclusive_classes(self) -> set[str]:
+        """独占内存的模板里用到的节点类型（如 FreeVideoGenerate），用来识别别人提交的同类任务。"""
+        out: set[str] = set()
+        for t in self.registry.templates.values():
+            if self.registry.model_of(t).exclusive_llm:
+                out |= {n["class_type"] for n in t.graph.values()}
+        generic = {"LoadImage", "PreviewAny", "SaveImage", "CLIPTextEncode"}
+        return out - generic
+
+    def external_exclusive(self) -> str | None:
+        """跨进程把关（vhotseat 的做法）：直接问共享的执行端，而不是只信本进程的记录。
+        任何来源（本 daemon、dev / CLI 进程、你在 ComfyUI 网页手动提交）的独占任务都算。"""
+        now = time.monotonic()
+        cached = getattr(self, "_ext_cache", None)
+        if cached and now - cached[0] < 2:
+            return cached[1]
+        why = None
+        classes = self.exclusive_classes()
+        for ex in (self.executors or {}).values():
+            probe = getattr(ex, "queued_payloads", None)
+            if probe is None:
+                continue
+            try:
+                payloads = probe()
+            except (httpx.HTTPError, OSError, ValueError, KeyError) as e:  # 执行端不可达：不当作忙
+                self.log(f"{ex.name} queue check failed: {e}")
+                continue
+            for graph in payloads:
+                if any(n.get("class_type") in classes for n in graph.values()):
+                    why = f"a video render in {ex.name} holds the memory"
+                    break
+        self._ext_cache = (now, why)
+        return why
+
     def llm_admit(self) -> tuple[bool, str]:
         """LLM 现在能不能推理？不能时调用方应暂存（不阻塞），渲染结束后会被唤醒。"""
         with self._lock:
             ra = self.render_active
             if ra and ra["exclusive"]:
                 return False, f"{ra['kind']} render running ({ra['family']}) — needs the memory"
+        ext = self.external_exclusive()
+        if ext and not self.llm.loaded():
+            return False, ext  # 已加载的 LLM 不在此卸载；只阻止在独占渲染期间重新加载
         if self.snap()["pressure"] >= 4:
             return False, "memory pressure critical"
         return True, ""

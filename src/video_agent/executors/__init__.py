@@ -50,6 +50,9 @@ class Executor(Protocol):
     def cancel(self, job_id: str) -> None:
         """只取消这个 job（自己的）。"""
 
+    def queued_payloads(self) -> list[dict]:
+        """执行端里正在跑 / 排队的全部任务（含别人提交的）的载荷，用于跨进程把关。"""
+
     def busy(self) -> bool:
         """执行端是否有任何任务（包括别人手动提交的）。"""
 

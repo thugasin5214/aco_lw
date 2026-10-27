@@ -160,6 +160,7 @@ class LMStudioBackend(OpenAICompatBackend):
         self.context = context
         self.ttl = ttl  # 由驻留模式与会话活跃度决定
         self.allowed = allowed
+        self.load_guard: Callable[[], str | None] | None = None  # 返回拒绝加载的原因
 
     def prepare(self) -> float:
         if not self.allowed():
@@ -168,6 +169,11 @@ class LMStudioBackend(OpenAICompatBackend):
             raise PlannerUnavailable("当前是纯命令模式，不唤醒 LLM；用 /mode on_demand 切回")
         if llm.loaded(self.model):
             return 0.0
+        why = self.load_guard() if self.load_guard else None
+        if why:  # 加载前把关：独占渲染在跑时不加载（任何进程、任何路径都经过这里）
+            from .planner import PlannerUnavailable
+
+            raise PlannerUnavailable(f"not loading the LLM now: {why}")
         t = time.monotonic()
         llm.load(self.model, self.context, self.ttl())
         return time.monotonic() - t

@@ -143,3 +143,29 @@ def test_plan_gives_eta_with_switch_cost(rm):
     assert [p["task_id"] for p in plan] == ["a", "b"]
     assert plan[1]["start"] - plan[0]["end"] == pytest.approx(15.0)  # 换族代价
     assert rm.resident_family == "flux2-klein-4b-q8"  # 模拟不改共享状态
+
+
+def test_cross_process_gate_sees_other_peoples_video(rm, fake):
+    """别的进程 / 你在 ComfyUI 网页手动提交的视频也要挡住 LLM 加载（跨进程把关）。"""
+    from video_agent.backends import LMStudioBackend
+    from video_agent.planner import Planner, PlannerUnavailable
+
+    video_graph = {"3": {"class_type": "FreeVideoGenerate", "inputs": {}}}
+    fake.prompts["someone-else"] = video_graph  # 不是本系统提交的
+    rm.state["loaded"] = False
+    ok, why = rm.llm_admit()
+    assert not ok and "video render" in why
+    rm.state["loaded"] = True
+    rm._ext_cache = None
+    assert rm.llm_admit()[0]  # 已加载的 LLM 不在这里被卸载，只阻止重新加载
+
+    rm.state["loaded"] = False
+    rm._ext_cache = None
+    p = Planner(rm.cfg, rm.store, rm.registry)
+    if isinstance(p.backend, LMStudioBackend):
+        p.resources = rm
+        with pytest.raises(PlannerUnavailable, match="not loading"):
+            p.backend.prepare()
+    del fake.prompts["someone-else"]
+    rm._ext_cache = None
+    assert rm.llm_admit()[0]

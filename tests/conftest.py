@@ -31,7 +31,7 @@ class FakeComfy:
     def handler(self, req: httpx.Request) -> httpx.Response:
         path = req.url.path
         if path == "/queue":
-            running = [[0, pid, {}, {}, []] for pid in self.prompts if not self._done(pid)]
+            running = [[0, pid, self.prompts[pid], {}, []] for pid in self.prompts if not self._done(pid)]
             if self.busy_other:
                 running.append([0, "someone-else", {}, {}, []])
             return httpx.Response(200, json={"queue_running": running, "queue_pending": []})

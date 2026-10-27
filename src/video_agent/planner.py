@@ -134,7 +134,18 @@ class Planner:
         self.store = store
         self.registry = registry
         self.backend = FuncBackend(chat) if chat else (backend or make_backend(cfg, store))
-        self.resources = None  # 由 daemon 注入 ResourceManager
+        self._resources = None
+
+    @property
+    def resources(self):
+        return self._resources
+
+    @resources.setter
+    def resources(self, rm) -> None:
+        """注入 ResourceManager，并让本地后端每次加载模型前都先问它（跨进程把关）。"""
+        self._resources = rm
+        if rm is not None and hasattr(self.backend, "load_guard"):
+            self.backend.load_guard = lambda: None if rm.llm_admit()[0] else rm.llm_admit()[1]
 
     # ---- 驻留 ----
     @property

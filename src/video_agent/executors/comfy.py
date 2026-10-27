@@ -112,6 +112,15 @@ class ComfyExecutor:
     def cancel(self, job_id: str) -> None:
         self.comfy.interrupt(job_id)
 
+    def queued_payloads(self) -> list[dict]:
+        """执行端里正在跑 / 排队的全部任务（含别人提交的）的 workflow，用于跨进程把关。"""
+        q = self.comfy.queue()
+        return [
+            item[2]
+            for item in q["queue_running"] + q["queue_pending"]
+            if len(item) > 2 and isinstance(item[2], dict)
+        ]
+
     def busy(self) -> bool:
         return self.comfy.queue_busy()
 
