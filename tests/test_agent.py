@@ -316,3 +316,21 @@ def test_pipeline_runs_steps_without_waking_llm(env):
     result = json.loads(script.seen[-1][-1]["content"])
     assert result["finished"] and len(result["pipeline"]) == 2
     assert last_run(studio)["status"] == "done"
+
+
+def test_finished_runs_are_compact_and_stable_across_runs(env):
+    _studio, make, _ = env
+    a, script = make(
+        {"tool_calls": [call("get_status")]},
+        {"text": "first answer", "reasoning": "x"},
+        {"text": "second answer"},
+        {"text": "third answer"},
+    )
+    for text in ("one", "two", "three"):
+        a.inbound("web", text, lambda t, b=None: None)
+        run_all(a)
+    two, three = script.seen[2], script.seen[3]
+    # 第 1 次运行压成 [原话, 最终回复]，不再带工具往来
+    assert two[1] == {"role": "user", "content": "## User\none"}
+    assert two[2] == {"role": "assistant", "content": "first answer"}
+    assert three[:3] == two[:3]  # 之后每次请求，这部分逐字不变（缓存可命中）

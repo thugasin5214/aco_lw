@@ -493,6 +493,8 @@ class AgentRuntime:
     def _wire(m: dict) -> dict:
         if m["role"] == "assistant":
             out = {"role": "assistant", "content": m["content"]}
+            if m["meta"].get("reasoning"):  # 本次运行内逐字回放思考内容（与生成时一致）
+                out["reasoning_content"] = m["meta"]["reasoning"]
             if m["tool_calls"]:
                 out["tool_calls"] = [
                     {
@@ -507,20 +509,24 @@ class AgentRuntime:
             return {"role": "tool", "tool_call_id": m["tool_call_id"], "content": m["content"]}
         return {"role": m["role"], "content": m["content"]}
 
-    def _complete_prefix(self, msgs: list[dict]) -> list[dict]:
-        """去掉末尾未完成的 tool_calls（结果没回来），保证历史在协议上合法。"""
-        out = list(msgs)
-        while out:
-            last = out[-1]
-            if last["role"] == "assistant" and last["tool_calls"]:
-                out.pop()
-                continue
-            if last["role"] == "tool" and last["status"] != "done":
-                while out and out[-1]["role"] == "tool":
-                    out.pop()
-                continue
-            break
-        return out
+    def _compact(self, run: dict) -> list[dict]:
+        """已结束的运行压成稳定的两条（原话 + 最终回复）。
+
+        实测：模型的聊天模板在新的用户消息到来后会去掉更早轮次的思考内容，跨运行的前缀
+        本来就无法逐字延长；压成稳定形式后，每次只重算上一轮的这两条，更早的都命中缓存。
+        """
+        final = next(
+            (
+                m["content"]
+                for m in reversed(self.store.agent_msgs(run["id"]))
+                if m["role"] == "assistant" and not m["tool_calls"] and m["content"]
+            ),
+            f"(run {run['status']})",
+        )
+        return [
+            {"role": "user", "content": f"## User\n{run['origin_text']}"},
+            {"role": "assistant", "content": final},
+        ]
 
     def messages_for(self, run: dict) -> list[dict]:
         session = self.store.get_session(run["session_id"]) if run["session_id"] else None
@@ -531,7 +537,7 @@ class AgentRuntime:
                 break
             if r["created"] <= upto:
                 continue
-            msgs += [self._wire(m) for m in self._complete_prefix(self.store.agent_msgs(r["id"]))]
+            msgs += self._compact(r)
         msgs += [self._wire(m) for m in self.store.agent_msgs(run["id"])]
         return msgs
 
@@ -581,7 +587,12 @@ class AgentRuntime:
             return
         calls = res.tool_calls
         self.store.add_agent_msg(
-            run_id, "assistant", res.text or None, tool_calls=calls or None, **res.stats()
+            run_id,
+            "assistant",
+            res.text or None,
+            tool_calls=calls or None,
+            reasoning=res.reasoning,
+            **res.stats(),
         )
         self.store.update_run(run_id, steps=run["steps"] + 1)
         if not calls:
@@ -695,6 +706,33 @@ class AgentRuntime:
         text = say_text if say_text is not None else note
         if text:
             self.say_for(run["channel"])(text)
+        if run["session_id"]:
+            self.enqueue(lambda: self.prewarm(run["session_id"]))
+
+    def prewarm(self, session_id: str) -> None:
+        """为下一条消息预热缓存。
+
+        实测（docs/baseline.md）：引擎在每个请求“最后一条消息之前”留检查点，新请求只有与某个旧请求
+        一直相同到那里才复用。这里发一次 [稳定前缀 + 压缩历史 + 占位用户消息]，
+        你的下一句话就会命中“占位消息之前”的检查点。资源不允许时跳过（不抢渲染）。
+        """
+        rm = self.studio.orch.resources
+        if not rm.llm_admit()[0] or not self.planner.available():
+            return
+        session = self.store.get_session(session_id)
+        if session is None:
+            return
+        msgs = [{"role": "system", "content": self.system_prompt(session["project_id"], session)}]
+        upto = self.store.get_kv(f"agent_upto:{session_id}") or 0
+        for r in self.store.runs(session_id):
+            if r["created"] > upto and r["status"] in TERMINAL_RUN:
+                msgs += self._compact(r)
+        msgs.append({"role": "user", "content": "## Live state\n(warm-up)"})
+        try:
+            with rm.llm.inference():
+                self.planner.backend.prewarm(msgs, tools=self.spec)
+        except Exception:  # 预热失败不影响任何结果
+            log.warning("agent prewarm failed", exc_info=True)
 
     # ---- 恢复与唤醒 ----
     def resolve(self, key: str, result: dict) -> int:

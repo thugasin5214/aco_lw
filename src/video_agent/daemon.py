@@ -337,7 +337,10 @@ class Actions:
     def prewarm_current(self) -> None:
         """LLM 被视频卸载后重新加载：后台预热当前会话的前缀缓存。"""
         _, sid = self._ctx()
-        self.jobs.put((lambda: self.planner.prewarm(sid), lambda *a, **k: None))
+        if self.store.get_kv("planner_style", "agent") == "agent":
+            self.jobs.put((lambda: self.runtime.prewarm(sid), lambda *a, **k: None, False))
+        else:
+            self.jobs.put((lambda: self.planner.prewarm(sid), lambda *a, **k: None))
 
     # ---- 按钮（Telegram callback_data 与 Web 共用格式） ----
     def button(self, channel: str, data: str, reply: Reply) -> bool:

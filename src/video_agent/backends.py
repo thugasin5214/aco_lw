@@ -22,6 +22,7 @@ from . import llm
 class ChatResult:
     text: str
     tool_calls: list[dict] = field(default_factory=list)  # [{id, name, arguments(str)}]
+    reasoning: str = ""  # 模型的思考内容：同一次运行内回放它，历史才与生成时逐字一致（缓存）
     prompt_tokens: int = 0
     completion_tokens: int = 0
     ttft_s: float = 0.0
@@ -105,6 +106,7 @@ class OpenAICompatBackend:
         t = time.monotonic()
         res = ChatResult(text="", load_s=load_s)
         parts: list[str] = []
+        thinking: list[str] = []
         url = f"{self.base_url}/v1/chat/completions"
         calls: dict[int, dict] = {}
         body = self._body(messages, schema, max_tokens, tools)
@@ -119,6 +121,7 @@ class OpenAICompatBackend:
                         res.ttft_s = time.monotonic() - t
                     delta = ch.get("delta") or {}
                     parts.append(delta.get("content") or "")
+                    thinking.append(delta.get("reasoning_content") or delta.get("reasoning") or "")
                     for tc in delta.get("tool_calls") or []:  # 流式工具调用：按 index 拼接
                         c = calls.setdefault(
                             tc.get("index", 0), {"id": None, "name": "", "arguments": ""}
@@ -131,13 +134,14 @@ class OpenAICompatBackend:
                     res.prompt_tokens = d["usage"].get("prompt_tokens", 0)
                     res.completion_tokens = d["usage"].get("completion_tokens", 0)
         res.text = "".join(parts)
+        res.reasoning = "".join(thinking)
         res.tool_calls = [{**c, "id": c["id"] or f"call_{i}"} for i, c in sorted(calls.items())]
         res.total_s = time.monotonic() - t
         return res
 
-    def prewarm(self, messages: list[dict]) -> ChatResult:
-        """用当前前缀发一次 1 token 请求，把前缀写进缓存。"""
-        return self.chat(messages, None, max_tokens=1)
+    def prewarm(self, messages: list[dict], tools: list[dict] | None = None) -> ChatResult:
+        """用当前前缀发一次 1 token 请求，把前缀写进缓存（tools 也属于前缀，必须一致）。"""
+        return self.chat(messages, None, max_tokens=1, tools=tools)
 
 
 class LMStudioBackend(OpenAICompatBackend):
@@ -196,6 +200,6 @@ class FuncBackend:
             prompt_tokens=sum(len(m["content"]) for m in messages) // 2,
         )
 
-    def prewarm(self, messages) -> ChatResult:
+    def prewarm(self, messages, tools=None) -> ChatResult:
         self.calls.append(messages)
         return ChatResult(text="")
