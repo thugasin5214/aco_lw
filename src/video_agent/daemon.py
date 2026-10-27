@@ -401,7 +401,8 @@ class Actions:
                 t = store.get(cur["id"])
                 if t["prompt_id"]:
                     try:
-                        s.orch.comfy.interrupt(t["prompt_id"])
+                        tpl = s.orch.registry.template(t["template"])
+                        s.orch.executor_for(tpl).cancel(t["prompt_id"])
                     except (ComfyBusy, OSError):
                         pass
             say(tr("cancelled", n=n, x=tr("cancelled_running") if cur else ""))

@@ -49,6 +49,7 @@ class Template(BaseModel):
     kind: Literal["image", "video"]
     model: str
     source: str = ""
+    executor: str = "comfy"  # 由哪个执行端运行（executors/）
     release_after: Literal["keep", "free"] = "free"
     output_prefix: NodeField | None = None
     slots: dict[str, Slot]

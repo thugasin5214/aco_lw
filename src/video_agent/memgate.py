@@ -11,7 +11,6 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from . import llm
-from .comfy import Comfy, ComfyBusy
 from .config import Settings
 from .memory import snapshot
 from .registry import ModelInfo
@@ -28,7 +27,7 @@ class GateResult:
 
 
 def ensure(
-    comfy: Comfy,
+    executor,
     model: ModelInfo,
     cfg: Settings,
     log: Callable[[str], None] = print,
@@ -46,7 +45,7 @@ def ensure(
         sleep(2)
 
     while True:
-        busy = comfy.queue_busy()
+        busy = executor.busy()
         snap = snapshot()
         res.last = snap
         if not busy and snap["avail_gib"] >= res.required_gib and snap["pressure"] < 4:
@@ -58,12 +57,11 @@ def ensure(
         if busy:
             log("ComfyUI 队列有其他任务，等待……")
         elif not freed:
-            try:
-                comfy.free()
-                res.actions.append(f"/free（可用 {snap['avail_gib']} GiB < {res.required_gib}）")
+            if executor.release():
+                res.actions.append(
+                    f"释放 {executor.name} 模型（可用 {snap['avail_gib']} GiB < {res.required_gib}）"
+                )
                 log(res.actions[-1])
-            except ComfyBusy:
-                pass
             freed = True
             sleep(3)
             continue
