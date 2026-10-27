@@ -66,6 +66,7 @@ class ModelInfo(BaseModel):
     peak_gib: float
     measured: bool = False
     exclusive_llm: bool = False
+    adaptive: bool = False  # 引擎按可用内存自适应（如 FreeVideo）：实测峰值≠最低需求
 
 
 def load_template(dir_: Path, origin: str = "builtin") -> Template:

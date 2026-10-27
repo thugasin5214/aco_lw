@@ -8,3 +8,4 @@ freevideo-h3:
   peak_gib: 54      # FreeVideo ram_peak_bytes（phys_footprint）53.4–54.2 GiB
   measured: true
   exclusive_llm: true   # 提交前卸载 LLM（G0：共存进入内存压力警告 + swap）
+  adaptive: true        # 按可用内存自适应：hd-60s 实测占到 98.4 GiB 只是“有就用”，准入仍按 peak_gib

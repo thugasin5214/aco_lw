@@ -78,8 +78,12 @@ class Estimator:
         hist = self._history(template.name)
         cost = tier_cost(template.tiers[tier].values()) if tier in template.tiers else 1
         same = [h for h in hist if h["tier"] == tier]
-        peaks = [h["peak_gib"] for h in hist if h["peak_gib"]]
-        peak = max(peaks) if peaks else model.peak_gib
+        tier_peaks = [h["peak_gib"] for h in same if h["peak_gib"]]
+        if model.adaptive or not tier_peaks:
+            # 自适应引擎有多少用多少，实测峰值不是最低需求；没有本档位数据时用注册表的值
+            peak = model.peak_gib
+        else:
+            peak = max(tier_peaks)  # 按档位，不让大档位的峰值抬高小档位的门槛
         if same:
             return Estimate(
                 statistics.median(h["exec_s"] for h in same),

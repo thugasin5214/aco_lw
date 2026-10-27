@@ -169,3 +169,31 @@ def test_cross_process_gate_sees_other_peoples_video(rm, fake):
     del fake.prompts["someone-else"]
     rm._ext_cache = None
     assert rm.llm_admit()[0]
+
+
+def test_peak_is_per_tier_and_adaptive_uses_registry(rm):
+    import json as _j
+
+    def done(tpl, tier, exec_s, peak_gib):
+        t = rm.store.create(
+            template=tpl,
+            template_sha="x",
+            kind="video",
+            tier=tier,
+            params={},
+            params_hash=f"{tier}{exec_s}",
+        )
+        rm.store.update(
+            t["id"], metrics={"exec_s": exec_s, "freevideo": {"ram_peak_bytes": peak_gib * 2**30}}
+        )
+        for st in ("validated", "waiting_memory", "submitted", "review"):
+            rm.store.transition(t["id"], st)
+
+    done("h3-i2v", "smoke", 320, 54.9)
+    done("h3-i2v", "hd-60s", 18908, 98.4)
+    t = rm.registry.template("h3-i2v")
+    assert rm.estimator.estimate(t, "smoke").peak_gib == 54  # 自适应：用注册表值，不被 98.4 抬高
+    assert rm.estimator.estimate(t, "hd-60s").exec_s == 18908
+    rm.registry.models["freevideo-h3"].adaptive = False
+    assert rm.estimator.estimate(t, "smoke").peak_gib == 54.9  # 非自适应：按本档位实测
+    assert _j
