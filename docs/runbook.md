@@ -138,7 +138,7 @@ A production runs a **workflow** stage by stage; every stage waits for your appr
 | Keyframes (edited from the approved sheets) | FLUX.2 edit, one round per shot | select in Review |
 | Shot videos | H3 image-to-video per shot — **starts only when you press Start** | select / redo |
 | Edit (order, trims, transitions, subtitles) | LLM with skill `edit-timeline` | approve / redo / edit |
-| Final cut | FFmpeg renders the timeline (silent, soft subtitles + `.srt`) | approve |
+| Final cut | FFmpeg renders the timeline (keeps the clips' own audio — H3 voices dialogue; soft subtitles + `.srt`) | approve |
 
 - **Console → Productions → New**: paste the text, choose the video tier (default `smoke`, measured) and the number of image candidates. Planning stages start right away (local LLM; they wait while a video renders unless `allow_online` + `llm_fallback` are set).
 - **Changing something upstream** only invalidates what depends on it: editing one character re-renders that character's sheet and the shots that use it; other shots stay approved. A planning stage whose input changed shows *upstream changed — keep or redo?*.

@@ -1,4 +1,4 @@
-"""FFmpeg 执行端（E2）：按时间线（EDL JSON）裁切、统一尺寸帧率、拼接、可选转场与字幕。
+"""FFmpeg 执行端（E2）：按时间线（EDL JSON）裁切、统一尺寸帧率、拼接（保留片段自带的声音）、可选转场与字幕。
 
 LLM / skill 只产出时间线，命令行由这里确定性地拼出来——不让模型直接写 ffmpeg 参数。
 CPU 资源类：不经内存闸门，不卸载 LLM，不释放 ComfyUI。
@@ -53,10 +53,32 @@ def to_srt(subs: list[dict]) -> str:
     )
 
 
+def has_audio(path: str | Path) -> bool:
+    out = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a",
+            "-show_entries",
+            "stream=index",
+            "-of",
+            "csv=p=0",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return bool(out.stdout.strip())
+
+
 def build_command(tl: dict, out: Path, srt: Path | None) -> list[str]:
-    """时间线 → ffmpeg 参数（纯函数，便于测试）。"""
+    """时间线 → ffmpeg 参数（纯函数，便于测试）。片段带声音（例如 H3 的人声）就保留并一起剪。"""
     clips = tl["clips"]
     w, h, fps = int(tl.get("width", 1280)), int(tl.get("height", 720)), int(tl.get("fps", 24))
+    audio = any(c.get("_audio") for c in clips)
     cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
     for c in clips:
         cmd += ["-i", c["file"]]
@@ -64,29 +86,50 @@ def build_command(tl: dict, out: Path, srt: Path | None) -> list[str]:
         cmd += ["-i", str(srt)]
     parts = []
     for i, c in enumerate(clips):
-        trim = f"trim=start={c.get('in', 0)}" + (f":end={c['out']}" if c.get("out") else "")
+        start = c.get("in", 0)
+        trim = f"trim=start={start}" + (f":end={c['out']}" if c.get("out") else "")
         parts.append(
             f"[{i}:v]{trim},setpts=PTS-STARTPTS,"
             f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
             f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={fps},format=yuv420p[v{i}]"
         )
+        if audio:
+            if c.get("_audio"):
+                atrim = f"atrim=start={start}" + (f":end={c['out']}" if c.get("out") else "")
+                parts.append(
+                    f"[{i}:a]{atrim},asetpts=PTS-STARTPTS,aresample=48000,"
+                    f"aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}]"
+                )
+            else:  # 无声片段补静音，保持音画对齐
+                parts.append(
+                    f"anullsrc=r=48000:cl=stereo,atrim=duration={c['_len']:.3f},"
+                    f"aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}]"
+                )
     tr = tl.get("transition") or {}
     if len(clips) > 1 and tr.get("type") in TRANSITIONS and tr.get("seconds"):
         d = float(tr["seconds"])
-        acc, prev = 0.0, "v0"
+        acc, prev, aprev = 0.0, "v0", "a0"
         for i in range(1, len(clips)):
             acc += clips[i - 1]["_len"] - d
             parts.append(
                 f"[{prev}][v{i}]xfade=transition={tr['type']}:duration={d}:offset={acc:.3f}[x{i}]"
             )
             prev = f"x{i}"
-        last = prev
+            if audio:
+                parts.append(f"[{aprev}][a{i}]acrossfade=d={d}[ax{i}]")
+                aprev = f"ax{i}"
+        last, alast = prev, aprev
     else:
-        parts.append(
-            "".join(f"[v{i}]" for i in range(len(clips))) + f"concat=n={len(clips)}:v=1:a=0[out]"
-        )
-        last = "out"
+        n = len(clips)
+        if audio:
+            ins = "".join(f"[v{i}][a{i}]" for i in range(n))
+            parts.append(f"{ins}concat=n={n}:v=1:a=1[out][aout]")
+        else:
+            parts.append("".join(f"[v{i}]" for i in range(n)) + f"concat=n={n}:v=1:a=0[out]")
+        last, alast = "out", "aout"
     cmd += ["-filter_complex", ";".join(parts), "-map", f"[{last}]"]
+    if audio:
+        cmd += ["-map", f"[{alast}]", "-c:a", "aac", "-b:a", "192k"]
     if srt:
         cmd += ["-map", f"{len(clips)}:s", "-c:s", "mov_text"]
     cmd += ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-movflags", "+faststart"]
@@ -115,6 +158,7 @@ class FFmpegExecutor:
             if end <= float(c.get("in", 0)):
                 raise ValueError(f"片段裁切区间为空：{c}")
             c["out"], c["_len"] = end, end - float(c.get("in", 0))
+            c["_audio"] = has_audio(c["file"])
         subs = tl.get("subtitles") if task["params"].get("subtitles", True) else None
         return Prepared(
             payload={"timeline": tl, "subtitles": subs or []},

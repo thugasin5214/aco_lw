@@ -313,7 +313,7 @@ def test_materialize_and_ffmpeg_command(tmp_path):
     )
     assert tl["subtitles"] == [{"start": 0.0, "end": 1.5, "text": "hi"}]
     for c in tl["clips"]:
-        c["_len"] = c["out"] - c["in"]
+        c["_len"], c["_audio"] = c["out"] - c["in"], False
     srt = tmp_path / "s.srt"
     srt.write_text(to_srt(tl["subtitles"]))
     out = tmp_path / "final.mp4"
@@ -432,3 +432,30 @@ def test_executor_success_without_outputs_fails(make_orch, fake):
     task = orch.create("flux2-t2i", {"prompt": "x"})
     done = orch.execute(task["id"])
     assert done["state"] == "failed" and "no output" in done["error"]
+
+
+@pytest.mark.parametrize("transition", [None, {"type": "fade", "seconds": 0.3}])
+def test_assemble_keeps_clip_audio(tmp_path, transition):
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("no ffmpeg")
+    voiced, silent = tmp_path / "v.mp4", tmp_path / "s.mp4"
+    subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "color=red:s=320x240:d=1:r=24",
+         "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=32000:duration=1", "-shortest",
+         "-pix_fmt", "yuv420p", "-c:a", "aac", str(voiced)],
+        check=True,
+    )
+    subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "color=blue:s=320x240:d=1:r=24",
+         "-pix_fmt", "yuv420p", str(silent)],
+        check=True,
+    )
+    from video_agent.executors.ffmpeg import has_audio
+
+    clips = [{"file": str(f), "in": 0, "out": 1.0, "_len": 1.0, "_audio": has_audio(f)} for f in (voiced, silent)]
+    assert [c["_audio"] for c in clips] == [True, False]
+    out = tmp_path / "o.mp4"
+    tl = {"width": 320, "height": 240, "clips": clips, "transition": transition}
+    subprocess.run(build_command(tl, out, None), check=True)
+    assert has_audio(out)
+    assert abs(probe_seconds(out) - (2.0 - (0.3 if transition else 0))) < 0.15
