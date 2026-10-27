@@ -295,3 +295,31 @@ def test_video_task_reference_uses_mid_frame(studio, monkeypatch):
     assert path.endswith("v_mid.png") and seen["video"].name == "v.mp4"
     with pytest.raises(ValueError, match="找不到任务"):
         studio.orch.resolve_ref("@task:nope", None)
+
+
+def test_telegram_photo_becomes_upload(studio):
+    def handler(req: httpx.Request) -> httpx.Response:
+        path = req.url.path
+        if path.endswith("/getFile"):
+            return httpx.Response(200, json={"ok": True, "result": {"file_path": "photos/p1.jpg"}})
+        if "/file/bot" in path:
+            return httpx.Response(200, content=b"\xff\xd8 jpeg")
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
+
+    api = TelegramAPI("T", transport=httpx.MockTransport(handler))
+    seen = []
+    actions = Actions(studio, Planner(studio.orch.cfg, studio.store, studio.orch.registry))
+    actions.request = lambda text, ch, say, mid=None, att=None: seen.append((text, att))
+    bot = TelegramBot(api, actions, allowed=[42])
+    bot.handle(
+        {
+            "message": {
+                "chat": {"id": 42},
+                "caption": "参照这张",
+                "photo": [{"file_id": "s"}, {"file_id": "big"}],
+            }
+        }
+    )
+    text, att = seen[0]
+    assert text == "参照这张" and att[0]["name"] == "p1.jpg"
+    assert studio.store.get_upload(att[0]["id"])["path"].endswith(".jpg")

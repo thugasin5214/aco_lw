@@ -211,7 +211,7 @@ def daemon(host: str = "127.0.0.1", port: Annotated[int | None, typer.Option()] 
     cfg = config.load()
     d = Daemon(cfg)
     d.start()
-    typer.echo(f"控制台：http://{host}:{port or cfg.web_port}")
+    typer.echo(f"Console: http://{host}:{port or cfg.web_port}")
     try:
         uvicorn.run(
             create_app(cfg, d.actions), host=host, port=port or cfg.web_port, log_level="warning"

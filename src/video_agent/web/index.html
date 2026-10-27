@@ -403,7 +403,8 @@ function show(v){
   view = v; history.replaceState(null, "", "#" + v);
   document.querySelectorAll("header .tab").forEach(x => x.classList.toggle("on", x.dataset.view === v));
   document.querySelectorAll(".view").forEach(x => x.classList.toggle("on", x.id === "v-" + v));
-  const f = document.querySelector(`#v-${v} iframe`); if (f && !f.src) f.src = f.dataset.src;
+  const f = document.querySelector(`#v-${v} iframe`); const src = `${f?.dataset.src}?lang=${LANG}`;
+  if (f && !f.src.endsWith(src)) f.src = src;
   refreshAll(true);
 }
 document.querySelectorAll("#v-gallery .tab").forEach(b => b.onclick = () => {
@@ -694,13 +695,17 @@ async function loadProject(force){
 }
 function chatHtml(p, msgs, canChat){
   const sess = p.sessions.map(s => `<span class="sess ${s.id === selSession ? "on" : ""}" onclick="selSession='${esc(s.id)}';loadProject(true)">${esc(s.title || s.id)}${s.id === p.current_session ? " ●" : ""}<span class="c">${s.n_messages}</span></span>`).join("");
+  let lastLlm = "";
   const bubbles = msgs.map(m => {
     const cls = m.channel === "system" ? "sys" : m.direction === "in" ? "in" : "out";
+    let text = m.text;  // 渠道回复会重复 LLM 原话（Telegram 需要）；控制台只显示新增部分
+    if (m.channel === "llm") lastLlm = m.text;
+    else if (m.direction === "out" && lastLlm && text.startsWith(lastLlm)) { text = text.slice(lastLlm.length).trim(); lastLlm = ""; if (!text) return ""; }
     const st = m.meta || {};
     const extra = m.channel === "llm" && st.seconds != null ? " · " + t("llm.stats", {s: st.seconds, t: st.prompt_tokens ?? "?", c: st.prompt_tokens ? Math.round(100 * (st.cached_tokens_est || 0) / st.prompt_tokens) : 0}) + (st.load_s ? t("load", {l: st.load_s}) : "") : "";
     const att = (st.attachments || []).map(a => `<img class="att" src="/uploads/${encodeURIComponent(a.id)}" alt="${esc(a.name)}">`).join("");
     const btns = canChat && st.buttons ? `<div class="btns">${st.buttons.flat().map(([lbl, data]) => `<button class="btn sm" onclick="pressBtn('${esc(data)}')">${esc(lbl)}</button>`).join("")}</div>` : "";
-    return `<div class="msg ${cls}"><span class="meta">${t("who." + m.channel)} · ${fmtT(m.ts)}${esc(extra)}</span>${esc(m.text)}${att}${btns}</div>`;
+    return `<div class="msg ${cls}"><span class="meta">${t("who." + m.channel)} · ${fmtT(m.ts)}${esc(extra)}</span>${esc(text)}${att}${btns}</div>`;
   }).join("") || `<div class="hint">${t("chat.empty")}</div>`;
   return `<h3 class="sub">${t("sessions")}<span class="sessions">${sess}</span>
       ${p.state === "active" ? `<button class="btn sm" onclick="newSession()">${t("new.session")}</button>` : ""}

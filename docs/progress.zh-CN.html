@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aco_lw 项目进度</title>
+<style>
+:root{--bg:#f6f8fb;--card:#fff;--line:#c9d3e0;--text:#152030;--muted:#526175;--accent:#1f5f99;
+  --acc-tint:rgba(31,95,153,.10);--ok:#2f7d4f;--ok-tint:rgba(47,125,79,.12);--warn:#9a5b00;color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#10151e;--card:#1a2331;--line:#344258;
+  --text:#e7edf7;--muted:#a9b8cc;--accent:#8ecbff;--acc-tint:rgba(142,203,255,.12);--ok:#7fd3a0;
+  --ok-tint:rgba(127,211,160,.12);--warn:#f0c27a;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#10151e;--card:#1a2331;--line:#344258;--text:#e7edf7;--muted:#a9b8cc;
+  --accent:#8ecbff;--acc-tint:rgba(142,203,255,.12);--ok:#7fd3a0;--ok-tint:rgba(127,211,160,.12);
+  --warn:#f0c27a;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.75 system-ui,-apple-system,"PingFang SC",sans-serif}
+main{max-width:1040px;margin:auto;padding:32px 20px 70px}
+h1{font-size:clamp(24px,4vw,34px);line-height:1.3;margin:6px 0 6px}
+h2{font-size:20px;margin:40px 0 12px}
+.muted{color:var(--muted)}.small{font-size:13.5px}
+.box{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 20px;margin:14px 0}
+.lead{border-left:3px solid var(--accent);background:var(--card);padding:12px 18px;border-radius:0 10px 10px 0;margin:14px 0}
+/* 阶段路线 */
+.road{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:16px 0}
+@media (max-width:760px){.road{grid-template-columns:1fr}}
+.ph{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;position:relative}
+.ph.done{border-color:var(--ok)}.ph.now{border-color:var(--accent);box-shadow:0 0 0 3px var(--acc-tint)}
+.ph .n{font-size:12px;color:var(--muted)}.ph .t{font-weight:650;font-size:15px;line-height:1.4;margin:2px 0 6px}
+.ph .g{font-size:12.5px;color:var(--muted);line-height:1.5}
+.tag{display:inline-block;font-size:11.5px;padding:1px 8px;border-radius:99px;margin-top:8px;background:var(--bg);color:var(--muted)}
+.ph.done .tag{background:var(--ok-tint);color:var(--ok)}.ph.now .tag{background:var(--acc-tint);color:var(--accent)}
+.bar{height:8px;background:var(--bg);border:1px solid var(--line);border-radius:99px;overflow:hidden;margin:8px 0 2px}
+.bar i{display:block;height:100%;background:var(--ok)}
+ul.tasks{list-style:none;padding:0;margin:8px 0}
+ul.tasks li{display:flex;gap:10px;padding:6px 0;border-bottom:1px dashed var(--line);font-size:14.5px}
+ul.tasks li:last-child{border-bottom:0}
+.ck{flex:none;width:20px;height:20px;border-radius:6px;border:1.5px solid var(--line);display:grid;place-items:center;font-size:12px;margin-top:3px}
+li.d .ck{background:var(--ok-tint);border-color:var(--ok);color:var(--ok)}
+li.w .ck{border-color:var(--accent);color:var(--accent)}
+li .id{color:var(--muted);font-variant-numeric:tabular-nums;flex:none;width:44px}
+.table{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:14.5px}
+th,td{padding:8px 11px;border:1px solid var(--line);text-align:left;vertical-align:top}th{background:var(--card);white-space:nowrap}
+code{color:var(--accent);font-size:.92em;overflow-wrap:anywhere}
+</style>
+</head>
+<body>
+<main>
+<div class="muted small">aco_lw · 轻量本地视频 Agent · 更新于 2026-10-26 · <a href="progress.html">English</a></div>
+<h1>项目进度</h1>
+<div class="lead">阶段 0、1、2 已完成（G2 手机侧待用户确认）。<b>阶段 2.5</b>——会话、项目记忆、提示缓存、控制台双语、审阅结果可更改——已在分支 <code>phase2.5</code> 上实现，43 项测试通过，正在验证后合并。下一步：<b>阶段 5</b>，可安装包 + 配置向导。</div>
+<h2>阶段路线</h2>
+<div class="road"><div class="ph done"><div class="n">阶段 0</div><div class="t">接口与基线实测</div><div class="g">G0：视频冒烟通过；峰值内存与切换耗时已记录</div><span class="tag">已通过</span></div><div class="ph done"><div class="n">阶段 1</div><div class="t">编排器 + 图片闭环 + 进度台</div><div class="g">G1：CLI 图片闭环；重启不重复提交；Web 能看 DAG 与产物</div><span class="tag">已通过</span></div><div class="ph done"><div class="n">阶段 2</div><div class="t">Telegram + 审阅 + 项目</div><div class="g">G2：手机上能完成选版；等待期间无 LLM 推理</div><span class="tag">代码完成 · 手机侧待测</span></div><div class="ph now"><div class="n">阶段 2.5 · 当前</div><div class="t">会话、记忆、缓存、双语</div><div class="g">记忆跨会话共享；长会话自动摘要后仍能指代“上一轮 #2”</div><span class="tag">验证中</span></div><div class="ph "><div class="n">阶段 5 · 下一步</div><div class="t">可安装包 + 配置向导</div><div class="g">G5：干净 Mac 仅按文档 30 min 内出第一张图（不含模型下载）</div><span class="tag">规划中</span></div><div class="ph "><div class="n">阶段 6</div><div class="t">在线模型与外部 agent</div><div class="g">G6：本地 / 在线切换不丢会话与记忆；断网回退；agent 不越过 MCP 白名单</div><span class="tag">规划中</span></div><div class="ph "><div class="n">阶段 3</div><div class="t">短视频闭环 + 有限探索</div><div class="g">G3：遵守探索预算；未经选定不替换定妆</div><span class="tag">后续</span></div><div class="ph "><div class="n">阶段 4</div><div class="t">OpenClaw 子 agent</div><div class="g">G4：按需启动、能退出、无孤儿进程</div><span class="tag">后续</span></div></div>
+<h2>阶段 2.5 任务</h2>
+<div class="box"><div class="bar"><i style="width:92%"></i></div><div class="muted small">12 / 13</div>
+<ul class="tasks"><li class="d"><span class="ck">✓</span><span class="id">S1</span><span>会话与记忆数据模型；旧消息归入“历史会话”</span></li><li class="d"><span class="ck">✓</span><span class="id">S2</span><span>控制台与 Telegram 的会话：新建 / 继续 / 重命名；/session</span></li><li class="d"><span class="ck">✓</span><span class="id">S3</span><span>上下文组装：规则 + 模板 + 项目记忆 + 会话摘要，然后逐字复现的历史往来，实时状态放最后</span></li><li class="d"><span class="ck">✓</span><span class="id">S4</span><span>上下文变长时自动摘要，摘要后预热</span></li><li class="d"><span class="ck">✓</span><span class="id">S5</span><span>LLM 提议项目记忆，点“记住”才生效</span></li><li class="d"><span class="ck">✓</span><span class="id">S6</span><span>记忆面板：添加、编辑（新版本）、置顶、归档、恢复</span></li><li class="d"><span class="ck">✓</span><span class="id">S7</span><span>对话反馈作用于待审阅轮（B2）；回复先复述理解（B3）；附参考图（B1，控制台与 Telegram）</span></li><li class="d"><span class="ck">✓</span><span class="id">S8</span><span>提示缓存：实测只能延长复用；逐字复现后复用 55–75%；视频后预热</span></li><li class="d"><span class="ck">✓</span><span class="id">S9</span><span>规划器后端接口（LM Studio、OpenAI 兼容）</span></li><li class="d"><span class="ck">✓</span><span class="id">W1</span><span>手动微调表单（不经 LLM）</span></li><li class="d"><span class="ck">✓</span><span class="id">R1</span><span>审阅结果可更改（重新打开），保留决定历史并回退基准包</span></li><li class="d"><span class="ck">✓</span><span class="id">I1–I3</span><span>控制台双语（默认英文）、服务端文字双语、文档英文为主并附中文版</span></li><li class="w"><span class="ck">…</span><span class="id">—</span><span>用户验证后合并到 main；之后做 W2（ComfyUI 往返编辑）</span></li></ul></div>
+<h2>关键实测</h2>
+<div class="table"><table><tr><th>项目</th><th>结果</th><th>对设计的影响</th></tr><tr><td>27B 加载 / 首 token</td><td>15.4 s / 0.3 s，约 19.5 GiB</td><td>按需唤醒代价低</td></tr><tr><td>出图 1280×720</td><td>冷 23 s，热 11.4 s</td><td>审阅期间保留图片模型</td></tr><tr><td>视频 640×384×3s（H3 文生 / 图生）</td><td>230–329 s，峰值 54–55 GiB</td><td>视频前卸载 LLM</td></tr><tr><td>前缀缓存（17k token）</td><td>冷算约 48 s vs 延长复用 0.3–0.5 s</td><td>历史逐字复现，易变状态放最后</td></tr><tr><td>多轮规划</td><td>首 token 2–3 s，复用 55–75%，总 10–20 s</td><td>主要是思考输出；可选 planner_fast</td></tr></table></div>
+<h2>决策记录</h2>
+<div class="box small"><p>2026-10-26 · 视频模型会换（MiniMax H3、LTX 2.5……）→ 模板与模型注册表可插拔。</p><p>2026-10-26 · 用户会手动用 ComfyUI → 只在队列空闲时提交，不取消别人的任务。</p><p>2026-10-26 · 控制台端口 8790（8765 是另一个 server）。</p><p>2026-10-26 · Telegram bot @luwu_abot；候选以原图文件发送；手机只用 Telegram；每轮候选数可配置（默认 4）。</p><p>2026-10-26 · 项目历史永久保留；每个项目多个会话，共享项目记忆；记忆需确认。</p><p>2026-10-26 · 必须支持提示缓存；按模型“只能延长”的缓存特性实现。</p><p>2026-10-26 · 控制台中英双语，默认英文；文档英文为主。</p><p>2026-10-26 · 审阅结果可以更改。</p><p>2026-10-26 · 2.5 之后：可安装包（Apple Silicon、一行命令 + launchd、Web 配置向导）；再之后：在线模型 / Codex / Claude Code 经 MCP 接入。</p></div>
+<p class="muted small">详情：<code>PLAN.md</code> · 实测：<code>docs/baseline.md</code> · 运维：<code>docs/runbook.zh-CN.md</code></p>
+</main>
+</body>
+</html>

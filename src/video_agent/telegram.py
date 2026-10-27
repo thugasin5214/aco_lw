@@ -74,6 +74,15 @@ class TelegramAPI:
                 media.append({"type": "document", "media": f"attach://{key}", "caption": caption})
             self.call("sendMediaGroup", files=files, chat_id=chat_id, media=media)
 
+    def download(self, file_id: str) -> tuple[str, bytes]:
+        """下载用户发来的图片 / 文件，返回 (文件名, 内容)。"""
+        info = self.call("getFile", file_id=file_id)
+        path = info["file_path"]
+        base = str(self.http.base_url).replace("/bot", "/file/bot", 1)
+        r = self.http.get(base.rstrip("/") + "/" + path, timeout=120)
+        r.raise_for_status()
+        return path.rsplit("/", 1)[-1], r.content
+
     def answer(self, callback_id: str, text: str = "") -> None:
         try:
             self.call("answerCallbackQuery", callback_query_id=callback_id, text=text[:190])
@@ -107,7 +116,7 @@ class TelegramBot:
             try:
                 self.api.send(chat, text, buttons)
             except Exception as e:  # noqa: BLE001 — 通知失败不影响出图
-                log.warning("Telegram 发送失败：%s", e)
+                log.warning("Telegram send failed: %s", e)
 
     def send_round(self, rnd: dict, tasks: list[dict], task_dir: Callable[[str], Path]) -> None:
         items = []
@@ -131,7 +140,7 @@ class TelegramBot:
                     chat, tr("round_ready_tg", t=title, n=len(ok)), round_buttons(rnd, ok)
                 )
             except Exception as e:  # noqa: BLE001
-                log.warning("Telegram 发送候选失败：%s", e)
+                log.warning("Telegram send (candidates) failed: %s", e)
 
     # ---- 入站 ----
     def poll_forever(self, stop: threading.Event) -> None:
@@ -139,7 +148,7 @@ class TelegramBot:
             try:
                 updates = self.api.get_updates(self.offset)
             except Exception as e:  # noqa: BLE001 — 网络抖动时稍后重试
-                log.warning("getUpdates 失败：%s", e)
+                log.warning("getUpdates failed: %s", e)
                 stop.wait(5)
                 continue
             for u in updates:
@@ -147,7 +156,7 @@ class TelegramBot:
                 try:
                     self.handle(u)
                 except Exception as e:
-                    log.exception("处理更新失败")
+                    log.exception("Handling update failed")
                     chat = _chat_of(u)
                     if chat in self.allowed:
                         self.api.send(chat, tr("error", e=e))
@@ -155,17 +164,19 @@ class TelegramBot:
     def handle(self, u: dict) -> None:
         chat = _chat_of(u)
         if "message" in u:
-            text = (u["message"].get("text") or "").strip()
+            msg = u["message"]
+            text = (msg.get("text") or msg.get("caption") or "").strip()
             if text.startswith("/whoami"):
                 self.api.send(chat, tr("whoami", id=chat))
                 return
             if chat not in self.allowed:
-                log.info("忽略非白名单 chat_id=%s 的消息", chat)
+                log.info("Ignoring message from non-whitelisted chat_id=%s", chat)
                 return
-            if not text:
+            attachments = self._attachments(msg)
+            if not text and not attachments:
                 return
             reply = lambda m, b=None: self.api.send(chat, m, b)
-            self.actions.inbound("telegram", text, reply)
+            self.actions.inbound("telegram", text or "(image)", reply, attachments or None)
             return
         if "callback_query" in u:
             cq = u["callback_query"]
@@ -177,6 +188,19 @@ class TelegramBot:
             done = self.actions.button("telegram", cq.get("data", ""), reply)
             if done and msg:
                 self.api.clear_buttons(chat, msg["message_id"])
+
+    def _attachments(self, msg: dict) -> list[dict]:
+        """照片（取最大尺寸）或以文件发送的图片 → 保存为上传，供 @upload 引用。"""
+        file_id, name = None, None
+        if msg.get("photo"):
+            file_id = msg["photo"][-1]["file_id"]
+        elif (msg.get("document") or {}).get("mime_type", "").startswith("image/"):
+            file_id, name = msg["document"]["file_id"], msg["document"].get("file_name")
+        if not file_id:
+            return []
+        fname, data = self.api.download(file_id)
+        up = self.actions.studio.save_upload(name or fname, data)
+        return [{"id": up["id"], "name": up["name"]}]
 
 
 def round_buttons(rnd: dict, tasks: list[dict]) -> list[list[tuple[str, str]]]:

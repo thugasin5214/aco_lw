@@ -24,7 +24,7 @@ from ..studio import StudioError
 
 STATIC = Path(__file__).parent / "index.html"
 RUNBOOK_PAGE = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>aco_lw 运行手册</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>aco_lw Runbook</title>
 <style>
 :root{--bg:#f6f8fb;--card:#fff;--line:#c9d3e0;--text:#152030;--muted:#526175;--accent:#1f5f99;color-scheme:light}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#10151e;--card:#1a2331;
@@ -93,18 +93,27 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
     def index() -> str:
         return STATIC.read_text()
 
+    def _doc(name: str, ext: str, lang: str | None) -> Path:
+        """英文为主文件；lang=zh 时优先 *.zh-CN.<ext>。"""
+        zh = ROOT / "docs" / f"{name}.zh-CN.{ext}"
+        if (lang or cfg.language).startswith("zh") and zh.exists():
+            return zh
+        return ROOT / "docs" / f"{name}.{ext}"
+
     @app.get("/progress", response_class=HTMLResponse)
-    def progress() -> str:
-        return (ROOT / "docs" / "progress.html").read_text()
+    def progress(lang: str | None = None) -> str:
+        return _doc("progress", "html", lang).read_text()
 
     @app.get("/runbook", response_class=HTMLResponse)
-    def runbook() -> str:
+    def runbook(lang: str | None = None) -> str:
         import markdown
 
         body = markdown.markdown(
-            (ROOT / "docs" / "runbook.md").read_text(), extensions=["tables", "fenced_code"]
+            _doc("runbook", "md", lang).read_text(), extensions=["tables", "fenced_code"]
         )
-        return RUNBOOK_PAGE.replace("{{body}}", body)
+        return RUNBOOK_PAGE.replace("{{body}}", body).replace(
+            'lang="zh-CN"', 'lang="zh-CN"' if (lang or "").startswith("zh") else 'lang="en"'
+        )
 
     # ---- 状态 ----
     @app.get("/api/system")

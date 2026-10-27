@@ -4,9 +4,19 @@
 # llm_model = "qwen3.8-27b-splash"
 # llm_idle_ttl_s = 300
 # memory_margin_gib = 8.0
+# language = "en"                    # console default & system messages: en | zh
 # web_port = 8790
 # round_size = 4                      # 每轮候选数
 
 # Telegram：@BotFather 新建 bot 得到 token；chat_id 可先启动 daemon 后给 bot 发 /whoami 查看
 # telegram_token = "123456:ABC..."
 # telegram_chat_ids = [123456789]     # 白名单，只响应这些 chat
+
+# Planner / sessions
+# planner_backend = "lmstudio"        # lmstudio | openai_compatible
+# openai_base_url = ""                # for openai_compatible
+# openai_model = ""
+# openai_api_key = ""
+# planner_fast = false                # append /no_think: ~35% faster, slightly weaker understanding
+# llm_session_ttl_s = 1200            # keep the LLM (and its prompt cache) loaded while a session is active
+# session_summary_tokens = 16000      # summarize older exchanges beyond this prompt size

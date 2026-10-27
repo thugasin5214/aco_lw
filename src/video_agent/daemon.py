@@ -44,9 +44,9 @@ class Worker(threading.Thread):
     def run(self) -> None:
         try:
             for tid, outcome in self.orch.recover():
-                log.info("恢复 %s：%s", tid, outcome)
+                log.info("Recovered %s: %s", tid, outcome)
         except SchedulerBusy as e:
-            log.warning("启动对账跳过：%s", e)
+            log.warning("Startup reconcile skipped: %s", e)
         self._refresh_rounds()
         while not self.stop.is_set():
             self.store.set_kv(
@@ -69,11 +69,11 @@ class Worker(threading.Thread):
             try:
                 self.orch.execute(task["id"])
             except SchedulerBusy:
-                log.info("另一个编排器进程在运行（例如 CLI），稍后重试")
+                log.info("Another orchestrator process is running (e.g. CLI); retrying later")
                 self.stop.wait(5)
                 continue
             except Exception:
-                log.exception("执行 %s 出错", task["id"])
+                log.exception("Executing %s failed", task["id"])
                 t = self.store.get(task["id"])
                 if t["state"] in ("draft", "validated", "waiting_memory"):
                     self.store.transition(task["id"], "failed", "执行异常", error="worker error")
@@ -122,7 +122,7 @@ class Actions:
             except (ParamError, StudioError, PlannerUnavailable, ValueError, KeyError) as e:
                 reply(tr("cannot", e=e))
             except Exception as e:
-                log.exception("规划任务失败")
+                log.exception("Planner job failed")
                 reply(tr("planner_error", e=e))
 
     def _say(self, channel: str, reply: Reply) -> Reply:
@@ -533,9 +533,9 @@ class Daemon:
             threading.Thread(
                 target=self.bot.poll_forever, args=(self.stop,), name="telegram", daemon=True
             ).start()
-            log.info("Telegram 监听已启动（白名单 %s）", self.cfg.telegram_chat_ids)
+            log.info("Telegram listener started (whitelist %s)", self.cfg.telegram_chat_ids)
         else:
-            log.info("未配置 telegram_token，只启动 Worker 与 Web")
+            log.info("No telegram_token configured; starting worker and web only")
 
     def shutdown(self) -> None:
         self.stop.set()

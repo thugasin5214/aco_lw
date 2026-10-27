@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>aco_lw 项目进度</title>
+<title>aco_lw Progress</title>
 <style>
 :root{--bg:#f6f8fb;--card:#fff;--line:#c9d3e0;--text:#152030;--muted:#526175;--accent:#1f5f99;
   --acc-tint:rgba(31,95,153,.10);--ok:#2f7d4f;--ok-tint:rgba(47,125,79,.12);--warn:#9a5b00;color-scheme:light}
@@ -22,7 +22,7 @@ h2{font-size:20px;margin:40px 0 12px}
 .box{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 20px;margin:14px 0}
 .lead{border-left:3px solid var(--accent);background:var(--card);padding:12px 18px;border-radius:0 10px 10px 0;margin:14px 0}
 /* 阶段路线 */
-.road{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin:16px 0}
+.road{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:16px 0}
 @media (max-width:760px){.road{grid-template-columns:1fr}}
 .ph{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;position:relative}
 .ph.done{border-color:var(--ok)}.ph.now{border-color:var(--accent);box-shadow:0 0 0 3px var(--acc-tint)}
@@ -46,97 +46,19 @@ code{color:var(--accent);font-size:.92em;overflow-wrap:anywhere}
 </head>
 <body>
 <main>
-<div class="muted small">aco_lw · 轻量本地视频 Agent · 更新于 2026-10-26</div>
-<h1>项目进度</h1>
-<div class="lead">阶段 0、1 已通过；阶段 2 代码完成，控制台侧审阅流程已经用户实测（需求 → 候选 → 打回+批注 → 新一轮），Telegram 已接入（@luwu_abot，白名单已配），<b>手机侧选版待用户测试</b>。下一步按用户要求做<b>阶段 5：可安装包 + 配置向导</b>，目标是新机器一键跑起来。运行手册见控制台“手册”页。</div>
-
-<h2>阶段路线</h2>
-<div class="road" style="grid-template-columns:repeat(6,minmax(0,1fr))">
-  <div class="ph done"><div class="n">阶段 0</div><div class="t">接口与基线实测</div>
-    <div class="g">G0：视频冒烟通过，峰值内存与切换耗时已记录</div><span class="tag">已通过</span></div>
-  <div class="ph done"><div class="n">阶段 1</div><div class="t">编排器 + 图片闭环 + Web 进度台</div>
-    <div class="g">G1：CLI 图片闭环；重启不重复提交；Web 能看 DAG 与产物</div><span class="tag">已通过</span></div>
-  <div class="ph now"><div class="n">阶段 2 · 进行中</div><div class="t">Telegram + 审阅 + 项目历史</div>
-    <div class="g">G2：手机上能完成选版；等待期间无 LLM 推理</div><span class="tag">等 G2 验收</span></div>
-  <div class="ph"><div class="n">阶段 5 · 下一步</div><div class="t">可安装包 + 配置向导</div>
-    <div class="g">G5：干净 Mac 仅按安装文档 30 min 内出第一张图；重启自动恢复</div><span class="tag">规划中</span></div>
-  <div class="ph"><div class="n">阶段 3</div><div class="t">短视频闭环 + 有限探索</div>
-    <div class="g">G3：遵守探索预算；未经选定不替换定妆</div><span class="tag">后续</span></div>
-  <div class="ph"><div class="n">阶段 4</div><div class="t">扩展能力（OpenClaw 子 agent）</div>
-    <div class="g">G4：按需启动、能退出、无孤儿进程</div><span class="tag">后续</span></div>
-</div>
-
-<h2>测试中发现的待办（2026-10-26）</h2>
-<div class="box">
-  <ul class="tasks">
-    <li><span class="ck"></span><span class="id">B1</span><span>对话附参考图：控制台上传 / Telegram 发图 → 参考编辑或图生视频，可一键锁进基准包</span></li>
-    <li><span class="ck"></span><span class="id">B2</span><span>有待审阅轮次时，直接打字默认视为对最近一轮的批注（DAG 连线、自动关闭上一轮）</span></li>
-    <li><span class="ck"></span><span class="id">B3</span><span>规划器带上批注链与原话、回复复述理解要点，减少歧义（如“太小”指年龄）</span></li>
-    <li><span class="ck"></span><span class="id">B4</span><span>规划耗时随上下文增长到 23–41 s，评估关闭思考 / 缩短上下文</span></li>
-  </ul>
-</div>
-
-<h2>阶段 2 任务</h2>
-<div class="box">
-  <div class="bar"><i style="width:90%"></i></div><div class="muted small">9 / 10 完成</div>
-  <ul class="tasks">
-    <li class="d"><span class="ck">✓</span><span class="id">T2.1</span><span>候选轮：一次出 N 个候选（默认 4，可配置；视频默认 1），整轮跑完进入待审阅</span></li>
-    <li class="d"><span class="ck">✓</span><span class="id">T2.2</span><span>常驻服务 <code>va daemon</code>：Worker 串行出图 + 规划器队列 + Telegram + Web；启动先对账</span></li>
-    <li class="d"><span class="ck">✓</span><span class="id">T2.3</span><span>审阅动作：通过（可锁进基准包）/ 整轮重做 / 微调（保留种子）/ 打回+批注</span></li>
-    <li class="d"><span class="ck">✓</span><span class="id">T2.4</span><span>导演基准包：版本化，<code>@pack:角色</code> 引用</span></li>
-    <li class="d"><span class="ck">✓</span><span class="id">T2.5</span><span>Telegram：白名单、命令不唤醒 LLM、原图文件发送、内联按钮</span></li>
-    <li class="d"><span class="ck">✓</span><span class="id">T2.6</span><span>LLM 规划器：按需唤醒（TTL 5 min），输出经模板槽位校验；视频生成时排队</span></li>
-    <li class="d"><span class="ck">✓</span><span class="id">T2.7</span><span>控制台审阅页：候选并排、快捷键 1–9 / Enter / F / R / X / J / K</span></li>
-    <li class="d"><span class="ck">✓</span><span class="id">T2.8</span><span>驻留模式 <code>/mode</code>：按需 / 会话 / 常驻 / 纯命令</span></li>
-    <li class="d"><span class="ck">✓</span><span class="id">T2.10</span><span>项目与对话历史：历史项目永久保留，控制台可看已完成项目、轮次、基准包版本、完整对话</span></li>
-    <li class="w"><span class="ck">…</span><span class="id">T2.9</span><span>G2 验收：控制台侧已走通（需求 → 4 候选 → 打回+批注 ×2 → 新一轮）；手机侧选版待用户测试</span></li>
-  </ul>
-</div>
-
-<h2>阶段 1 任务</h2>
-<div class="box">
-  <div class="bar"><i style="width:100%"></i></div><div class="muted small">13 / 13 完成</div>
-  <ul class="tasks">
-    <li class="d"><span class="ck">✓</span><span class="id">T1.1</span><span>项目骨架：uv、Python 3.11、ruff、pytest</span></li>
-    <li class="d"><span class="ck">✓</span><span class="id">T1.2</span><span>ComfyUI 客户端 <code>comfy.py</code>（自带 prompt_id 提交、二次确认的 /free）</span></li>
-    <li class="d"><span class="ck">✓</span><span class="id">T1.3</span><span>模板注册表：4 个模板（FLUX.2 文生图 / 参考编辑，H3 文生视频 / 图生视频）+ 模型注册表</span></li>
-    <li class="d"><span class="ck">✓</span><span class="id">T1.4</span><span>档位与校验：未实测档位需显式允许；尺寸只能由档位决定；<code>/object_info</code> 节点校验</span></li>
-    <li class="d"><span class="ck">✓</span><span class="id">T1.5</span><span>渲染 <code>render.py</code>（纯函数）</span></li>
-    <li class="d"><span class="ck">✓</span><span class="id">T1.6</span><span>存储：SQLite + 每任务 <code>manifest.json</code>；状态迁移集中校验</span></li>
-    <li class="d"><span class="ck">✓</span><span class="id">T1.7</span><span>内存门控：可用内存 + 压力等级 + 队列空闲；依次 /free → 卸载 LLM → 等待</span></li>
-    <li class="d"><span class="ck">✓</span><span class="id">T1.8</span><span>调度器：串行锁、查重、先落库 prompt_id 再提交、轮询、收集产物、释放策略、LLM 恢复</span></li>
-    <li class="d"><span class="ck">✓</span><span class="id">T1.9</span><span>恢复 <code>va recover</code>：按 prompt_id 对账，永不自动重提</span></li>
-    <li class="d"><span class="ck">✓</span><span class="id">T1.10</span><span>CLI：<code>templates / submit / run / status / review / recover / release / serve</code></span></li>
-    <li class="d"><span class="ck">✓</span><span class="id">T1.12</span><span>Web 进度台 <code>va serve</code>：系统状态、任务 DAG、阶段流水线、产物画廊</span></li>
-    <li class="d"><span class="ck">✓</span><span class="id">T1.13</span><span>本进度文档</span></li>
-    <li class="d"><span class="ck">✓</span><span class="id">T1.11</span><span>G1 实机验收：1280×720 出图 21 s；生成中 kill -9 → <code>va recover</code> 收回产物，ComfyUI 仅 1 次提交；父子任务在 DAG 中可见</span></li>
-  </ul>
-</div>
-
-<h2>G0 关键数字（实测）</h2>
-<div class="table"><table>
-<tr><th>项目</th><th>结果</th><th>对设计的影响</th></tr>
-<tr><td>27B 加载 / 首 token</td><td>15.4 s / 0.3 s，占用约 19.5 GiB</td><td>按需唤醒代价低；空闲 5 min 用 <code>--ttl</code> 卸载</td></tr>
-<tr><td>出图 1280×720</td><td>冷 23 s，热 11.4 s</td><td>图片审阅会话保留生成模型</td></tr>
-<tr><td>视频 640×384×3s（H3）</td><td>230–321 s，峰值 54 GiB</td><td>提交视频前卸载 LLM</td></tr>
-<tr><td>视频 + 27B 共存</td><td>压力警告档，swap +3.7 GiB</td><td>门控阈值 62 GiB</td></tr>
-<tr><td>图生视频（H3 I2V）</td><td>329 s，峰值 54.9 GiB，压力短暂警告</td><td><code>h3-i2v</code> smoke 档标为已实测</td></tr>
-<tr><td>LLM 规划（27B，结构化 JSON）</td><td>理解需求 7–10 s，批注改写 7 s</td><td>自由文本可接受；命令与按钮不走 LLM</td></tr>
-<tr><td>ComfyUI 进程 RSS</td><td>看不到 Metal 占用</td><td>门控看系统可用内存 + 压力等级</td></tr>
-</table></div>
-<p class="muted small">完整数据见 <code>docs/baseline.md</code>；计划与范围见 <code>PLAN.md</code>。</p>
-
-<h2>决策记录</h2>
-<div class="box small">
-  <p>2026-10-26 · 视频模型不固定（MiniMax H3 / LTX 2.5 / 更新的）→ 模板与模型注册表可插拔，新模型只加模板目录与一条实测记录。</p>
-  <p>2026-10-26 · 用户会手动用 ComfyUI → 提交前要求队列空闲，释放前二次确认，不取消别人的任务。</p>
-  <p>2026-10-26 · 第一版就要 Web 进度台（只读）：DAG、阶段流水线、产物预览。审阅操作仍在阶段 2。</p>
-  <p>2026-10-26 · 进度台端口改为 8790（8765 是用户另一个 server）。</p>
-  <p>2026-10-26 · 阶段 2：新建专用 Telegram bot；候选以原图文件发送；手机只用 Telegram；每轮候选数可配置，默认 4。</p>
-  <p>2026-10-26 · 阶段 2 加入“项目”与对话历史：历史项目永久保留，控制台可看已完成项目与完整对话。</p>
-  <p>2026-10-26 · Telegram bot @luwu_abot 接入，白名单 1 个 chat。新增运行手册（控制台“手册”页 / <code>docs/runbook.md</code>）。</p>
-  <p>2026-10-26 · 下一步改为阶段 5：可安装包 + Web 配置向导 + 安装文档，目标新机器一键运行；阶段 3/4 顺延。</p>
-</div>
+<div class="muted small">aco_lw · lightweight local video agent · updated 2026-10-26 · <a href="progress.zh-CN.html">中文</a></div>
+<h1>Project progress</h1>
+<div class="lead">Phases 0, 1 and 2 are done (G2 on the phone still to be confirmed by the user). <b>Phase 2.5</b> — sessions, project memory, prompt caching, bilingual console, editable review decisions — is implemented on branch <code>phase2.5</code> with 43 tests passing, and is being verified before merging. Next: <b>phase 5</b>, the installable package with a setup wizard.</div>
+<h2>Roadmap</h2>
+<div class="road"><div class="ph done"><div class="n">Phase 0</div><div class="t">Interfaces & baseline</div><div class="g">G0: video smoke test; peak memory and switch times recorded</div><span class="tag">passed</span></div><div class="ph done"><div class="n">Phase 1</div><div class="t">Orchestrator + image loop + dashboard</div><div class="g">G1: CLI image loop; no duplicate submit after restart; DAG & outputs visible</div><span class="tag">passed</span></div><div class="ph done"><div class="n">Phase 2</div><div class="t">Telegram + review + projects</div><div class="g">G2: pick a version on the phone; no LLM inference while waiting</div><span class="tag">code done · phone test pending</span></div><div class="ph now"><div class="n">Phase 2.5 · now</div><div class="t">Sessions, memory, caching, i18n</div><div class="g">Memory shared across sessions; long sessions summarized; ‘previous round #2’ still resolves</div><span class="tag">verifying</span></div><div class="ph "><div class="n">Phase 5 · next</div><div class="t">Installable package + setup wizard</div><div class="g">G5: clean Mac, docs only, first image within 30 min (excluding model download)</div><span class="tag">planned</span></div><div class="ph "><div class="n">Phase 6</div><div class="t">Online models & external agents</div><div class="g">G6: switch local ↔ online without losing sessions; offline fallback; agents stay inside MCP whitelist</div><span class="tag">planned</span></div><div class="ph "><div class="n">Phase 3</div><div class="t">Short-video loop + bounded exploration</div><div class="g">G3: exploration budget respected; pack never replaced without approval</div><span class="tag">later</span></div><div class="ph "><div class="n">Phase 4</div><div class="t">OpenClaw sub-agent</div><div class="g">G4: starts on demand, exits, no orphan processes</div><span class="tag">later</span></div></div>
+<h2>Phase 2.5 tasks</h2>
+<div class="box"><div class="bar"><i style="width:92%"></i></div><div class="muted small">12 / 13</div>
+<ul class="tasks"><li class="d"><span class="ck">✓</span><span class="id">S1</span><span>Sessions & memory data model; old messages moved into a “History” session</span></li><li class="d"><span class="ck">✓</span><span class="id">S2</span><span>Sessions in console and Telegram: new / continue / rename; /session</span></li><li class="d"><span class="ck">✓</span><span class="id">S3</span><span>Context builder: rules + templates + project memory + session summary, then exact earlier exchanges, live state last</span></li><li class="d"><span class="ck">✓</span><span class="id">S4</span><span>Automatic session summary when the context grows; prewarm afterwards</span></li><li class="d"><span class="ck">✓</span><span class="id">S5</span><span>Project memory proposed by the LLM, applied only after you press Remember</span></li><li class="d"><span class="ck">✓</span><span class="id">S6</span><span>Memory panel: add, edit (new version), pin, archive, restore</span></li><li class="d"><span class="ck">✓</span><span class="id">S7</span><span>Chat feedback applies to the round under review (B2); replies restate understanding (B3); attach reference images (B1, console & Telegram)</span></li><li class="d"><span class="ck">✓</span><span class="id">S8</span><span>Prompt caching: measured extend-only cache; verbatim replay gives 55–75 % reuse; prewarm after video</span></li><li class="d"><span class="ck">✓</span><span class="id">S9</span><span>Planner backend interface (LM Studio, OpenAI-compatible)</span></li><li class="d"><span class="ck">✓</span><span class="id">W1</span><span>Manual tweak form (no LLM)</span></li><li class="d"><span class="ck">✓</span><span class="id">R1</span><span>Change review decisions (reopen) with decision history and pack revert</span></li><li class="d"><span class="ck">✓</span><span class="id">I1–I3</span><span>Bilingual console (English default), server texts via i18n, English-first docs with Chinese copies</span></li><li class="w"><span class="ck">…</span><span class="id">—</span><span>Merge to main after user verification; then W2 (ComfyUI round-trip)</span></li></ul></div>
+<h2>Key measurements</h2>
+<div class="table"><table><tr><th>Item</th><th>Result</th><th>Design impact</th></tr><tr><td>27B load / first token</td><td>15.4 s / 0.3 s, ~19.5 GiB</td><td>On-demand wake is cheap</td></tr><tr><td>Image 1280×720</td><td>cold 23 s, warm 11.4 s</td><td>Keep image model during review</td></tr><tr><td>Video 640×384×3 s (H3, t2v / i2v)</td><td>230–329 s, peak 54–55 GiB</td><td>Unload the LLM before video</td></tr><tr><td>Prefix cache (17k tokens)</td><td>cold ~48 s vs 0.3–0.5 s when extending</td><td>History replayed verbatim; volatile state last</td></tr><tr><td>Multi-turn planning</td><td>first token 2–3 s, 55–75 % reuse, 10–20 s total</td><td>‘Thinking’ dominates; optional planner_fast</td></tr></table></div>
+<h2>Decision log</h2>
+<div class="box small"><p>2026-10-26 · Video models will change (MiniMax H3, LTX 2.5, …) → pluggable template and model registries.</p><p>2026-10-26 · The user also uses ComfyUI by hand → submit only on an idle queue; never cancel others' jobs.</p><p>2026-10-26 · Console port 8790 (8765 belongs to another server).</p><p>2026-10-26 · Telegram bot @luwu_abot; candidates sent as original files; phone uses Telegram only; round size configurable (default 4).</p><p>2026-10-26 · Projects keep history forever; sessions per project with shared project memory; memory needs confirmation.</p><p>2026-10-26 · Prompt caching required; implemented to match the model's extend-only cache.</p><p>2026-10-26 · Console bilingual, English default; docs English-first.</p><p>2026-10-26 · Review decisions can be changed.</p><p>2026-10-26 · Next after 2.5: installable package (Apple Silicon, one-line install + launchd, web setup wizard); then online models / Codex / Claude Code via MCP.</p></div>
+<p class="muted small">Details: <code>PLAN.md</code> · measurements: <code>docs/baseline.md</code> · operations: <code>docs/runbook.md</code></p>
 </main>
 </body>
 </html>

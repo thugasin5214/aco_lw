@@ -1,134 +1,148 @@
-# aco_lw 运行手册（Runbook）
+# aco_lw Runbook
 
-更新于 2026-10-26 · 适用版本：阶段 2（`va daemon` + 控制台 + Telegram）
+Updated 2026-10-26 · applies to phase 2.5 (`va daemon` + console + Telegram + sessions & project memory) · 中文版：[runbook.zh-CN.md](runbook.zh-CN.md)
 
-本手册回答三件事：**怎么开 / 关**、**日常怎么用**、**出问题怎么查**。设计取舍见 `docs/design.html`，计划与进度见 `PLAN.md` / `docs/progress.html`，实测数据见 `docs/baseline.md`。
+This runbook answers three questions: **how to start / stop**, **how to use it day to day**, and **what to check when something goes wrong**. Design rationale is in `docs/design.html`, plan and progress in `PLAN.md` / `docs/progress.html`, measurements in `docs/baseline.md`.
 
 ---
 
-## 1. 组件与位置
+## 1. Components and locations
 
-| 组件 | 地址 / 位置 | 说明 |
+| Component | Address / location | Notes |
 |---|---|---|
-| aco_lw 控制台 | http://127.0.0.1:8790 | `va daemon` 启动；只绑定本机。**8765 是另一个 server，不要占用** |
-| ComfyUI（FreeVideo-local） | http://127.0.0.1:8188 · `~/Documents/ChatGPT/jev/FreeVideo-local/ComfyUI` | 执行端：FLUX.2 出图、FreeVideo / MiniMax H3 出视频。aco_lw 不负责启动它 |
-| LM Studio | http://127.0.0.1:1234 · CLI `lms` | 27B 规划器（`qwen3.8-27b-splash`），按需加载、空闲 5 min 卸载 |
-| Telegram bot | @luwu_abot | 白名单 chat_id 见 `config.toml` |
-| 代码 | `~/workplace/video-agent`（GitHub 私有仓库 `aco_lw`） | |
-| 配置 | `config.toml`（gitignore，权限 600） | token 等敏感项只在这里 |
-| 数据 | `data/` | `tasks.sqlite`（索引）、`jobs/<任务ID>/`（manifest + 产物）、`packs/<项目ID>/v<N>/`（基准包）、`daemon.log` |
+| aco_lw console | http://127.0.0.1:8790 | Started by `va daemon`; local only. **Port 8765 belongs to another server — don't use it** |
+| ComfyUI (FreeVideo-local) | http://127.0.0.1:8188 · `~/Documents/ChatGPT/jev/FreeVideo-local/ComfyUI` | Executor: FLUX.2 images, FreeVideo / MiniMax H3 video. aco_lw does not start it |
+| LM Studio | http://127.0.0.1:1234 · CLI `lms` | 27B planner (`qwen3.8-27b-splash`), loaded on demand, unloaded when idle |
+| Telegram bot | @luwu_abot | Whitelisted chat_ids live in `config.toml` |
+| Code | `~/workplace/video-agent` (private GitHub repo `aco_lw`) | |
+| Config | `config.toml` (git-ignored, mode 600) | Secrets such as the bot token live only here |
+| Planner rules | `prompts/planner_rules.md` | Editable; changing it invalidates the LLM prefix cache once |
+| Data | `data/` | `tasks.sqlite` (index), `jobs/<task>/` (manifest + outputs), `packs/<project>/v<N>/` (baseline pack), `uploads/<project>/` (reference images), `daemon.log` |
 
-## 2. 启动与停止
+## 2. Start and stop
 
-### 启动顺序
-1. **ComfyUI**：确认 http://127.0.0.1:8188 能打开（FreeVideo-local 环境）。
-2. **LM Studio**：应用开着即可；不需要手动加载模型，aco_lw 会按需加载。
-3. **aco_lw**：执行下面的命令。
+### Start order
+1. **ComfyUI** — make sure http://127.0.0.1:8188 opens (FreeVideo-local environment).
+2. **LM Studio** — the app just needs to be running; aco_lw loads the model when needed.
+3. **aco_lw** — run:
 
 ```sh
 cd ~/workplace/video-agent
 uv run va daemon 2>&1 | tee -a data/daemon.log
 ```
 
-看到 `Telegram 监听已启动（白名单 [...]）` 与 `控制台：http://127.0.0.1:8790` 即就绪。启动时会自动对账（`recover`），只收集已完成的任务，**不会重复提交**。
+Ready when you see `Telegram listener started (whitelist [...])` and `Console: http://127.0.0.1:8790`. Startup reconciles unfinished tasks (`recover`): it only collects finished results and **never resubmits**.
 
-### 停止
-- 在运行 daemon 的终端按 `Ctrl-C`，或 `pkill -f "va daemon"`。
-- 正在 ComfyUI 里跑的任务**不会被取消**；下次启动 daemon 会按 prompt_id 对账并收回产物。
+### Stop
+- `Ctrl-C` in the daemon terminal, or `pkill -f "va daemon"`.
+- A job already running inside ComfyUI is **not cancelled**; the next daemon start reconciles it by prompt_id and collects its outputs.
 
-### 只看不跑
-`uv run va serve`：只开控制台（只读 + 审阅），不出图。排队任务要等 daemon 起来才执行。
+### Console only
+`uv run va serve` opens the console (browse + review) without rendering; queued tasks run once the daemon is up.
 
-## 3. 日常使用
+## 3. Daily use
 
-### 3.1 一次完整的创作循环
-1. **提需求**：控制台「项目与对话」对话框，或 Telegram 里直接说中文。例：“同一个金发学院少女，回头看向镜头的半身照，傍晚暖色窗光”。
-   LLM 先秒回“收到”，约 10–40 s 理解后排队一轮候选（图片默认 4 张，视频 1 条）。
-2. **等出图**：图片约 12 s / 张；视频 640×384×3s 约 5–6 min。完成后控制台「审阅」出现角标，Telegram 收到原图文件 + 按钮。
-3. **审阅**（控制台 `#review` 或 Telegram 按钮，二者等价）：
+### 3.1 A full creative loop
+1. **Ask** — in the console (*Projects & Chat*) or in Telegram, in English or Chinese. Example: “Same blonde academy girl, half-body, looking back at the camera, warm evening window light.” You can **attach a reference image** (📎 in the console, or send a photo in Telegram) and say “use this face”.
+   The planner acknowledges immediately, understands the request (typically 10–20 s; the first message after a cold start adds ~15 s for loading) and queues a round (4 images by default, 1 for video).
+2. **Wait** — images take ~12 s each; a 640×384×3 s video takes ~5–6 min. When done, the *Review* tab shows a badge and Telegram receives the original files with buttons.
+3. **Review** (console `#review` or Telegram buttons — equivalent):
 
-   | 动作 | 效果 |
+   | Action | Effect |
    |---|---|
-   | ✅ 通过 | 选中该候选，其余标为打回；可同时**锁进基准包**（角色 / 场景 / 风格） |
-   | 🎲 整轮重做 | 整轮不要，同参数换种子再出一轮 |
-   | 🔧 微调 #N | 写一句修改说明；保留 #N 的种子，LLM 改写 prompt 后出新一轮 |
-   | ↩️ 打回+批注 | 写原因；LLM 按批注调整参数后出新一轮（留空 = 只打回） |
+   | ✅ Approve | Select this candidate (others are marked rejected); optionally **lock it into the baseline pack** as character / scene / style |
+   | 🎲 Redo round | Discard the round; same parameters, new seeds |
+   | 🔧 Tweak with note | Keep #N's seed; the LLM rewrites the prompt from your note; new round |
+   | ↩️ Reject + note | The LLM adjusts parameters from your note; new round (empty note = reject only) |
+   | ✏️ Manual tweak | Edit the parameters yourself in a form (prompt, seed, steps, reference, tier, count); no LLM |
+   | ↺ Change decision | Reopen a decided round; the old decision is kept in history and any pack lock it made is undone in a new pack version |
 
-   控制台快捷键：`1–9` 高亮 · `Enter` 通过 · `F` 微调 · `R` 重做 · `X` 打回 · `J/K` 切换审阅项。
-4. **锁定后延续**：基准包锁定“角色”后，后续需求可以说“用这个角色……”，规划器会用 `@pack:角色` 作为参考图（参考编辑 / 图生视频）。
+   You can also just type: “#2 is good, lock it as the character”, or “she looks too young” — when a round is waiting for review, feedback typed in chat is applied to that round and the new round is linked to it in the DAG.
+   Console shortcuts: `1–9` highlight · `Enter` approve · `F` tweak with note · `R` redo · `X` reject · `J/K` switch item.
+4. **Carry on from locked assets** — once a character is locked, say “use this character …”; the planner references `@pack:character` (reference edit / image-to-video).
 
-### 3.2 项目
-- 一个创作目标一个项目。所有轮次、任务、基准包版本、对话都挂在项目下。
-- 「项目与对话」页：列表含**已完成**项目，可随时翻看历史；点“设为当前”继续对话。
-- 完成后点“标记完成”（或 `/project done`）：排队任务取消，历史永久保留。
+### 3.2 Projects, sessions and project memory
+- **Project** = one creative goal. Rounds, tasks, the baseline pack, sessions and memory all belong to it. Completed projects stay browsable forever (*Projects & Chat*, filter “Completed”).
+- **Session** = one conversation thread inside a project. Start a new one when switching topic (`+ New session` or `/session new`); continue an old one any time. Older messages from before sessions existed are in the “History” session.
+- **Project memory** = durable facts shared by all sessions of the project (e.g. “camera stays at 35mm”, “about 19, refined CG-leaning-photoreal”). The LLM **proposes** entries after relevant messages; they only take effect after you press **Remember** (console *Project memory* tab or Telegram button). You can add, edit (creates a new version), pin, archive and restore entries.
+- **Long sessions** are summarized automatically: older exchanges are folded into a session summary; the original messages stay in history.
+- **View LLM context** (console, per session) shows exactly what the planner will receive next — useful when it misunderstands.
 
-### 3.3 命令（Telegram 与控制台对话框通用，不唤醒 LLM）
+### 3.3 Commands (Telegram and console chat; never wake the LLM)
 
-| 命令 | 作用 |
+| Command | Purpose |
 |---|---|
-| `/status` | 项目、出图状态、排队数、内存、LLM 模式 |
-| `/review` | 把当前项目待审阅的轮次重新推送到 Telegram |
-| `/round 模板 [数量] [prompt]` | 不经 LLM 直接出一轮（模板：`flux2-t2i` `flux2-edit` `h3-t2v` `h3-i2v`） |
-| `/redo` | 最近一轮待审阅的整轮重做 |
-| `/pause` `/resume` | 暂停 / 恢复出图（正在跑的会跑完） |
-| `/cancel` | 取消当前项目的排队任务，并中断本系统正在跑的任务 |
-| `/mode [on_demand\|session\|always\|command_only]` | LLM 驻留模式（默认按需） |
-| `/project` · `/projects` · `/project new 名称` · `/project use 名称` · `/project done` | 项目管理 |
-| `/pack` | 当前基准包 |
-| `/whoami` | 显示 chat_id（任何人可用，用于配置白名单） |
+| `/status` | Project, rendering state, queue, memory, LLM mode |
+| `/review` | Re-send rounds waiting for review to Telegram |
+| `/round TEMPLATE [COUNT] [prompt]` | Queue a round without the LLM (`flux2-t2i` `flux2-edit` `h3-t2v` `h3-i2v`) |
+| `/redo` | Redo the latest round under review |
+| `/reopen [ROUND_ID]` | Change the decision of the latest (or given) decided round |
+| `/pause` `/resume` | Pause / resume rendering (the running task finishes) |
+| `/cancel` | Cancel this project's queued tasks and interrupt our running task |
+| `/mode [on_demand\|session\|always\|command_only]` | LLM residency (default on demand) |
+| `/project` · `/projects` · `/project new NAME` · `/project use NAME` · `/project done` | Projects |
+| `/session` · `/session new [TITLE]` · `/session use N` | Sessions (N: 1 = most recent) |
+| `/memory` · `/memory add TEXT` · `/memory del ID` | Project memory |
+| `/pack` | Current baseline pack |
+| `/whoami` | Show your chat_id (works for anyone; used to set up the whitelist) |
 
-### 3.4 命令行（本机）
+### 3.4 Command line (local)
 
 ```sh
-uv run va templates                    # 模板、档位（✓ 已实测）、参数
-uv run va round flux2-t2i -n 4 -p prompt="..."   # 排队一轮（daemon 执行）
-uv run va status [任务ID]               # 任务列表 / 单个 manifest
-uv run va project list|new|use|done     # 项目
-uv run va pack                          # 基准包版本
-uv run va mode [模式]                   # LLM 驻留模式
-uv run va recover                       # 手动对账（daemon 启动时会自动做）
-uv run va release                       # 队列空闲时释放 ComfyUI 模型
-uv run va submit ...                    # 阶段 1 的同步提交（daemon 运行时会因串行锁等待/拒绝）
+uv run va templates                     # templates, tiers (✓ measured), parameters
+uv run va round flux2-t2i -n 4 -p prompt="..."   # queue a round (run by the daemon)
+uv run va status [TASK_ID]               # task list / one manifest
+uv run va project list|new|use|done      # projects
+uv run va pack                           # baseline pack versions
+uv run va mode [MODE]                    # LLM residency
+uv run va recover                        # manual reconcile (the daemon does this on start)
+uv run va release                        # free ComfyUI models when its queue is idle
 ```
 
-## 4. 资源与内存策略（自动执行）
+### 3.5 Language
+The console defaults to **English**; switch with the EN / 中文 selector in the header (remembered per browser). System messages and Telegram texts follow `language` in `config.toml` (`en` default, `zh` for Chinese). The planner replies in the language you write in.
 
-| 情况 | 系统行为 |
+## 4. Resources and memory policy (automatic)
+
+| Situation | What the system does |
 |---|---|
-| 提交视频前 | **卸载 27B**（视频峰值约 55 GiB，共存会进内存压力警告），需要可用 ≥ 62 GiB |
-| 视频结束 | 队列空闲则 `/free`；27B 以 TTL 5 min 重新加载 |
-| 图片任务 | 不卸载 27B；保留图片模型（热态 11 s vs 冷启动 23 s） |
-| 内存不足 | 依次：`/free`（仅队列空闲）→ 卸载 LLM → 等待最多 10 min → 超时不提交 |
-| ComfyUI 有别人的任务 | 等队列空闲再提交，不抢占、不取消 |
-| 视频生成中收到自由文本 | LLM 排队，生成结束后处理；命令照常即时响应 |
+| Before submitting a video | **Unload the 27B** (video peaks at ~55 GiB; coexisting triggers memory-pressure warnings); requires ≥ 62 GiB free |
+| After a video | `/free` if the ComfyUI queue is idle; reload the 27B and **prewarm** the current session's prompt cache |
+| Image tasks | Keep the 27B and the image model loaded (warm 11 s vs cold 23 s) |
+| Not enough memory | `/free` (idle queue only) → unload LLM → wait up to 10 min → time out without submitting |
+| Someone else's ComfyUI job | Wait for an idle queue; never pre-empt or cancel it |
+| Free text while a video renders | Queued for the LLM until the video finishes; commands still respond immediately |
+| LLM idle | Unloaded after 20 min while a session is active (keeps the prompt cache warm), otherwise per TTL |
 
-## 5. 故障排查
+**Prompt caching.** LM Studio reuses the KV cache only when a new request *extends* an earlier one (measured: 0.3–0.5 s vs ~48 s cold for 17k tokens). The planner therefore replays each session's earlier exchanges verbatim and puts volatile state last; typical multi-turn reuse is 55–75 %. Editing project memory, the rules file, or a summary rewrite causes one full recompute.
 
-| 现象 | 检查 | 处理 |
+## 5. Troubleshooting
+
+| Symptom | Check | Fix |
 |---|---|---|
-| 控制台顶栏“daemon 未运行” | `pgrep -fl "va daemon"` | 按 §2 启动；排队任务会自动继续 |
-| “ComfyUI 离线” | 打开 http://127.0.0.1:8188 | 启动 FreeVideo-local 的 ComfyUI；aco_lw 不会自己启动它 |
-| 任务卡在“等待内存” | 顶栏内存 / 压力；ComfyUI 队列 | 关掉占内存的应用，或 `/cancel`；超过 10 min 会标为超时、不提交 |
-| 任务“超时” | `va status <ID>` 看 prompt_id | 生成可能仍在跑：`va recover` 对账收回；不要手动重提 |
-| 任务“失败” | 控制台详情页的错误 / ComfyUI 终端日志 | 改参数后“重做”；失败的任务允许同参数重提 |
-| Telegram 没反应 | `grep 忽略非白名单 data/daemon.log` | chat_id 不在白名单：发 `/whoami`，把数字加入 `config.toml` 的 `telegram_chat_ids` 后重启 |
-| Telegram 发送失败 | `grep "Telegram 发送" data/daemon.log` | 网络或 token 问题；token 泄露时在 @BotFather `/revoke`，更新 `config.toml` 后重启 |
-| LLM 回复很慢（> 40 s） | 控制台对话里 LLM 气泡上的耗时 | 正常范围 7–40 s（上下文越长越慢）；冷启动多约 15 s |
-| LLM 理解错 | 对话历史 | 用按钮“微调 / 打回+批注”针对具体一轮说；或 `/round` 直接给 prompt |
-| 另一个编排器在运行 | 报错 `另一个编排器进程正在运行` | daemon 运行时不要同时用 `va submit`；改用 `va round` 排队 |
+| Header shows “daemon not running” | `pgrep -fl "va daemon"` | Start it (§2); queued tasks continue |
+| “ComfyUI offline” | Open http://127.0.0.1:8188 | Start FreeVideo-local's ComfyUI; aco_lw won't start it |
+| Task stuck in “waiting memory” | Header memory / pressure; ComfyUI queue | Close memory-heavy apps or `/cancel`; after 10 min it times out without submitting |
+| Task “timed out” | `va status <ID>` for the prompt_id | It may still be running: `va recover` collects it; don't resubmit by hand |
+| Task “failed” | Error in the console details / ComfyUI terminal | Adjust and redo; failed tasks may be resubmitted with the same parameters |
+| Telegram silent | `grep "Ignoring message from non-whitelisted" data/daemon.log` | Send `/whoami`, add the number to `telegram_chat_ids` in `config.toml`, restart |
+| Telegram send failures | `grep "Telegram send" data/daemon.log` | Network or token problem; if the token leaked, `/revoke` in @BotFather, update `config.toml`, restart |
+| Planner slow | LLM bubble shows seconds, tokens and cache reuse | Normal: 10–20 s, mostly “thinking”. `planner_fast = true` in `config.toml` cuts ~35 % at some cost in understanding |
+| Planner misunderstood | *View LLM context*; project memory | Use the round buttons (tweak / reject + note) for precise feedback; correct project memory; or `/round` with an explicit prompt |
+| “Another orchestrator is running” | — | Don't use `va submit` while the daemon runs; use `va round` to queue |
 
-## 6. 数据、备份与清理
-- **备份**：`data/tasks.sqlite`、`data/jobs/`、`data/packs/`、`config.toml`。daemon 停止时复制最安全（SQLite 用 WAL，运行中复制需连同 `-wal` 文件）。
-- **产物路径**：控制台任一产物右键另存；或 `data/jobs/<任务ID>/`。ComfyUI 侧原始文件在 `FreeVideo-local/ComfyUI/output/` 下（`aco_lw/<任务ID>` 前缀或 `FreeVideo/<日期>/`）。
-- **清理**：已完成项目可以保留；要删除产物请先停 daemon，再删对应 `data/jobs/<ID>` 目录（数据库记录仍在，控制台会显示缺图）。
+## 6. Data, backup and cleanup
+- **Back up** `data/tasks.sqlite`, `data/jobs/`, `data/packs/`, `data/uploads/`, `config.toml`. Safest with the daemon stopped (SQLite uses WAL; while running, copy the `-wal` file too).
+- **Outputs**: save from the console, or `data/jobs/<TASK_ID>/`. ComfyUI's originals are under `FreeVideo-local/ComfyUI/output/` (`aco_lw/<TASK_ID>` prefix or `FreeVideo/<date>/`).
+- **Cleanup**: stop the daemon, then delete `data/jobs/<ID>` folders you no longer need (database rows remain; the console will show missing images).
 
-## 7. 安全约束（不要改）
-- 只有编排器能碰 ComfyUI；LLM 与 Telegram 只产生数据或调用固定命令。
-- 不取消、不释放别人的任务；`/free` 前二次确认队列为空。
-- 不修改 ComfyUI 启动参数、全局 LM Studio / OpenClaw 配置；不下载模型、不装自定义节点。
-- Telegram 只响应白名单；控制台只绑定 127.0.0.1。
+## 7. Safety constraints (do not change)
+- Only the orchestrator talks to ComfyUI; the LLM and Telegram only produce data or call fixed commands.
+- Never cancel or free other people's jobs; `/free` double-checks that the queue is empty.
+- Don't change ComfyUI launch options or global LM Studio / OpenClaw settings; don't download models or install custom nodes.
+- Telegram answers whitelisted chats only; the console binds to 127.0.0.1.
+- Project memory written by the LLM needs your confirmation.
 
-## 8. 已知问题（2026-10-26 测试记录）
-1. **参考图还不能通过对话给**：在批注里贴本机图片路径，规划器不会把它当参考图（文生图模板没有图片输入）。临时做法：先把参考图对应的任务“通过”并锁为角色，再提需求。→ 计划支持对话 / Telegram 直接附图。
-2. **对上一轮的自由文本反馈会开成新需求**：不点“微调 / 打回”而直接打字时，会作为新需求处理，DAG 上不连到上一轮，上一轮仍留在待审阅。→ 计划：有待审阅轮次时，自由文本默认视为对最近一轮的批注。
-3. 规划器偶尔误解词义（例如把“太小（年龄）”理解成“画面太小”）。批注写得越具体越稳。
+## 8. Known issues (2026-10-26)
+1. The planner occasionally misreads ambiguous words (“too small” meaning age vs framing). Specific notes work best; *View LLM context* shows what it saw.
+2. Planner replies take 10–20 s, mostly model “thinking” that the API can't switch off for this model (`/no_think` halves it; see `planner_fast`).

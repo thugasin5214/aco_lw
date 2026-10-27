@@ -1,27 +1,40 @@
-# aco_lw · 轻量本地视频 Agent
+# aco_lw · Lightweight local video agent
 
-确定性编排器驱动本机 ComfyUI（FLUX.2 出图、FreeVideo / MiniMax H3 出视频），LLM 可选、按需唤醒。
-计划：`PLAN.md` · 设计：`docs/design.html` · 基线实测：`docs/baseline.md` · 进度：`docs/progress.html`
+中文版：[README.zh-CN.md](README.zh-CN.md)
+
+A deterministic orchestrator drives a local ComfyUI (FLUX.2 for images, FreeVideo / MiniMax H3 for video). A local LLM (LM Studio) is an optional planner that wakes on demand. You review candidates in a web console or on Telegram; everything is organised into projects with sessions, a shared project memory and a versioned baseline pack.
+
+- Plan & scope: [`PLAN.md`](PLAN.md) · Design: [`docs/design.html`](docs/design.html) · Measurements: [`docs/baseline.md`](docs/baseline.md)
+- Operations: [`docs/runbook.md`](docs/runbook.md) · Progress: [`docs/progress.html`](docs/progress.html)
+
+## Quick start
 
 ```sh
 uv sync
-uv run va templates                                   # 模板、档位（✓ 已实测）、参数
-uv run va submit flux2-t2i -p seed=1 --title 定妆图     # 提交并等待到「待审阅」
-uv run va submit h3-i2v --parent <任务ID>               # 子任务：继承父任务图片 → 图生视频
-uv run va run tasks.yaml                              # 批量（parent: $prev 链接上一项）
-uv run va status [任务ID] · va review <ID> accept|reject · va recover · va release
-uv run va serve                                       # Web 进度台 http://127.0.0.1:8790
-uv run pytest
+cp config.example.toml config.toml        # optional: Telegram token, language, ports
+uv run va daemon                          # worker + planner + Telegram + console
+open http://127.0.0.1:8790                # console (English by default; EN / 中文 switch in the header)
 ```
 
-运行数据（SQLite、每任务目录 `manifest.json` + 产物）在 `data/`，不进 git。
+Requirements today: Apple Silicon Mac, a running ComfyUI with the templates' models, and (optional) LM Studio. A one-line installer with a setup wizard is planned (phase 5).
 
-## 阶段 2：常驻服务、审阅、Telegram
+## How it works
+
+| Layer | Role |
+|---|---|
+| Orchestrator | The only component with side effects: validation, memory gate, submit, poll, collect, release, crash-safe recovery |
+| Studio | Projects → rounds → tasks; review decisions (approve / redo / tweak / reject / change decision); baseline pack |
+| Planner (optional) | Turns natural language into validated parameters; sessions, project memory, prompt-cache-friendly context |
+| Channels | Web console and Telegram share the same actions |
+
+## Command line
 
 ```sh
-cp config.example.toml config.toml   # 填 telegram_token / telegram_chat_ids（可先发 /whoami 查 chat_id）
-uv run va daemon                     # Worker + 规划器 + Telegram + 控制台 http://127.0.0.1:8790
+uv run va templates                                  # templates, tiers (✓ measured), parameters
+uv run va round flux2-t2i -n 4 -p prompt="..."       # queue a round (executed by the daemon)
+uv run va status [TASK_ID] · va project list|new|use|done · va pack · va mode
+uv run va recover · va release
+uv run pytest · uv run ruff check
 ```
 
-控制台：`#flow` 创作 DAG · `#review` 审阅（通过 / 重做 / 微调 / 打回+批注，快捷键见页面）· `#projects` 项目与对话（含已完成项目）· `#gallery` 产物。
-命令行：`va round <模板> -n 4` · `va project list|new|use|done` · `va pack` · `va mode`。
+Runtime data (SQLite, per-task manifests and outputs, baseline packs, uploads) lives in `data/` and is not tracked by git.
