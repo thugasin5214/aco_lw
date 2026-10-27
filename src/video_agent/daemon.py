@@ -95,6 +95,18 @@ class Worker(threading.Thread):
                 self.notify(rnd)
 
 
+EXPLICIT_HD = ("高清", "1080", "720p", "4k", "full hd")
+
+
+def explicit_tier(text: str, tier: str) -> bool:
+    """你在这句话里明确点名了档位（如 hd、高清、10s），视为批准使用未实测档位。"""
+    t = text.lower()
+    parts = tier.lower().split("-")
+    if all(p in t for p in parts):  # “hd” / “hd-60s” 需要 hd 与 60s 都出现
+        return True
+    return parts[0] == "hd" and any(k in t for k in EXPLICIT_HD)
+
+
 class Actions:
     """渠道无关的交互入口。reply(text, buttons=None) 把回复送回来源渠道。"""
 
@@ -204,8 +216,13 @@ class Actions:
                     self.studio.reject(ref["id"], text, origin=channel)
             tpl = self.studio.orch.registry.template(plan.template)
             kind, tier, asked = tpl.kind, plan.tier, None
-            if kind == "video" and tier in tpl.tiers and not tpl.tiers[tier].verified:
-                # 视频的未实测档位可能超出内存预算：先用已实测档位出，未实测档位要你点按钮确认
+            approved = bool(tier) and explicit_tier(text, tier)  # 你在原话里点名了档位
+            if (
+                kind == "video"
+                and tier in tpl.tiers
+                and not tpl.tiers[tier].verified
+                and not approved
+            ):  # 视频的未实测档位可能超出内存预算：先用已实测档位出，未实测档位要你点按钮确认
                 asked = tier
                 tier = next((k for k, v in tpl.tiers.items() if v.verified), tpl.default_tier)
             rnd = self.studio.start_round(
@@ -219,7 +236,7 @@ class Actions:
                 parent_round=parent,
                 project_id=pid,
                 # 图片档位风险低，允许未实测档位；视频必须用已实测档位（内存）
-                allow_unverified=kind == "image",
+                allow_unverified=kind == "image" or approved,
             )
             say(
                 f"{plan.reply}\n"
