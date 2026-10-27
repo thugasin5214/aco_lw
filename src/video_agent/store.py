@@ -159,6 +159,33 @@ CREATE TABLE IF NOT EXISTS memories (
   supersedes INTEGER
 );
 CREATE INDEX IF NOT EXISTS memories_project ON memories(project_id);
+CREATE TABLE IF NOT EXISTS agent_runs (
+  id TEXT PRIMARY KEY,
+  project_id TEXT,
+  session_id TEXT,
+  created REAL NOT NULL,
+  updated REAL NOT NULL,
+  status TEXT NOT NULL,
+  channel TEXT,
+  origin_text TEXT,
+  steps INTEGER NOT NULL DEFAULT 0,
+  waiting TEXT NOT NULL DEFAULT '{}',
+  error TEXT
+);
+CREATE INDEX IF NOT EXISTS agent_runs_session ON agent_runs(session_id);
+CREATE TABLE IF NOT EXISTS agent_msgs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT NOT NULL,
+  created REAL NOT NULL,
+  role TEXT NOT NULL,
+  content TEXT,
+  tool_calls TEXT,
+  tool_call_id TEXT,
+  name TEXT,
+  status TEXT NOT NULL DEFAULT 'done',
+  meta TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS agent_msgs_run ON agent_msgs(run_id);
 CREATE TABLE IF NOT EXISTS uploads (
   id TEXT PRIMARY KEY,
   project_id TEXT,
@@ -175,11 +202,23 @@ MIGRATIONS = {
         ("project_id", "TEXT"),
         ("round_id", "TEXT"),
         ("idx", "INTEGER"),
+        ("priority", "INTEGER"),  # 2 交互 / 1 agent / 0 后台（调度器排序用）
     ],
     "messages": [("session_id", "TEXT")],
 }
 
-JSON_COLS = ("params", "outputs", "metrics", "base_params", "decision", "assets", "meta", "source")
+JSON_COLS = (
+    "params",
+    "outputs",
+    "metrics",
+    "base_params",
+    "decision",
+    "assets",
+    "meta",
+    "source",
+    "waiting",
+    "tool_calls",
+)
 
 
 class TransitionError(RuntimeError):
@@ -295,14 +334,15 @@ class Store:
         project_id: str | None = None,
         round_id: str | None = None,
         idx: int | None = None,
+        priority: int | None = None,
     ) -> dict:
         now = time.time()
         task_id = _new_id()
         with self.db:
             self.db.execute(
                 "INSERT INTO tasks (id, created, updated, state, template, template_sha, kind, tier,"
-                " title, parent_id, params, params_hash, project_id, round_id, idx)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " title, parent_id, params, params_hash, project_id, round_id, idx, priority)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     task_id,
                     now,
@@ -319,6 +359,7 @@ class Store:
                     project_id,
                     round_id,
                     idx,
+                    priority,
                 ),
             )
             self.db.execute(
@@ -630,6 +671,103 @@ class Store:
                 (*fields.values(), time.time(), memory_id),
             )
         return self.get_memory(memory_id)
+
+    # ---- Agent 运行（A1）：每条消息逐字保存（前缀缓存与崩溃恢复都依赖它） ----
+    @_locked
+    def create_run(
+        self, project_id: str | None, session_id: str | None, channel: str, origin_text: str
+    ) -> dict:
+        now, rid = time.time(), _new_id()
+        with self.db:
+            self.db.execute(
+                "INSERT INTO agent_runs (id, project_id, session_id, created, updated, status,"
+                " channel, origin_text) VALUES (?,?,?,?,?,?,?,?)",
+                (rid, project_id, session_id, now, now, "running", channel, origin_text),
+            )
+        return self.get_run(rid)
+
+    @_locked
+    def get_run(self, run_id: str) -> dict | None:
+        return self._one("SELECT * FROM agent_runs WHERE id=?", (run_id,))
+
+    @_locked
+    def update_run(self, run_id: str, **fields) -> dict:
+        fields = self._encode(fields)
+        cols = ", ".join(f"{k}=?" for k in fields)
+        with self.db:
+            self.db.execute(
+                f"UPDATE agent_runs SET {cols}, updated=? WHERE id=?",
+                (*fields.values(), time.time(), run_id),
+            )
+        return self.get_run(run_id)
+
+    @_locked
+    def runs(self, session_id: str | None = None, *statuses: str) -> list[dict]:
+        q, args = "SELECT * FROM agent_runs WHERE 1=1", []
+        if session_id:
+            q += " AND session_id=?"
+            args.append(session_id)
+        if statuses:
+            q += f" AND status IN ({','.join('?' * len(statuses))})"
+            args += list(statuses)
+        return self._rows(q + " ORDER BY created", tuple(args))
+
+    @_locked
+    def add_agent_msg(
+        self,
+        run_id: str,
+        role: str,
+        content: str | None = None,
+        tool_calls: list | None = None,
+        tool_call_id: str | None = None,
+        name: str | None = None,
+        status: str = "done",
+        **meta,
+    ) -> int:
+        with self.db:
+            cur = self.db.execute(
+                "INSERT INTO agent_msgs (run_id, created, role, content, tool_calls, tool_call_id,"
+                " name, status, meta) VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    run_id,
+                    time.time(),
+                    role,
+                    content,
+                    json.dumps(tool_calls, ensure_ascii=False) if tool_calls is not None else None,
+                    tool_call_id,
+                    name,
+                    status,
+                    json.dumps(meta, ensure_ascii=False),
+                ),
+            )
+        return cur.lastrowid
+
+    @_locked
+    def agent_msgs(self, run_id: str) -> list[dict]:
+        return self._rows("SELECT * FROM agent_msgs WHERE run_id=? ORDER BY id", (run_id,))
+
+    @_locked
+    def get_agent_msg(self, msg_id: int) -> dict | None:
+        return self._one("SELECT * FROM agent_msgs WHERE id=?", (msg_id,))
+
+    @_locked
+    def update_agent_msg(self, msg_id: int, **fields) -> None:
+        if "meta" in fields:
+            cur = self.get_agent_msg(msg_id)["meta"]
+            fields["meta"] = {**cur, **fields["meta"]}
+        fields = self._encode(fields)
+        cols = ", ".join(f"{k}=?" for k in fields)
+        with self.db:
+            self.db.execute(f"UPDATE agent_msgs SET {cols} WHERE id=?", (*fields.values(), msg_id))
+
+    @_locked
+    def pending_tool_msgs(self, status: str | None = None) -> list[dict]:
+        q = "SELECT * FROM agent_msgs WHERE role='tool' AND status != 'done'"
+        args: tuple = ()
+        if status:
+            q += " AND status=?"
+            args = (status,)
+        return self._rows(q + " ORDER BY id", args)
 
     # ---- 上传（参考图） ----
     @_locked

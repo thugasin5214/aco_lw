@@ -15,6 +15,7 @@ import time
 from collections.abc import Callable
 
 from . import config, i18n, memory
+from .agent import AgentRuntime
 from .comfy import ComfyBusy
 from .i18n import tr
 from .planner import MODES, Planner, PlannerUnavailable
@@ -48,11 +49,21 @@ class Worker(threading.Thread):
         except SchedulerBusy as e:
             log.warning("Startup reconcile skipped: %s", e)
         self._refresh_rounds()
+        last_reconcile = 0.0
         while not self.stop.is_set():
             if self.store.get_kv("paused"):
                 self.stop.wait(2)
                 continue
-            task = self.store.next_draft()
+            if time.monotonic() - last_reconcile > 120:  # 定期收回“观察超时”后才跑完的任务
+                last_reconcile = time.monotonic()
+                for tid, state in self.orch.reconcile_timeouts():
+                    log.info("Collected %s after timeout: %s", tid, state)
+                    t = self.store.get(tid)
+                    if t["round_id"]:
+                        rnd, ready = self.studio.refresh_round(t["round_id"])
+                        if ready:
+                            self.notify(rnd)
+            task = self.orch.resources.choose_next(self.store.by_state("draft"))
             if task is None:
                 self.stop.wait(2)
                 continue
@@ -84,6 +95,7 @@ class Worker(threading.Thread):
                     "paused": bool(self.store.get_kv("paused")),
                 },
             )
+            self.orch.resources.record()
             self.stop.wait(5)
 
     def _after(self, task: dict) -> None:
@@ -119,17 +131,35 @@ class Actions:
         self.studio, self.planner, self.worker = studio, planner, worker
         self.store = studio.store
         self.push_round: Callable[[dict], None] | None = None  # 由 Daemon 注入（推送到 Telegram）
-        self.jobs: queue.Queue[tuple[Callable[[], None], Reply]] = queue.Queue()
+        self.jobs: queue.Queue[tuple] = queue.Queue()
+        # 各渠道的主动发送（agent 在后台继续时用；控制台靠轮询对话历史，不需要推送）
+        self.channel_send: dict[str, Reply] = {
+            "web": lambda text, buttons=None: None,
+            "cli": lambda text, buttons=None: None,
+        }
+        self.runtime = AgentRuntime(
+            studio,
+            planner,
+            enqueue=lambda fn: self.jobs.put((fn, lambda *a, **k: None, False)),
+            say_for=lambda ch: self._say(ch, self.channel_send.get(ch, self.channel_send["web"])),
+            max_steps=getattr(studio.orch.cfg, "agent_max_steps", 16),
+        )
+        studio.decision_listeners.append(self.runtime.on_round_decided)
 
     # ---- 规划器队列（单线程，按需唤醒 LLM） ----
     def planner_loop(self, stop: threading.Event) -> None:
         while not stop.is_set():
             try:
-                job, reply = self.jobs.get(timeout=1)
+                item = self.jobs.get(timeout=1)
             except queue.Empty:
                 continue
+            job, reply = item[0], item[1]
+            gated = item[2] if len(item) > 2 else True  # agent 的步骤自己把关（不阻塞队列）
             warned = False
-            while self.worker and self.worker.busy_kind == "video" and not stop.is_set():
+            rm = self.studio.orch.resources
+            while gated and not stop.is_set():  # LLM 推理前把关：资源不够就等渲染结束
+                if rm.llm_admit()[0]:
+                    break
                 if not warned:
                     reply(tr("llm_queued_video"))
                     warned = True
@@ -160,6 +190,9 @@ class Actions:
         say = self._say(channel, reply)
         if text.startswith("/"):
             return self.command(channel, text, say)
+        _, sid = self._ctx()
+        if self.runtime.answer_pending_question(channel, sid, text):
+            return  # 你在回答 agent 的提问，运行接着走
         pending = self.store.get_kv(f"pending:{channel}")
         if pending:
             self.store.set_kv(f"pending:{channel}", None)
@@ -200,6 +233,9 @@ class Actions:
             return
         say(tr("ack"))
         pid, sid = self._ctx()
+        if self.store.get_kv("planner_style", "agent") == "agent":
+            self.runtime.start(text, channel, pid, sid, attachments)
+            return
 
         def job() -> None:
             plan = self.planner.plan_request(text, pid, sid, msg_id, attachments)
@@ -312,7 +348,10 @@ class Actions:
     def prewarm_current(self) -> None:
         """LLM 被视频卸载后重新加载：后台预热当前会话的前缀缓存。"""
         _, sid = self._ctx()
-        self.jobs.put((lambda: self.planner.prewarm(sid), lambda *a, **k: None))
+        if self.store.get_kv("planner_style", "agent") == "agent":
+            self.jobs.put((lambda: self.runtime.prewarm(sid), lambda *a, **k: None, False))
+        else:
+            self.jobs.put((lambda: self.planner.prewarm(sid), lambda *a, **k: None))
 
     # ---- 按钮（Telegram callback_data 与 Web 共用格式） ----
     def button(self, channel: str, data: str, reply: Reply) -> bool:
@@ -363,6 +402,10 @@ class Actions:
                 )
                 say(tr("try_tier_queued", t=tier, n=new["n"]))
                 return True
+            if kind == "a":  # agent 的审批请求
+                mid, yn = rest.split(":")
+                say(self.runtime.on_approval(int(mid), yn == "yes"))
+                return True
             if kind == "o":
                 self.reopen(rest, channel, say)
                 return True
@@ -396,15 +439,24 @@ class Actions:
             say(tr("resumed"))
         elif cmd == "/cancel":
             n = s.cancel_queued(s.current_project()["id"])
+            for r in store.runs(
+                None, "running", "waiting_resources", "waiting_event", "waiting_user"
+            ):
+                if r["project_id"] == s.current_project()["id"]:
+                    self.runtime.cancel(r["id"])
             cur = self.worker and self.worker.current
             if cur and cur.get("project_id") == s.current_project()["id"]:
                 t = store.get(cur["id"])
                 if t["prompt_id"]:
                     try:
-                        s.orch.comfy.interrupt(t["prompt_id"])
+                        tpl = s.orch.registry.template(t["template"])
+                        s.orch.executor_for(tpl).cancel(t["prompt_id"])
                     except (ComfyBusy, OSError):
                         pass
             say(tr("cancelled", n=n, x=tr("cancelled_running") if cur else ""))
+        elif cmd == "/mode" and args and args[0] in ("simple", "agent"):
+            store.set_kv("planner_style", args[0])
+            say(tr("style_set", s=args[0]))
         elif cmd == "/mode":
             if not args:
                 opts = ", ".join(f"{k} ({i18n.mode(k)})" for k in MODES)
@@ -548,6 +600,7 @@ class Daemon:
         self.orch = Orchestrator(cfg, log=lambda m: log.info(m))
         self.studio = Studio(self.orch, cfg.round_size)
         self.planner = Planner(cfg, self.orch.store, self.orch.registry)
+        self.planner.resources = self.orch.resources
         self.bot: TelegramBot | None = None
         self.worker = Worker(self.orch, self.studio, self.notify_round, self.stop)
         self.actions = Actions(self.studio, self.planner, self.worker)
@@ -559,6 +612,7 @@ class Daemon:
             self.actions.push_round = lambda r: self.bot.send_round(
                 r, self.orch.store.round_tasks(r["id"]), self.orch.store.task_dir
             )
+            self.actions.channel_send["telegram"] = self.bot.broadcast
 
     def notify_round(self, rnd: dict) -> None:
         tasks = self.orch.store.round_tasks(rnd["id"])
@@ -572,8 +626,10 @@ class Daemon:
         )
         if self.bot:
             self.bot.send_round(rnd, tasks, self.orch.store.task_dir)
+        self.actions.runtime.on_round_ready(rnd)  # 在等这轮的 agent 运行带着结果继续
 
     def start(self) -> None:
+        self.actions.runtime.recover()
         self.worker.start()
         threading.Thread(target=self.worker.heartbeat, name="heartbeat", daemon=True).start()
         threading.Thread(

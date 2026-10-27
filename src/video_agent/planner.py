@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 from collections.abc import Callable
@@ -103,9 +104,39 @@ class Plan:
     memories: list[str] = field(default_factory=list)
 
 
-def make_backend(cfg: Settings, store: Store):
-    if cfg.planner_backend == "openai_compatible":
+API_BACKENDS = ("lmstudio", "openai_compatible", "openrouter", "anthropic")
+AGENT_CLIS = ("claude_code", "codex")
+
+
+def make_named_backend(cfg: Settings, store: Store, name: str):
+    """按名字建后端：lmstudio（本地）、openai_compatible、anthropic（在线）。"""
+    if name == "openai_compatible":
         return OpenAICompatBackend(cfg.openai_base_url, cfg.openai_model, cfg.openai_api_key)
+    if name == "openrouter":
+        import os
+
+        if not cfg.openrouter_model:
+            raise PlannerUnavailable("openrouter_model is not set in config.toml")
+        key = cfg.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY")
+        b = OpenAICompatBackend(cfg.openrouter_base_url, cfg.openrouter_model, key)
+        b.name = "openrouter"
+        b.http.headers["X-Title"] = "aco_lw"  # OpenRouter 用来标注来源应用（可选）
+        return b
+    if name == "anthropic":
+        from .backends import AnthropicBackend
+
+        return AnthropicBackend(
+            cfg.anthropic_model,
+            cfg.anthropic_effort,
+            cfg.anthropic_api_key or None,
+            cfg.anthropic_fallbacks,
+        )
+    return make_backend(cfg, store)
+
+
+def make_backend(cfg: Settings, store: Store):
+    if cfg.planner_backend in ("openai_compatible", "openrouter", "anthropic"):
+        return make_named_backend(cfg, store, cfg.planner_backend)
 
     def ttl() -> int | None:
         mode = store.get_kv("llm_mode", "on_demand")
@@ -133,6 +164,18 @@ class Planner:
         self.store = store
         self.registry = registry
         self.backend = FuncBackend(chat) if chat else (backend or make_backend(cfg, store))
+        self._resources = None
+
+    @property
+    def resources(self):
+        return self._resources
+
+    @resources.setter
+    def resources(self, rm) -> None:
+        """注入 ResourceManager，并让本地后端每次加载模型前都先问它（跨进程把关）。"""
+        self._resources = rm
+        if rm is not None and hasattr(self.backend, "load_guard"):
+            self.backend.load_guard = lambda: None if rm.llm_admit()[0] else rm.llm_admit()[1]
 
     # ---- 驻留 ----
     @property
@@ -166,9 +209,11 @@ class Planner:
             lines.append(f"- {t.name}（{t.kind}，{t.title}）参数：{slots}；档位：{tiers}")
         return "\n".join(lines)
 
-    def system_prompt(self, project_id: str | None, session: dict | None) -> str:
+    def system_prompt(
+        self, project_id: str | None, session: dict | None, rules: str | None = None
+    ) -> str:
         """稳定前缀：规则 + 模板（静态）→ 项目记忆 → 会话摘要。不放任何易变内容。"""
-        parts = [load_rules(), "## 可用模板\n" + self._templates_text()]
+        parts = [rules or load_rules(), "## 可用模板\n" + self._templates_text()]
         if project_id:
             p = self.store.get_project(project_id)
             mems = self.store.memories(project_id, "active")
@@ -273,7 +318,9 @@ class Planner:
         session_id: str | None,
         log: bool = True,
     ) -> dict:
-        res: ChatResult = self.backend.chat(messages, schema)
+        inflight = self.resources.llm.inference() if self.resources else contextlib.nullcontext()
+        with inflight:  # 推理进行中，渲染把关会等它答完再卸载 LLM
+            res: ChatResult = self.backend.chat(messages, schema)
         data = _parse_json(res.text)
         if log:
             self.store.log_message(

@@ -12,6 +12,7 @@ dependencies = [
     "fastapi>=0.162.0",
     "uvicorn>=0.54.0",
     "markdown>=3.11.2",
+    "anthropic>=2.3.0",
 ]
 
 [project.scripts]

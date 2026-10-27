@@ -129,9 +129,7 @@ class Workshop:
         while t.origin == "variant":  # 变体上再改：对齐到最初的正式模板
             t = reg.template(t.meta["base"])
         pid = project_id or self.studio.current_project()["id"]
-        if self.orch._object_info is None:
-            self.orch._object_info = self.orch.comfy.object_info()
-        problems = check_graph(graph, self.orch._object_info)
+        problems = check_graph(graph, self.orch.executor_for(t).object_info())
 
         slots, dropped = {}, []
         for name, s in t.slots.items():
@@ -220,7 +218,7 @@ class Workshop:
             1,
             tier,
             f"Trial · {meta['name']}",
-            origin=origin,
+            origin="background",
             request="workflow trial",
             project_id=meta["project_id"],
             allow_unverified=True,

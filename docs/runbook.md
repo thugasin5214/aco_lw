@@ -113,6 +113,19 @@ For changes the parameters can't express — new nodes, different wiring, anothe
 
 Candidates are never picked by the planner; you can run them manually (`/round <variant-name>`, manual tweak) until promoted.
 
+### 3.7 Online models and local agents (fallback)
+When the local LLM can't run — most often because a video render holds the memory — requests normally wait. You can let them continue online instead, in `config.toml`:
+
+```toml
+allow_online = true                                   # privacy switch, off by default
+llm_fallback = ["anthropic", "claude_code", "codex"]  # tried in order
+```
+
+- `anthropic`, `openrouter` (or any `openai_compatible` endpoint): the online API continues the same request step by step. Keys: `ANTHROPIC_API_KEY` / `ant auth login` or `anthropic_api_key`; `OPENROUTER_API_KEY` or `openrouter_api_key` (plus `openrouter_model`).
+- `claude_code` / `codex`: the local CLI, with its own login and online model, runs the whole request. It gets **only aco_lw's tools** over MCP (Claude Code with all built-in tools disabled, Codex in a read-only sandbox); every tool call still goes through the execution policy, approvals and the scheduler.
+- Without `allow_online = true` nothing is sent out, and the console shows the request waiting for resources with the reason.
+- Chat bubbles show which backend answered ("via …") and, for Claude Code, the cost.
+
 ## 4. Resources and memory policy (automatic)
 
 | Situation | What the system does |

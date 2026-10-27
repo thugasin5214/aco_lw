@@ -16,7 +16,9 @@ from video_agent.telegram import TelegramAPI, TelegramBot
 
 @pytest.fixture
 def studio(make_orch, fake):
-    return Studio(make_orch(fake), round_size=3)
+    s = Studio(make_orch(fake), round_size=3)
+    s.store.set_kv("planner_style", "simple")  # 这些测试覆盖单次 JSON 规划（简单模式）
+    return s
 
 
 def drain(studio: Studio) -> list[dict]:
@@ -153,8 +155,7 @@ def test_planner_validates_output(studio):
 # ---- Actions：命令、按钮、批注 ----
 def run_jobs(actions: Actions) -> None:
     while not actions.jobs.empty():
-        job, _ = actions.jobs.get()
-        job()
+        actions.jobs.get()[0]()
 
 
 def test_actions_buttons_and_notes(studio):

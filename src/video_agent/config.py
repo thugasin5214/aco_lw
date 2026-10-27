@@ -20,8 +20,26 @@ class Settings:
     llm_session_ttl_s: int = 1200  # 会话活跃时延长驻留，保住前缀缓存
     session_summary_tokens: int = 16000  # 上一次调用超过此 prompt 长度即压缩较早消息
     session_keep_messages: int = 8  # 压缩时保留的最近原话条数
+    agent_max_steps: int = 16  # 一次请求里 agent 最多调用 LLM 的次数
     planner_fast: bool = False  # 末尾加 /no_think：实测 14.4 s → 9.3 s，思考约减半
-    planner_backend: str = "lmstudio"  # lmstudio | openai_compatible
+    planner_backend: str = "lmstudio"  # lmstudio | openai_compatible | openrouter | anthropic
+    # 本地 LLM 资源不够（如视频渲染占着内存）或不可用时，按顺序尝试：
+    #   "anthropic" / "openrouter" / "openai_compatible"（在线 API，接着同一次运行继续）
+    #   "claude_code" / "codex"（本机的 agent CLI + 它们的在线模型，经 aco_lw MCP 工具工作，只接新请求）
+    llm_fallback: list[str] = field(default_factory=list)
+    allow_online: bool = False  # 隐私开关：允许把对话发给在线模型 / 在线 agent（默认关）
+    anthropic_model: str = "claude-opus-5-5"
+    anthropic_effort: str = "medium"  # low | medium | high | xhigh | max
+    anthropic_api_key: str = ""  # 留空：由 SDK 按环境变量 / `ant auth login` 解析
+    anthropic_fallbacks: bool = True  # 安全分类器拒答时由服务端回退到推荐模型
+    openrouter_model: str = ""  # 例如 OpenRouter 上的模型 ID；用 openrouter 回退时必填
+    openrouter_api_key: str = ""  # 留空：读环境变量 OPENROUTER_API_KEY
+    openrouter_base_url: str = "https://openrouter.ai/api"
+    claude_cmd: str = "claude"
+    claude_model: str = ""  # 留空用 Claude Code 自己的默认模型
+    codex_cmd: str = "codex"
+    codex_model: str = ""
+    agent_cli_timeout_s: int = 3600
     openai_base_url: str = ""
     openai_model: str = ""
     openai_api_key: str = ""

@@ -1,4 +1,4 @@
-"""确定性编排器：所有 ComfyUI 副作用只在这里发生。
+"""确定性编排器：所有执行端（ComfyUI 等）的副作用只经这里、经 Executor 接口发生。
 
 一个任务：草稿 → 已校验 → 等待内存 → 已提交 → 生成中 → 待审阅 → 完成 / 打回 / 失败 / 超时。
 prompt_id 先落库再提交；重启后按 prompt_id 去 /history 与 /queue 对账，永不自动重提。
@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
-import json
 import shutil
 import subprocess
 import time
@@ -16,24 +15,16 @@ import uuid
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
-from . import llm, memgate
-from .comfy import Comfy, ComfyBusy
+from .comfy import Comfy
 from .config import Settings
+from .executors import Executor, Poll, get_executors
 from .memory import Sampler
 from .registry import Registry, Template
-from .render import check_graph, params_hash, render, resolve
+from .render import params_hash, resolve
+from .resources import ResourceManager
 from .store import Store
 
-VIDEO_EXT = {".mp4", ".webm", ".mov", ".gif"}
-FREEVIDEO_KEYS = (
-    "sample_seconds",
-    "request_seconds",
-    "ram_peak_bytes",
-    "conditioning_cache_hit",
-    "result_cache_hit",
-    "low_memory",
-    "geometry",
-)
+LOST_POLLS = 5  # 连续几次在队列与历史里都找不到，才认定任务丢失
 
 
 class SchedulerBusy(RuntimeError):
@@ -57,13 +48,20 @@ class Orchestrator:
         sleep: Callable[[float], None] = time.sleep,
     ):
         self.cfg = cfg
-        self.comfy = comfy or Comfy(cfg.comfy_url)
+        self.executors: dict[str, Executor] = get_executors(cfg, comfy)
+        self.comfy = self.executors["comfy"].comfy  # 兼容：取消 / 状态等仍需直接访问的地方
         self.store = store or Store(cfg.db_path, cfg.jobs_dir)
         self.registry = registry or Registry.from_settings(cfg)
         self.log = log
         self.sleep = sleep
-        self._object_info: dict | None = None
         self.on_llm_restored: Callable[[], None] | None = None  # 由 daemon 注入：恢复后预热会话缓存
+        self.resources = ResourceManager(cfg, self.registry, self.store, log, sleep)
+        self.resources.executors = self.executors
+
+    def executor_for(self, t: Template) -> Executor:
+        if t.executor not in self.executors:
+            raise ValueError(f"{t.name}: 未知执行端 {t.executor}")
+        return self.executors[t.executor]
 
     # ---- 串行锁：同一时刻只有一个编排器进程在提交/对账 ----
     @contextlib.contextmanager
@@ -88,6 +86,7 @@ class Orchestrator:
         project_id: str | None = None,
         round_id: str | None = None,
         idx: int | None = None,
+        priority: int | None = None,
     ) -> dict:
         t = self.registry.template(template)
         params = dict(params)
@@ -116,6 +115,7 @@ class Orchestrator:
             project_id=project_id,
             round_id=round_id,
             idx=idx,
+            priority=priority,
         )
         self.store.touch_project(project_id)
         return task
@@ -206,21 +206,25 @@ class Orchestrator:
     def _execute(self, task_id: str) -> dict:
         task = self.store.get(task_id)
         t = self.registry.template(task["template"])
-        model = self.registry.model_of(t)
+        ex = self.executor_for(t)
         tdir = self.store.task_dir(task_id)
 
         try:
-            graph, uploads = self._prepare(t, task)
+            prepared = ex.prepare(t, task)
         except Exception as e:  # noqa: BLE001 — 校验失败的任何原因都记录后终止
             return self.store.transition(task_id, "failed", f"校验失败：{e}", error=str(e))
-        (tdir / "prompt.json").write_text(json.dumps(graph, ensure_ascii=False, indent=2))
-        self.store.transition(task_id, "validated", f"节点校验通过；上传 {len(uploads)} 张图")
-        self.store.update(task_id, metrics={"uploads": uploads})
+        for name, text in prepared.artifacts.items():
+            (tdir / name).write_text(text)
+        self.store.transition(task_id, "validated", prepared.note or None)
+        self.store.update(task_id, metrics={"uploads": prepared.uploads})
 
+        est = self.resources.estimator.estimate(t, task["tier"])
         self.store.transition(
-            task_id, "waiting_memory", f"需要 {model.peak_gib + self.cfg.memory_margin_gib} GiB"
+            task_id,
+            "waiting_memory",
+            f"需要 {est.peak_gib + self.cfg.memory_margin_gib:.0f} GiB · 预计 {est.exec_s:.0f} s",
         )
-        gate = memgate.ensure(self.comfy, model, self.cfg, self.log, self.sleep)
+        gate = self.resources.prepare_render(t, task["tier"], ex, task_id)
         metrics = {
             **self.store.get(task_id)["metrics"],
             "gate": {
@@ -236,48 +240,42 @@ class Orchestrator:
                 return self.store.transition(
                     task_id, "timeout", "内存门控等待超时，未提交", error="memory gate timeout"
                 )
-            prompt_id = str(uuid.uuid4())
-            self.store.update(task_id, prompt_id=prompt_id)  # 先落库再提交
+            job_id = str(uuid.uuid4())
+            self.store.update(task_id, prompt_id=job_id)  # 先落库再提交
             try:
-                self.comfy.submit(graph, prompt_id)
+                ex.submit(prepared, job_id)
             except Exception as e:  # noqa: BLE001
                 return self.store.transition(task_id, "failed", f"提交失败：{e}", error=str(e))
-            self.store.transition(task_id, "submitted", f"prompt_id {prompt_id}")
+            self.store.transition(task_id, "submitted", f"job {job_id}")
             return self._monitor(task_id)
         finally:
-            self._after(t, gate.unloaded_llm)
-
-    def _prepare(self, t: Template, task: dict) -> tuple[dict, dict]:
-        params = dict(task["params"])
-        uploads = {}
-        for name, slot in t.slots.items():
-            if slot.type == "image" and name in params:
-                path = Path(params[name]).expanduser()
-                if not path.is_file():
-                    raise FileNotFoundError(f"{name}: 找不到图片 {path}")
-                params[name] = uploads[name] = self.comfy.upload_image(path)
-        graph = render(t, params, output_prefix=f"aco_lw/{task['id']}")
-        if self._object_info is None:
-            self._object_info = self.comfy.object_info()
-        problems = check_graph(graph, self._object_info)
-        if problems:
-            raise ValueError("；".join(problems))
-        return graph, uploads
+            self._after(t, ex, gate.unloaded_llm)
 
     def _monitor(self, task_id: str) -> dict:
         task = self.store.get(task_id)
-        prompt_id = task["prompt_id"]
+        ex = self.executor_for(self.registry.template(task["template"]))
+        job_id = task["prompt_id"]
         start = time.monotonic()
+        lost = 0
+        # 观察时限随预计耗时放大（未实测的大档位可能要几个小时），至少保留配置值
+        est = self.resources.estimator.estimate(
+            self.registry.template(task["template"]), task["tier"]
+        )
+        limit = max(self.cfg.task_timeout_s, est.exec_s * 3)
+        poll: Poll | None = None
         with Sampler() as sampler:
             while True:
-                entry = self.comfy.history(prompt_id)
-                if entry and entry.get("status", {}).get("completed") is not None:
+                poll = ex.poll(job_id)
+                if poll.state in ("done", "failed"):
+                    break
+                lost = lost + 1 if poll.state == "lost" else 0
+                if lost >= LOST_POLLS:
                     break
                 task = self.store.get(task_id)
-                if task["state"] == "submitted" and self._is_running(prompt_id):
+                if task["state"] == "submitted" and poll.state == "running":
                     self.store.transition(task_id, "running")
-                if time.monotonic() - start > self.cfg.task_timeout_s:
-                    entry = None
+                if time.monotonic() - start > limit:
+                    poll = None
                     break
                 self.sleep(self.cfg.poll_interval_s)
         metrics = {
@@ -286,82 +284,40 @@ class Orchestrator:
             "observed_s": round(time.monotonic() - start, 1),
         }
         self.store.update(task_id, metrics=metrics)
-        if entry is None:
+        if poll is None:
             return self.store.transition(
                 task_id,
                 "timeout",
                 "观察超时；任务未取消，可用 recover 继续对账",
                 error="monitor timeout",
             )
-        return self._finish(task_id, entry)
+        if poll.state == "lost":
+            return self.store.transition(
+                task_id, "failed", f"{ex.name} 中找不到该任务；不自动重提", error="lost"
+            )
+        return self._finish(task_id, poll, ex)
 
-    def _is_running(self, prompt_id: str) -> bool:
-        q = self.comfy.queue()
-        return any(item[1] == prompt_id for item in q["queue_running"])
-
-    def _finish(self, task_id: str, entry: dict) -> dict:
-        status = entry.get("status", {})
-        msgs = {m[0]: m[1] for m in status.get("messages", [])}
-        task = self.store.get(task_id)
-        metrics = dict(task["metrics"])
-        if "execution_start" in msgs:
-            end = msgs.get("execution_success") or msgs.get("execution_error") or {}
-            if "timestamp" in end:
-                metrics["exec_s"] = round(
-                    (end["timestamp"] - msgs["execution_start"]["timestamp"]) / 1000, 1
-                )
-        if status.get("status_str") != "success":
-            err = msgs.get("execution_error", {})
-            detail = err.get("exception_message") or status.get("status_str") or "unknown"
+    def _finish(self, task_id: str, poll: Poll, ex: Executor) -> dict:
+        metrics = dict(self.store.get(task_id)["metrics"])
+        if poll.state == "failed":
+            detail = ex.failure_detail(poll.result)
+            ex.collect(task_id, poll.result, self.store.task_dir(task_id), metrics)
             self.store.update(task_id, metrics=metrics)
             return self.store.transition(
-                task_id, "failed", f"ComfyUI 执行失败：{detail}", error=str(detail)[:2000]
+                task_id, "failed", f"{ex.name} 执行失败：{detail}", error=detail[:2000]
             )
-        outputs = self._collect(task_id, entry.get("outputs", {}), metrics)
+        outputs = ex.collect(task_id, poll.result, self.store.task_dir(task_id), metrics)
         self.store.update(task_id, metrics=metrics)
         return self.store.transition(
             task_id, "review", f"收集 {len(outputs)} 个产物", outputs=outputs
         )
 
-    def _collect(self, task_id: str, node_outputs: dict, metrics: dict) -> list[dict]:
-        tdir = self.store.task_dir(task_id)
-        outputs = []
-        for node, out in node_outputs.items():
-            if out.get("freevideo_summary"):
-                fv = out["freevideo_summary"][0]
-                metrics["freevideo"] = {k: fv.get(k) for k in FREEVIDEO_KEYS}
-            for items in out.values():
-                if not isinstance(items, list):
-                    continue
-                for i, item in enumerate(items):
-                    if not (isinstance(item, dict) and "filename" in item):
-                        continue
-                    name = f"{node}_{i}_{item['filename']}"
-                    self.comfy.download(
-                        item["filename"],
-                        item.get("subfolder", ""),
-                        item.get("type", "output"),
-                        tdir / name,
-                    )
-                    kind = "video" if Path(name).suffix.lower() in VIDEO_EXT else "image"
-                    outputs.append({"file": name, "kind": kind, "node": node, "source": item})
-        return outputs
-
-    def _after(self, t: Template, unloaded_llm: bool) -> None:
+    def _after(self, t: Template, ex: Executor, unloaded_llm: bool) -> None:
+        released = False
         if t.release_after == "free":
-            try:
-                self.comfy.free()
-                self.log("队列空闲，已请求 ComfyUI 释放模型")
-            except ComfyBusy:
-                self.log("队列有其他任务，跳过释放")
-        if unloaded_llm and self.cfg.llm_restore_after_video:
-            try:
-                llm.load(self.cfg.llm_model, self.cfg.llm_context, self.cfg.llm_idle_ttl_s)
-                self.log(f"已恢复 LLM（空闲 {self.cfg.llm_idle_ttl_s}s 后自动卸载）")
-                if self.on_llm_restored:
-                    self.on_llm_restored()
-            except Exception as e:  # noqa: BLE001 — 恢复失败不影响任务结果
-                self.log(f"恢复 LLM 失败：{e}")
+            released = ex.release()
+            self.log(f"{ex.name} {'released' if released else 'busy; release skipped'}")
+        self.resources.render_done(t, released, unloaded_llm, self.on_llm_restored)
 
     # ---- 恢复 ----
     def recover(self) -> list[tuple[str, str]]:
@@ -375,6 +331,18 @@ class Orchestrator:
                 results.append((task["id"], self._reconcile(task)))
         return results
 
+    def reconcile_timeouts(self) -> list[tuple[str, str]]:
+        """把“观察超时”但执行端已跑完的任务收回来（不阻塞：还在跑的留到下次）。"""
+        out = []
+        for task in self.store.by_state("timeout"):
+            if not task["prompt_id"]:
+                continue
+            ex = self.executor_for(self.registry.template(task["template"]))
+            poll = ex.poll(task["prompt_id"])
+            if poll.state in ("done", "failed"):
+                out.append((task["id"], self._finish(task["id"], poll, ex)["state"]))
+        return out
+
     def _reconcile(self, task: dict) -> str:
         tid, pid, state = task["id"], task["prompt_id"], task["state"]
         if state in ("draft", "validated"):
@@ -385,22 +353,21 @@ class Orchestrator:
                 self.store.transition(tid, "failed", "中断于内存门控；未提交", error="interrupted")
                 return "failed（未提交）"
             return f"跳过（{state} 无 prompt_id）"
-        entry = self.comfy.history(pid)
-        if entry and entry.get("status", {}).get("completed") is not None:
+        ex = self.executor_for(self.registry.template(task["template"]))
+        poll = ex.poll(pid)
+        if poll.state in ("done", "failed"):
             if state == "waiting_memory":
-                self.store.transition(tid, "submitted", "恢复：在 /history 中找到")
-            return self._finish(tid, entry)["state"]
-        if self.comfy.in_queue(pid):
+                self.store.transition(tid, "submitted", "恢复：执行端已有结果")
+            return self._finish(tid, poll, ex)["state"]
+        if poll.state in ("queued", "running"):
             if state == "waiting_memory":
-                self.store.transition(tid, "submitted", "恢复：在队列中找到")
+                self.store.transition(tid, "submitted", "恢复：在执行端队列中找到")
             if state == "timeout":
                 return "仍在运行（保持 timeout，稍后再 recover）"
             return self._monitor(tid)["state"]
         if state == "timeout":
-            return "timeout（ComfyUI 中找不到）"
-        self.store.transition(
-            tid, "failed", "ComfyUI 中找不到该 prompt_id；不自动重提", error="lost"
-        )
+            return f"timeout（{ex.name} 中找不到）"
+        self.store.transition(tid, "failed", f"{ex.name} 中找不到该任务；不自动重提", error="lost")
         return "failed（找不到）"
 
     # ---- 审阅与释放 ----
@@ -408,4 +375,9 @@ class Orchestrator:
         return self.store.transition(task_id, "done" if accept else "rejected", note)
 
     def release(self) -> None:
-        self.comfy.free()
+        """释放所有空闲执行端的模型；有执行端忙则抛错（不动别人的任务）。"""
+        from .comfy import ComfyBusy
+
+        busy = [name for name, ex in self.executors.items() if not ex.release()]
+        if busy:
+            raise ComfyBusy(f"队列非空，拒绝释放：{', '.join(busy)}")

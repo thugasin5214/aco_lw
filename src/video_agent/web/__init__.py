@@ -451,6 +451,76 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
     ) -> dict:
         return guard(lambda: studio.tweak(task_id, params, tier, n))
 
+    # ---- 调度与 agent 运行（U1 / A3） ----
+    @app.get("/api/queue")
+    def queue_view() -> dict:
+        rm = studio.orch.resources
+        drafts = store.by_state("draft")
+        titles = {t["id"]: t["title"] or t["template"] for t in drafts}
+        active = rm.render_active
+        if active:
+            t = store.get(active["task_id"])
+            active = {
+                **active,
+                "title": t and (t["title"] or t["template"]),
+                "state": t and t["state"],
+            }
+        return {
+            "render_active": active,
+            "resident_family": rm.resident_family,
+            "llm": {"loaded": rm.llm.loaded(), "in_flight": rm.llm.in_flight},
+            "plan": [{**p, "title": titles.get(p["task_id"])} for p in rm.plan(drafts)],
+            "runs": [
+                {
+                    k: r[k]
+                    for k in (
+                        "id",
+                        "status",
+                        "waiting",
+                        "origin_text",
+                        "project_id",
+                        "session_id",
+                        "steps",
+                        "updated",
+                    )
+                }
+                for r in store.runs(
+                    None, "running", "waiting_resources", "waiting_event", "waiting_user"
+                )
+            ],
+            "history": list(rm.history)[-360:],
+        }
+
+    # ---- 给本机 agent CLI 的 MCP 服务用（只接受已委托出去的运行） ----
+    @app.get("/api/agent/tools")
+    def agent_tools() -> list[dict]:
+        return [t["function"] for t in actions.runtime.spec]
+
+    @app.post("/api/agent/tool")
+    def agent_tool(
+        run_id: str = Body(...),
+        name: str = Body(...),
+        arguments: dict = Body(default_factory=dict),  # noqa: B008 — FastAPI 请求体声明
+    ) -> dict:
+        return actions.runtime.external_tool(
+            run_id, name, arguments, timeout=cfg.agent_cli_timeout_s
+        )
+
+    @app.get("/api/runs")
+    def runs(session: str) -> list[dict]:
+        return [
+            {
+                k: r[k]
+                for k in ("id", "status", "waiting", "origin_text", "steps", "created", "updated")
+            }
+            for r in store.runs(session)
+        ][-20:]
+
+    @app.post("/api/runs/{run_id}/cancel")
+    def cancel_run(run_id: str) -> dict:
+        actions.runtime.cancel(run_id)
+        return {"ok": True}
+
     @app.get("/api/settings")
     def settings() -> dict:
         return {"language": cfg.language, "comfy_url": cfg.comfy_url}

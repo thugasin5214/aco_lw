@@ -29,6 +29,7 @@ class Studio:
         self.orch = orch
         self.store: Store = orch.store
         self.round_size = round_size
+        self.decision_listeners: list = []  # 你对某轮做了决定 → 通知（例如等这轮的 agent 运行）
 
     # ---- 项目 ----
     def current_project(self) -> dict:
@@ -237,9 +238,12 @@ class Studio:
         seeds: list[int] | None = None,
         allow_unverified: bool = False,
         parent_task: str | None = None,
+        priority: int | None = None,
     ) -> dict:
         t = self.orch.registry.template(template)
         pid = project_id or self.current_project()["id"]
+        if priority is None:  # 你发起的 → 交互；agent 自主发起 → 1；试跑等后台 → 0
+            priority = {"agent": 1, "background": 0}.get(origin, 2)
         base = {k: v for k, v in params.items() if k != "seed" and k not in TIER_KEYS}
         if n is None:
             n = 1 if t.kind == "video" else self.round_size
@@ -272,6 +276,7 @@ class Studio:
                     round_id=rnd["id"],
                     idx=i + 1,
                     parent_id=parent_task,
+                    priority=priority,
                 )
                 if i == 0 and tier is None:
                     self.store.update_round(rnd["id"], tier=task["tier"])
@@ -294,9 +299,11 @@ class Studio:
         for t in self.store.round_tasks(round_id):
             if t["state"] == "draft":
                 self.store.transition(t["id"], "failed", f"已取消：{reason}", error="cancelled")
-        self.store.update_round(
+        closed = self.store.update_round(
             round_id, state="closed", decision={"action": "cancel", "note": reason}
         )
+        for cb in self.decision_listeners:  # 在等这一轮的 agent 运行也要收到结果
+            cb(closed)
 
     def cancel_queued(self, project_id: str | None = None, reason: str = "用户取消") -> int:
         n = 0
@@ -332,7 +339,10 @@ class Studio:
         prev = (rnd.get("decision") or {}).get("history")
         if prev:  # 重新审阅过的轮：保留之前的决定历史
             decision = {**decision, "history": prev}
-        return self.store.update_round(rnd["id"], state="closed", decision=decision)
+        closed = self.store.update_round(rnd["id"], state="closed", decision=decision)
+        for cb in self.decision_listeners:
+            cb(closed)
+        return closed
 
     def _task_in_round(self, tasks: list[dict], key: str | int) -> dict:
         for t in tasks:

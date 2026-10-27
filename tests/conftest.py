@@ -8,7 +8,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from video_agent import llm, memgate
+from video_agent import llm, resources
 from video_agent.comfy import Comfy
 from video_agent.config import ROOT, Settings
 from video_agent.registry import Registry
@@ -31,7 +31,9 @@ class FakeComfy:
     def handler(self, req: httpx.Request) -> httpx.Response:
         path = req.url.path
         if path == "/queue":
-            running = [[0, pid, {}, {}, []] for pid in self.prompts if not self._done(pid)]
+            running = [
+                [0, pid, self.prompts[pid], {}, []] for pid in self.prompts if not self._done(pid)
+            ]
             if self.busy_other:
                 running.append([0, "someone-else", {}, {}, []])
             return httpx.Response(200, json={"queue_running": running, "queue_pending": []})
@@ -102,7 +104,7 @@ def no_side_effects(monkeypatch):
     monkeypatch.setattr(llm, "unload", boom)
     monkeypatch.setattr(llm, "load", boom)
     monkeypatch.setattr(
-        memgate,
+        resources,
         "snapshot",
         lambda: {"avail_gib": 100.0, "used_gib": 20.0, "swap_used_gib": 0.0, "pressure": 1},
     )
