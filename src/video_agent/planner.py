@@ -168,9 +168,11 @@ class Planner:
             lines.append(f"- {t.name}（{t.kind}，{t.title}）参数：{slots}；档位：{tiers}")
         return "\n".join(lines)
 
-    def system_prompt(self, project_id: str | None, session: dict | None) -> str:
+    def system_prompt(
+        self, project_id: str | None, session: dict | None, rules: str | None = None
+    ) -> str:
         """稳定前缀：规则 + 模板（静态）→ 项目记忆 → 会话摘要。不放任何易变内容。"""
-        parts = [load_rules(), "## 可用模板\n" + self._templates_text()]
+        parts = [rules or load_rules(), "## 可用模板\n" + self._templates_text()]
         if project_id:
             p = self.store.get_project(project_id)
             mems = self.store.memories(project_id, "active")

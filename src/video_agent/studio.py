@@ -29,6 +29,7 @@ class Studio:
         self.orch = orch
         self.store: Store = orch.store
         self.round_size = round_size
+        self.decision_listeners: list = []  # 你对某轮做了决定 → 通知（例如等这轮的 agent 运行）
 
     # ---- 项目 ----
     def current_project(self) -> dict:
@@ -336,7 +337,10 @@ class Studio:
         prev = (rnd.get("decision") or {}).get("history")
         if prev:  # 重新审阅过的轮：保留之前的决定历史
             decision = {**decision, "history": prev}
-        return self.store.update_round(rnd["id"], state="closed", decision=decision)
+        closed = self.store.update_round(rnd["id"], state="closed", decision=decision)
+        for cb in self.decision_listeners:
+            cb(closed)
+        return closed
 
     def _task_in_round(self, tasks: list[dict], key: str | int) -> dict:
         for t in tasks:

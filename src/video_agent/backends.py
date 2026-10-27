@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 
@@ -21,6 +21,7 @@ from . import llm
 @dataclass
 class ChatResult:
     text: str
+    tool_calls: list[dict] = field(default_factory=list)  # [{id, name, arguments(str)}]
     prompt_tokens: int = 0
     completion_tokens: int = 0
     ttft_s: float = 0.0
@@ -65,7 +66,13 @@ class OpenAICompatBackend:
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
         self.http = httpx.Client(timeout=timeout, headers=headers, transport=transport)
 
-    def _body(self, messages: list[dict], schema: dict | None, max_tokens: int) -> dict:
+    def _body(
+        self,
+        messages: list[dict],
+        schema: dict | None,
+        max_tokens: int,
+        tools: list[dict] | None = None,
+    ) -> dict:
         body = {
             "model": self.model,
             "messages": messages,
@@ -74,6 +81,8 @@ class OpenAICompatBackend:
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        if tools:
+            body["tools"] = tools
         if schema:
             body["response_format"] = {
                 "type": "json_schema",
@@ -86,14 +95,20 @@ class OpenAICompatBackend:
         return 0.0
 
     def chat(
-        self, messages: list[dict], schema: dict | None = None, max_tokens: int = 4096
+        self,
+        messages: list[dict],
+        schema: dict | None = None,
+        max_tokens: int = 4096,
+        tools: list[dict] | None = None,
     ) -> ChatResult:
         load_s = self.prepare()
         t = time.monotonic()
         res = ChatResult(text="", load_s=load_s)
         parts: list[str] = []
         url = f"{self.base_url}/v1/chat/completions"
-        with self.http.stream("POST", url, json=self._body(messages, schema, max_tokens)) as r:
+        calls: dict[int, dict] = {}
+        body = self._body(messages, schema, max_tokens, tools)
+        with self.http.stream("POST", url, json=body) as r:
             r.raise_for_status()
             for line in r.iter_lines():
                 if not line.startswith("data:") or line.strip() == "data: [DONE]":
@@ -102,11 +117,21 @@ class OpenAICompatBackend:
                 for ch in d.get("choices") or []:
                     if not res.ttft_s:
                         res.ttft_s = time.monotonic() - t
-                    parts.append((ch.get("delta") or {}).get("content") or "")
+                    delta = ch.get("delta") or {}
+                    parts.append(delta.get("content") or "")
+                    for tc in delta.get("tool_calls") or []:  # 流式工具调用：按 index 拼接
+                        c = calls.setdefault(
+                            tc.get("index", 0), {"id": None, "name": "", "arguments": ""}
+                        )
+                        c["id"] = tc.get("id") or c["id"]
+                        fn = tc.get("function") or {}
+                        c["name"] += fn.get("name") or ""
+                        c["arguments"] += fn.get("arguments") or ""
                 if d.get("usage"):
                     res.prompt_tokens = d["usage"].get("prompt_tokens", 0)
                     res.completion_tokens = d["usage"].get("completion_tokens", 0)
         res.text = "".join(parts)
+        res.tool_calls = [{**c, "id": c["id"] or f"call_{i}"} for i, c in sorted(calls.items())]
         res.total_s = time.monotonic() - t
         return res
 
@@ -157,10 +182,17 @@ class FuncBackend:
         self.fn = fn
         self.calls: list[list[dict]] = []
 
-    def chat(self, messages, schema=None, max_tokens=4096) -> ChatResult:
+    def chat(self, messages, schema=None, max_tokens=4096, tools=None) -> ChatResult:
         self.calls.append(messages)
+        out = self.fn(messages, schema) if tools is None else self.fn(messages, tools)
+        if isinstance(out, dict):  # 测试用：{"text": ..., "tool_calls": [...]}
+            return ChatResult(
+                text=out.get("text", ""),
+                tool_calls=out.get("tool_calls", []),
+                prompt_tokens=sum(len(m.get("content") or "") for m in messages) // 2,
+            )
         return ChatResult(
-            text=self.fn(messages, schema),
+            text=out,
             prompt_tokens=sum(len(m["content"]) for m in messages) // 2,
         )
 

@@ -47,6 +47,24 @@ M: dict[str, tuple[str, str]] = {
         "Queued at tier {t} (unmeasured — first run, watch memory): {n} candidate(s)",
         "已按 {t} 档排队（未实测——首次运行，注意内存）：{n} 个候选",
     ),
+    "agent_tier_approval": (
+        "Tier “{t}” of {tpl} hasn't been measured (memory and time unknown). Run it?",
+        "{tpl} 的「{t}」档还没实测过（内存与耗时未知）。要跑吗？",
+    ),
+    "agent_select_approval": (
+        "Proposed: select #{idx} of “{t}”{r}. {why}",
+        "建议：选中「{t}」的 #{idx}{r}。{why}",
+    ),
+    "btn_approve": ("✅ Approve", "✅ 同意"),
+    "btn_decline": ("✕ No", "✕ 不要"),
+    "agent_step_budget": (
+        "I've used my step budget ({n} steps) for this request. Tell me how to continue.",
+        "这次请求的步数预算（{n} 步）用完了。告诉我接下来怎么做。",
+    ),
+    "agent_already_decided": ("That was already decided.", "这个已经决定过了。"),
+    "agent_declined": ("OK — not doing that.", "好的，不做。"),
+    "agent_approved": ("Approved.", "已同意。"),
+    "style_set": ("Planner style: {s}", "规划方式：{s}"),
     "locked_as": ("Locked as “{r}”", "已锁定为「{r}」"),
     "ask_lock": ("Lock it into the baseline pack?", "要锁进基准包吗？"),
     "selected_ask_lock": (

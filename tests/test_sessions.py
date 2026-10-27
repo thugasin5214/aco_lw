@@ -11,7 +11,9 @@ from video_agent.studio import Studio, StudioError
 
 @pytest.fixture
 def studio(make_orch, fake):
-    return Studio(make_orch(fake), round_size=2)
+    s = Studio(make_orch(fake), round_size=2)
+    s.store.set_kv("planner_style", "simple")
+    return s
 
 
 def plan_reply(**kw):
