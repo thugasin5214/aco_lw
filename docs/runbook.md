@@ -2,7 +2,7 @@
 
 Updated 2026-10-26 · applies to phase 2.5 + W2 (`va daemon` + console + Telegram + sessions & project memory) · 中文版：[runbook.zh-CN.md](runbook.zh-CN.md)
 
-This runbook answers three questions: **how to start / stop**, **how to use it day to day**, and **what to check when something goes wrong**. Design rationale is in `docs/design.html`, plan and progress in `PLAN.md` / `docs/progress.html`, measurements in `docs/baseline.md`.
+This runbook answers three questions: **how to start / stop**, **how to use it day to day**, and **what to check when something goes wrong**. Design rationale is in `docs/design.html`, plan and progress in `PLAN.md` / `docs/progress.html`, measurements in `docs/baseline.md`, architecture diagrams and flow charts in `docs/architecture.html` (console → Architecture).
 
 ---
 

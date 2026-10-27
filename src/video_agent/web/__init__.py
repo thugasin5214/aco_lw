@@ -105,6 +105,18 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
     def progress(lang: str | None = None) -> str:
         return _doc("progress", "html", lang).read_text()
 
+    @app.get("/architecture", response_class=HTMLResponse)
+    def architecture(lang: str | None = None) -> str:
+        return _doc("architecture", "html", lang).read_text()
+
+    @app.get("/architecture.html", response_class=HTMLResponse)
+    def architecture_en() -> str:
+        return _doc("architecture", "html", "en").read_text()
+
+    @app.get("/architecture.zh-CN.html", response_class=HTMLResponse)
+    def architecture_zh() -> str:
+        return _doc("architecture", "html", "zh").read_text()
+
     @app.get("/runbook", response_class=HTMLResponse)
     def runbook(lang: str | None = None) -> str:
         import markdown

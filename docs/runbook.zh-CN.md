@@ -2,7 +2,7 @@
 
 更新于 2026-10-26 · 适用于阶段 2.5 + W2（`va daemon` + 控制台 + Telegram + 会话与项目记忆）· English: [runbook.md](runbook.md)
 
-本手册回答三件事：**怎么开 / 关**、**日常怎么用**、**出问题怎么查**。设计取舍见 `docs/design.html`，计划与进度见 `PLAN.md` / `docs/progress.html`，实测数据见 `docs/baseline.md`。
+本手册回答三件事：**怎么开 / 关**、**日常怎么用**、**出问题怎么查**。设计取舍见 `docs/design.html`，计划与进度见 `PLAN.md` / `docs/progress.html`，实测数据见 `docs/baseline.md`，架构图与流程图见 `docs/architecture.zh-CN.html`（控制台 →「架构」）。
 
 ---
 

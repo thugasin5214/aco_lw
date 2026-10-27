@@ -5,7 +5,7 @@ English: [README.md](README.md)
 确定性编排器驱动本机 ComfyUI（FLUX.2 出图、FreeVideo / MiniMax H3 出视频）。本地 LLM（LM Studio）是可选的规划器，按需唤醒。候选在 Web 控制台或 Telegram 上审阅；所有内容按项目组织，每个项目有多个会话、共享的项目记忆和版本化的基准包。
 
 - 计划与范围：[`PLAN.md`](PLAN.md) · 设计：[`docs/design.html`](docs/design.html) · 实测：[`docs/baseline.md`](docs/baseline.md)
-- 运维：[`docs/runbook.zh-CN.md`](docs/runbook.zh-CN.md) · 进度：[`docs/progress.zh-CN.html`](docs/progress.zh-CN.html)
+- 运维：[`docs/runbook.zh-CN.md`](docs/runbook.zh-CN.md) · 进度：[`docs/progress.zh-CN.html`](docs/progress.zh-CN.html) · 架构：[`docs/architecture.zh-CN.html`](docs/architecture.zh-CN.html)
 
 ## 快速开始
 

@@ -202,6 +202,7 @@ kbd{font:11.5px ui-monospace,monospace;border:1px solid var(--line);border-radiu
     <button class="tab" data-view="gallery" data-t="tab.gallery">Outputs</button>
     <button class="tab" data-view="progress" data-t="tab.progress">Progress</button>
     <button class="tab" data-view="runbook" data-t="tab.runbook">Runbook</button>
+    <button class="tab" data-view="architecture" data-t="tab.architecture">Architecture</button>
     <select class="sm lang" id="lang" aria-label="Language"><option value="en">EN</option><option value="zh">中文</option></select>
   </nav>
 </header>
@@ -257,6 +258,7 @@ kbd{font:11.5px ui-monospace,monospace;border:1px solid var(--line);border-radiu
 
   <section class="view" id="v-progress"><iframe title="Progress" data-src="/progress"></iframe></section>
   <section class="view" id="v-runbook"><iframe title="Runbook" data-src="/runbook"></iframe></section>
+  <section class="view" id="v-architecture"><iframe title="Architecture" data-src="/architecture"></iframe></section>
 </main>
 
 <div class="modal" id="modal" role="dialog" aria-modal="true"><div class="box" id="modal-box"></div></div>
@@ -267,7 +269,7 @@ const I18N = {
   en: {
     title: "aco_lw Console", memory: "Memory", project: "Project", detail: "Details", projects: "Projects",
     "tab.flow": "Flow", "tab.review": "Review", "tab.projects": "Projects & Chat", "tab.gallery": "Outputs",
-    "tab.progress": "Progress", "tab.runbook": "Runbook", new: "New", all: "All", images: "Images", videos: "Videos",
+    "tab.progress": "Progress", "tab.runbook": "Runbook", "tab.architecture": "Architecture", new: "New", all: "All", images: "Images", videos: "Videos",
     "flow.title": "Creative flow (DAG)", "flow.all": "All projects",
     "flow.hint": "One node = one round of candidates (or a standalone task). Arrows = derived from a previous decision (tweak / redo / reject) or reuse of its output. Green outline = selected candidate.",
     "flow.empty": "No tasks yet. Describe what you want in “Projects & Chat”, or use Telegram / <code>va round</code>.",
@@ -335,7 +337,7 @@ const I18N = {
   zh: {
     title: "aco_lw 控制台", memory: "内存", project: "项目", detail: "详情", projects: "项目",
     "tab.flow": "任务流", "tab.review": "审阅", "tab.projects": "项目与对话", "tab.gallery": "产物",
-    "tab.progress": "项目进度", "tab.runbook": "手册", new: "新建", all: "全部", images: "图片", videos: "视频",
+    "tab.progress": "项目进度", "tab.runbook": "手册", "tab.architecture": "架构", new: "新建", all: "全部", images: "图片", videos: "视频",
     "flow.title": "创作流程 DAG", "flow.all": "全部项目",
     "flow.hint": "一个节点 = 一轮候选（或一个独立任务）；箭头 = 由上一轮决定派生（微调 / 重做 / 打回）或引用其产物。绿框 = 选中的候选。",
     "flow.empty": "还没有任务。在“项目与对话”里描述需求，或用 Telegram / <code>va round</code>。",
