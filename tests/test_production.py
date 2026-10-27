@@ -369,3 +369,21 @@ def test_redo_of_approved_storyboard_keeps_downstream_until_new_version(prod):
     p.review(pr["id"], "storyboard", "approve")
     kf = {i["key"]: i["state"] for i in stage(p.plan(pr["id"]), "keyframes")["items"]}
     assert kf == {"sh01": "current", "sh02": "running"}  # 只有文字变了的镜头重出
+
+
+def test_plain_reject_of_a_production_round_re_renders(prod):
+    p = prod
+    pr = p.create("novel-to-film", "Lost cat", {"source": "..."})
+    run_skills(p)
+    p.review(pr["id"], "adaptation", "approve")
+    run_skills(p)
+    p.review(pr["id"], "bible", "approve")
+    ready = drain(p.studio)
+    mei = next(r for r in ready if r["title"].endswith("mei"))
+    p.studio.reject(mei["id"])  # 不带意见
+    items = {i["key"]: i for i in stage(p.plan(pr["id"]), "characters")["items"]}
+    assert items["mei"]["state"] == "running" and items["mei"]["version"] == 2  # 自动换种子重出
+    cat = next(r for r in ready if r["title"].endswith("cat"))
+    p.studio.reject(cat["id"], "make it fluffier")  # 带意见：等规划器派生新轮，不在这里重出
+    items = {i["key"]: i for i in stage(p.plan(pr["id"]), "characters")["items"]}
+    assert items["cat"]["state"] == "rejected"

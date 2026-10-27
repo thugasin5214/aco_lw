@@ -316,12 +316,27 @@ class Actions:
     ) -> None:
         rnd = self.studio.reject(round_id, note, origin=channel)
         say(tr("reject_ack", note=note))
+        # 记下“还欠一个按意见派生的新轮”：任务只在内存队列里，daemon 重启后据此补上
+        rnd = self.store.update_round(round_id, decision={**rnd["decision"], "followup": "pending"})
+        self.followup_note(rnd, note, channel, say, msg_id)
+
+    def followup_note(
+        self, rnd: dict, note: str, channel: str, say: Reply, msg_id: int | None = None
+    ) -> None:
         _, sid = self._ctx()
 
+        def done(state: str) -> None:
+            cur = self.store.get_round(rnd["id"])
+            self.store.update_round(rnd["id"], decision={**cur["decision"], "followup": state})
+
         def job() -> None:
-            delta, why, mems = self.planner.translate_note(
-                rnd["template"], rnd["base_params"], note, rnd["project_id"], sid, msg_id
-            )
+            try:
+                delta, why, mems = self.planner.translate_note(
+                    rnd["template"], rnd["base_params"], note, rnd["project_id"], sid, msg_id
+                )
+            except Exception:
+                done("failed")
+                raise
             new = self.studio.start_round(
                 rnd["template"],
                 {**rnd["base_params"], **delta},
@@ -334,8 +349,9 @@ class Actions:
                 project_id=rnd["project_id"],
                 allow_unverified=True,
             )
+            done("done")
             say(f"{why}\n" + tr("queued_new_round", n=new["n"]))
-            self._offer_memories(mems, {"round": round_id, "message": msg_id}, say)
+            self._offer_memories(mems, {"round": rnd["id"], "message": msg_id}, say)
 
         self.jobs.put((job, say))
 
@@ -690,8 +706,23 @@ class Daemon:
         if self.bot and not ev["artifact"].get("round_id"):  # 渲染阶段的轮已经单独推送过
             self.bot.broadcast(text)
 
+    def resume_followups(self) -> int:
+        """重启前没做完的“按打回意见派生新轮”：重新排队（只认带 pending 标记的，旧记录不动）。"""
+        n = 0
+        for r in self.orch.store.rounds(None, "closed"):
+            d = r.get("decision") or {}
+            if d.get("action") == "reject" and d.get("note") and d.get("followup") == "pending":
+                ch = d.get("origin") or "web"
+                say = self.actions._say(ch, self.actions.channel_send.get(ch, self.actions.channel_send["web"]))
+                self.actions.followup_note(r, d["note"], ch, say)
+                n += 1
+        if n:
+            log.info("Re-queued %d reject note(s) interrupted by a restart", n)
+        return n
+
     def start(self) -> None:
         self.actions.runtime.recover()
+        self.resume_followups()
         self.production.recover()
         threading.Thread(
             target=self.production.work, args=(self.stop,), name="production", daemon=True

@@ -781,6 +781,15 @@ class Production:
         if art["status"] == "current":
             self._supersede(art)
             self.advance(prod["id"])
+            return
+        d = rnd.get("decision") or {}
+        if d.get("action") == "reject" and not d.get("note") and prod["state"] == "active":
+            # 制片里的条目不能空着：不带意见的打回 = 换种子重出（带意见的由规划器改参数后派生新轮）
+            self.log(f"production {prod['id']}: {art['stage']}/{art['key']} rejected → re-render")
+            try:
+                self.run_stage(prod["id"], art["stage"], [art["key"]], origin="production")
+            except ProductionError as e:
+                self.log(f"production {prod['id']}: re-render of {art['key']} not started: {e}")
 
     def on_round_ready(self, rnd: dict) -> None:
         """一轮候选出完：自动通过的阶段（gate: auto）直接选第一个成功的候选。"""
