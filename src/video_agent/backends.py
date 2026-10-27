@@ -28,9 +28,13 @@ class ChatResult:
     load_s: float = 0.0
 
     @property
+    def cached_tokens_est(self) -> int:
+        """估算复用的前缀 token：总数减去首 token 时间内按冷算速度（G0 实测约 360 token/s）能算完的量。"""
+        return max(0, int(self.prompt_tokens - self.ttft_s * 360))
+
+    @property
     def cache_hit(self) -> bool:
-        """估算：首 token 时间远小于按冷算速度（G0 实测约 360 token/s）应花的时间。"""
-        return self.prompt_tokens > 2000 and self.ttft_s < self.prompt_tokens / 360 * 0.3
+        return self.prompt_tokens > 0 and self.cached_tokens_est > self.prompt_tokens * 0.5
 
     def stats(self) -> dict:
         return {
@@ -40,6 +44,7 @@ class ChatResult:
             "seconds": round(self.total_s, 1),
             "load_s": round(self.load_s, 1),
             "cache_hit": self.cache_hit,
+            "cached_tokens_est": self.cached_tokens_est,
         }
 
 

@@ -180,39 +180,36 @@ class Planner:
         return "\n\n".join(parts)
 
     @staticmethod
-    def _history_content(m: dict) -> tuple[str, str] | None:
-        if m["channel"] == "llm":
-            raw = m["meta"].get("raw") or {}
-            act = {
-                k: raw[k]
-                for k in ("action", "template", "round_ref", "pick", "prompt")
-                if raw.get(k)
-            }
-            text = m["text"] + (f"\n[动作] {json.dumps(act, ensure_ascii=False)}" if act else "")
-            return "assistant", text
-        if m["direction"] == "in" and m["channel"] in ("web", "telegram", "cli"):
-            att = m["meta"].get("attachments") or []
-            extra = "".join(f"\n[附图 @upload:{a['id']} {a.get('name', '')}]" for a in att)
-            return "user", m["text"] + extra
-        return None
+    def _assistant_text(m: dict) -> str:
+        raw = m["meta"].get("raw") or {}
+        act = {
+            k: raw[k] for k in ("action", "template", "round_ref", "pick", "prompt") if raw.get(k)
+        }
+        return m["text"] + (f"\n[动作] {json.dumps(act, ensure_ascii=False)}" if act else "")
+
+    def _pairs(self, session: dict, before_id: int | None = None) -> list[tuple[dict, dict]]:
+        """会话里每次规划调用的 (当时发出的 user 原文, 规划器回复) 对。
+
+        实测（docs/baseline.md）：该模型的前缀缓存只能“延长”，不能截断复用，
+        所以历史必须逐字复现当时发出的内容，下一次请求才是上一次的延长。
+        """
+        pairs, last_user = [], "（接续之前的会话）"
+        for m in self.store.session_messages(session["id"], session["summary_upto"]):
+            if before_id is not None and m["id"] >= before_id:
+                break
+            if m["direction"] == "in" and m["channel"] in ("web", "telegram", "cli"):
+                last_user = m["text"]  # 旧消息没有 sent_tail 时的回退
+            if m["channel"] == "llm" and m["meta"].get("purpose") in ("plan", "note"):
+                tail = m["meta"].get("sent_tail") or last_user
+                pairs.append((m, {"role": "user", "content": tail}))
+        return pairs
 
     def history(self, session: dict | None, before_id: int | None) -> list[dict]:
         if not session:
             return []
         out: list[dict] = []
-        for m in self.store.session_messages(session["id"], session["summary_upto"]):
-            if before_id is not None and m["id"] >= before_id:
-                break
-            item = self._history_content(m)
-            if item is None:
-                continue
-            role, text = item
-            if out and out[-1]["role"] == role:
-                out[-1]["content"] += "\n" + text
-            else:
-                out.append({"role": role, "content": text})
-        if out and out[0]["role"] == "assistant":
-            out.insert(0, {"role": "user", "content": "（接续之前的会话）"})
+        for m, user in self._pairs(session, before_id):
+            out += [user, {"role": "assistant", "content": self._assistant_text(m)}]
         return out
 
     def live_state(self, project_id: str | None) -> str:
@@ -230,21 +227,23 @@ class Planner:
             )
         else:
             lines.append("基准包：空")
-        for r in self.store.rounds(project_id)[:4]:
-            tasks = self.store.round_tasks(r["id"])
-            cands = "，".join(f"#{t['idx']}=@task:{t['id']}" for t in tasks if t["outputs"])
-            d = r["decision"] or {}
-            dec = (
-                f"；决定：{d.get('action')}"
-                + (f" #{d['idx']}" if d.get("idx") else "")
-                + (f"（{d['note']}）" if d.get("note") else "")
-                if d.get("action")
-                else ""
-            )
-            lines.append(
-                f"- 轮 {r['id']}（{ROUND_ZH[r['state']]}，{r['template']}）"
-                f"候选：{cands or '无'}{dec}\n  prompt: {r['base_params'].get('prompt', '')}"
-            )
+        # 精简：待审阅轮给完整 prompt（可能要改它），生成中只给一行，已决定的只留最近 2 轮的决定
+        rounds = self.store.rounds(project_id)
+        closed = [r for r in rounds if r["state"] == "closed"][:2]
+        for r in [r for r in rounds if r["state"] != "closed"] + closed:
+            head = f"- 轮 {r['id']}（{ROUND_ZH[r['state']]}，{r['template']}）"
+            prompt = r["base_params"].get("prompt", "")
+            if r["state"] == "review":
+                tasks = self.store.round_tasks(r["id"])
+                cands = "，".join(f"#{t['idx']}=@task:{t['id']}" for t in tasks if t["outputs"])
+                lines.append(f"{head}候选：{cands or '无'}\n  prompt: {prompt}")
+            elif r["state"] == "generating":
+                lines.append(head)
+            else:
+                d = r["decision"] or {}
+                dec = d.get("action", "") + (f" #{d['idx']}" if d.get("idx") else "")
+                note = f"（{d['note']}）" if d.get("note") else ""
+                lines.append(f"{head}决定：{dec}{note}；prompt 摘要：{prompt[:160]}")
         return "\n".join(lines)
 
     def build(
@@ -257,11 +256,10 @@ class Planner:
         session = self.store.get_session(session_id) if session_id else None
         msgs = [{"role": "system", "content": self.system_prompt(project_id, session)}]
         msgs += self.history(session, before_id)
-        final = f"## 当前状态（实时）\n{self.live_state(project_id)}\n\n## 本次输入\n{purpose_text}"
-        if msgs[-1]["role"] == "user":
-            msgs[-1]["content"] += "\n\n" + final
-        else:
-            msgs.append({"role": "user", "content": final})
+        live = self.live_state(project_id)
+        fast = " /no_think" if self.cfg.planner_fast else ""
+        final = f"## 当前状态（实时）\n{live}\n\n## 本次输入\n{purpose_text}{fast}"
+        msgs.append({"role": "user", "content": final})
         return msgs
 
     # ---- 调用 ----
@@ -286,6 +284,7 @@ class Planner:
                 session_id=session_id,
                 purpose=purpose,
                 raw=data,
+                sent_tail=messages[-1]["content"],
                 backend=self.backend.name,
                 **res.stats(),
             )
@@ -367,19 +366,15 @@ class Planner:
         ):
             return False
         session = self.store.get_session(session_id)
-        msgs = [
-            m
-            for m in self.store.session_messages(session_id, session["summary_upto"])
-            if self._history_content(m)
-        ]  # 只算进入 LLM 的消息（用户原话与规划器回复）
-        keep = self.cfg.session_keep_messages
-        if len(msgs) <= keep:
+        pairs = self._pairs(session)
+        keep = max(1, self.cfg.session_keep_messages // 2)  # 按“轮”保留：一问一答
+        if len(pairs) <= keep:
             return False
-        old, upto = msgs[:-keep], msgs[-keep - 1]["id"]
-        lines = []
-        for m in old:
-            role, text = self._history_content(m)
-            lines.append(f"{'用户' if role == 'user' else '规划器'}：{text}")
+        old, upto = pairs[:-keep], pairs[-keep - 1][0]["id"]
+        lines = [
+            f"用户（含当时状态）：{user['content']}\n规划器：{self._assistant_text(m)}"
+            for m, user in old
+        ]
         prompt = [
             {
                 "role": "system",
@@ -407,16 +402,17 @@ class Planner:
         return True
 
     def prewarm(self, session_id: str | None) -> ChatResult | None:
-        """把当前会话前缀写进缓存（模型重新加载或摘要重写后调用）。"""
+        """重发上一次规划请求的完整内容，把它写回缓存；下一次请求正好是它的延长。"""
         if not session_id or not self.available():
             return None
         s = self.store.get_session(session_id)
         if s is None:
             return None
+        pairs = self._pairs(s)
         msgs = [{"role": "system", "content": self.system_prompt(s["project_id"], s)}]
-        msgs += self.history(s, None) or [{"role": "user", "content": "（预热）"}]
-        if msgs[-1]["role"] != "user":
-            msgs.append({"role": "user", "content": "（预热）"})
+        for m, user in pairs[:-1]:
+            msgs += [user, {"role": "assistant", "content": self._assistant_text(m)}]
+        msgs.append(pairs[-1][1] if pairs else {"role": "user", "content": "（预热）"})
         return self.backend.prewarm(msgs)
 
     def _validate(

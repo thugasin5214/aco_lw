@@ -56,22 +56,24 @@ def test_sessions_share_project_memory_not_history(studio):
     assert first["id"] != s2["id"]
 
 
-def test_prefix_is_stable_across_calls(studio):
-    """缓存前提：第二次调用的消息序列以第一次的 system + 历史为前缀（只追加）。"""
+def test_each_call_extends_the_previous(studio):
+    """缓存前提（实测该模型只能“延长”复用）：第 N+1 次请求以第 N 次请求的全部消息原样开头。"""
     a, planner, _out, reply = actions_with(
         studio, [plan_reply(reply="一"), plan_reply(reply="二"), plan_reply(reply="三")]
     )
+    rnd = studio.start_round("flux2-t2i", {"seed": 1})  # 让实时状态在两次调用之间变化
     for text in ("甲", "乙", "丙"):
         a.inbound("web", text, reply)
         run_jobs(a)
+        drain(studio)
     c1, c2, c3 = planner.backend.calls
-    assert c1[0] == c2[0] == c3[0]  # system 完全一致
-    # 第三次的历史 = 第二次的全部消息去掉最后的“实时状态”部分后，原样在前
-    assert c3[1]["content"].startswith("甲")
-    assert c3[:2] == c2[:2] or c3[1]["content"].startswith(
-        c2[1]["content"].split("\n\n## 当前状态")[0]
-    )
+    assert c2[: len(c1)] == c1 and c3[: len(c2)] == c2
+    assert [m["role"] for m in c3] == ["system", "user", "assistant", "user", "assistant", "user"]
     assert "## 当前状态" in c3[-1]["content"] and "## 当前状态" not in c3[0]["content"]
+    assert rnd["id"] in c3[-1]["content"]
+    # 预热请求 = 最后一次请求原样
+    planner.prewarm(studio.current_session()["id"])
+    assert planner.backend.calls[-1] == c3
 
 
 def test_summarize_rewrites_prefix_once(studio):

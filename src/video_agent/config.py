@@ -20,6 +20,7 @@ class Settings:
     llm_session_ttl_s: int = 1200  # 会话活跃时延长驻留，保住前缀缓存
     session_summary_tokens: int = 16000  # 上一次调用超过此 prompt 长度即压缩较早消息
     session_keep_messages: int = 8  # 压缩时保留的最近原话条数
+    planner_fast: bool = False  # 末尾加 /no_think：实测 14.4 s → 9.3 s，思考约减半
     planner_backend: str = "lmstudio"  # lmstudio | openai_compatible
     openai_base_url: str = ""
     openai_model: str = ""
