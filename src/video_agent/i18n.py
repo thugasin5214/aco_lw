@@ -28,6 +28,11 @@ M: dict[str, tuple[str, str]] = {
         "当前是纯命令模式，文字不会唤醒 LLM。用 /round 直接出图，或 /mode on_demand。",
     ),
     "invalid_params": ("Invalid parameters: {e}", "参数无效：{e}"),
+    # ComfyUI 工具审批
+    "comfy_approval": (
+        "The agent wants to run a ComfyUI action that changes your install: {t} {a}\n{why}",
+        "agent 想执行一个会改动 ComfyUI 安装的操作：{t} {a}\n{why}",
+    ),
     # 制片
     "stage_review": ("🎬 {p}: {s} is ready for review", "🎬 {p}：{s} 待审核"),
     "stage_invalid": (

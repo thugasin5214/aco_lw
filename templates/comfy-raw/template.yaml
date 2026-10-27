@@ -1,0 +1,11 @@
+title: 任意 ComfyUI workflow（agent 搭建 / 修改后由编排器提交）
+kind: video
+model: comfy-raw
+release_after: free
+# graph：API 格式的 workflow JSON。ComfyExecutor 直接提交它（先按 /object_info 校验，SaveImage / SaveVideo 前缀改成本任务）
+slots:
+  graph: {node: "1", field: graph, type: str, required: true}
+  title: {node: "1", field: title, type: str}
+tiers:
+  trial: {verified: true}
+default_tier: trial

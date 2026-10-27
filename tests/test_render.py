@@ -13,8 +13,8 @@ OBJECT_INFO = json.loads((Path(__file__).parent / "object_info_min.json").read_t
 
 def test_all_templates_load_and_pass_object_info():
     for t in REG.templates.values():
-        if t.executor != "comfy":
-            continue  # 非 ComfyUI 执行端的 api.json 只承载参数
+        if t.executor != "comfy" or t.name == "comfy-raw":
+            continue  # 非 ComfyUI 执行端 / 原样提交的 workflow：api.json 只承载参数
         imgs = {k: "up.png" for k, s in t.slots.items() if s.type == "image"}
         _, p = resolve(t, imgs, allow_unverified=True)
         assert check_graph(render(t, p), OBJECT_INFO) == [], t.name

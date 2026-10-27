@@ -14,3 +14,8 @@ ffmpeg:
   peak_gib: 1       # 估算：x264 编码 720p
   resource: cpu     # 不经内存闸门、不卸载 LLM、不释放 ComfyUI；可与渲染并存
   exec_s: 20        # 估算，跑过后用实测历史
+comfy-raw:
+  kind: video
+  peak_gib: 54      # 未知 workflow：按最重的视频模型保守估计（估算）
+  exclusive_llm: true
+  adaptive: true

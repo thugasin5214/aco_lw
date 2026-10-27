@@ -36,6 +36,8 @@ class ComfyExecutor:
 
     # ---- 准备 ----
     def prepare(self, template, task: dict) -> Prepared:
+        if template.name == "comfy-raw":
+            return self._prepare_raw(task)
         params = dict(task["params"])
         uploads = {}
         for name, slot in template.slots.items():
@@ -53,6 +55,21 @@ class ComfyExecutor:
             uploads=uploads,
             artifacts={"prompt.json": json.dumps(graph, ensure_ascii=False, indent=2)},
             note=f"节点校验通过；上传 {len(uploads)} 张图",
+        )
+
+    def _prepare_raw(self, task: dict) -> Prepared:
+        """agent 搭建的任意 workflow：校验后原样提交，只把保存节点的前缀改成本任务（方便收集与追踪）。"""
+        graph = json.loads(task["params"]["graph"])
+        for node in graph.values():
+            if node.get("class_type", "").startswith("Save") and "filename_prefix" in node.get("inputs", {}):
+                node["inputs"]["filename_prefix"] = f"aco_lw/{task['id']}"
+        problems = check_graph(graph, self.object_info())
+        if problems:
+            raise ValueError("；".join(problems))
+        return Prepared(
+            payload=graph,
+            artifacts={"prompt.json": json.dumps(graph, ensure_ascii=False, indent=2)},
+            note=f"agent workflow · {len(graph)} nodes · 节点校验通过",
         )
 
     # ---- 提交与轮询 ----

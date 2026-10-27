@@ -378,7 +378,11 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
     def create_production(ctx, a):
         source = {"text": a.get("source") or "", "sources": a.get("sources") or []}
         prod = _prod().create(
-            a["workflow"], a["title"], {"source": source}, a.get("settings") or {}, ctx["project_id"]
+            a["workflow"],
+            a["title"],
+            {"source": source},
+            a.get("settings") or {},
+            ctx["project_id"],
         )
         return Done(_plan_view(_prod().plan(prod["id"])))
 
@@ -416,6 +420,81 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
                 "plan": _plan_view(p.plan(a["production_id"])),
             }
         )
+
+    # ---- ComfyUI 探索 / 搭建（artokun/comfyui-mcp，由编排器调度；见 comfy_bridge.py） ----
+    def _bridge():
+        b = getattr(rt, "comfy", None)
+        if b is None:
+            raise ValueError("ComfyUI agent tools are not installed (data/tools/comfyui-mcp)")
+        return b
+
+    def comfy_catalog(ctx, a):
+        return Done(
+            {
+                "tools": _bridge().catalog(),
+                "note": "read = allowed; run = use run_comfy_workflow; approve = asks the user; deny = not allowed",
+            }
+        )
+
+    def comfy_describe(ctx, a):
+        return Done(_bridge().describe(a["tool"]))
+
+    def _run_graph(ctx, graph: dict, title: str | None):
+        rnd = studio.start_round(
+            "comfy-raw",
+            {"graph": json.dumps(graph), "title": title or "agent workflow"},
+            1,
+            "trial",
+            title or "agent workflow",
+            origin="agent",
+            request=f"comfy:{ctx['run_id']}",
+            project_id=ctx["project_id"],
+        )
+        return {
+            "queued_round": rnd["id"],
+            "hint": "call wait_for_round with this round_id for the result",
+        }
+
+    def comfy(ctx, a):
+        from .comfy_bridge import classify, extract_workflow
+
+        tool, args = a["tool"], a.get("args") or {}
+        kind = classify(tool, args)
+        if kind == "read":
+            return Done(_bridge().call(tool, args))
+        if kind == "run":
+            graph = extract_workflow(tool, args)
+            if graph is None:
+                return Done(
+                    {
+                        "error": "runs go through our orchestrator: build an API-format workflow "
+                        "(create_workflow), then call run_comfy_workflow with it"
+                    }
+                )
+            return Done(_run_graph(ctx, graph, a.get("title")))
+        if kind == "approve":
+            txt = tr(
+                "comfy_approval",
+                t=tool,
+                a=json.dumps(args, ensure_ascii=False)[:600],
+                why=a.get("reason") or "",
+            )
+            return Pending("approval", "", txt, on_approve={"tool": "comfy_approved", "args": a})
+        return Done(
+            {
+                "error": f"{tool} {args.get('action') or ''} is not allowed (restart / delete / queue "
+                "changes / memory / settings / cloud are reserved for the user)"
+            }
+        )
+
+    def comfy_approved(ctx, a):
+        return Done(_bridge().call(a["tool"], a.get("args") or {}))
+
+    def run_comfy_workflow(ctx, a):
+        graph = a["workflow"]
+        if isinstance(graph, str):
+            graph = json.loads(graph)
+        return Done(_run_graph(ctx, graph, a.get("title")))
 
     def update_production_settings(ctx, a):
         prod = _prod().update_settings(a["production_id"], a["settings"])
@@ -614,10 +693,44 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
             review_stage,
         ),
         Tool(
+            "comfy_catalog",
+            "ComfyUI tools you can use to explore models, nodes, workflows and model-family guides, "
+            "and to build workflows; grouped by what the policy allows.",
+            _obj({}),
+            "read",
+            comfy_catalog,
+        ),
+        Tool(
+            "comfy_describe",
+            "Full description and argument schema of one ComfyUI tool. Read it before first use.",
+            _obj({"tool": S}, ["tool"]),
+            "read",
+            comfy_describe,
+        ),
+        Tool(
+            "comfy",
+            "Call a ComfyUI tool from comfy_catalog with its args (e.g. {action: ...}). Reads and "
+            "workflow building run directly; installs / downloads ask the user; runs go through "
+            "run_comfy_workflow; restarts, deletions, queue changes and cloud are refused.",
+            _obj({"tool": S, "args": {"type": "object"}, "title": S, "reason": S}, ["tool"]),
+            "act",
+            comfy,
+        ),
+        Tool(
+            "run_comfy_workflow",
+            "Queue an API-format ComfyUI workflow you built as a tracked trial render (our queue, "
+            "pause and memory gates apply). Keep trials small (lowest resolution / few steps).",
+            _obj({"workflow": {"type": "object"}, "title": S}, ["workflow"]),
+            "act",
+            run_comfy_workflow,
+        ),
+        Tool(
             "update_production_settings",
             "Change a production's settings (e.g. language for dialogue, video_tier). Applies to "
             "items run from now on; approved ones are not re-rendered automatically.",
-            _obj({"production_id": S, "settings": {"type": "object"}}, ["production_id", "settings"]),
+            _obj(
+                {"production_id": S, "settings": {"type": "object"}}, ["production_id", "settings"]
+            ),
             "act",
             update_production_settings,
         ),
@@ -632,6 +745,7 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
     hidden = [
         Tool("queue_round_approved", "", _obj({}), "act", queue_round_approved),
         Tool("select_approved", "", _obj({}), "act", select_approved),
+        Tool("comfy_approved", "", _obj({}), "act", comfy_approved),
     ]
     return {t.name: t for t in tools + hidden}
 

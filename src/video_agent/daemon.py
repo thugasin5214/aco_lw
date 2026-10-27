@@ -652,6 +652,10 @@ class Daemon:
         self.orch.resources.listeners.append(self.production.wake)  # 渲染结束 → 排队的 skill 再试
         self.actions.production = self.production
         self.actions.runtime.production = self.production
+        from .comfy_bridge import ComfyBridge
+
+        bridge = ComfyBridge(cfg)
+        self.actions.runtime.comfy = bridge if bridge.available() else None
         self.worker.hold = self.production.holds
         self.production.stop_running = lambda pid: self.worker.stop_current(
             lambda t: self.production.task_production(t) == pid
