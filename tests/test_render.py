@@ -15,7 +15,8 @@ def test_all_templates_load_and_pass_object_info():
     for t in REG.templates.values():
         if t.executor != "comfy":
             continue  # 非 ComfyUI 执行端的 api.json 只承载参数
-        _, p = resolve(t, {"image": "up.png"} if "image" in t.slots else {}, allow_unverified=True)
+        imgs = {k: "up.png" for k, s in t.slots.items() if s.type == "image"}
+        _, p = resolve(t, imgs, allow_unverified=True)
         assert check_graph(render(t, p), OBJECT_INFO) == [], t.name
 
 
