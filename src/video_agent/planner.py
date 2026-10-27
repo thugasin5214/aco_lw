@@ -337,22 +337,28 @@ class Planner:
         t = self.registry.template(template)
         editable = [n for n, s in t.slots.items() if n not in TIER_KEYS and s.type != "image"]
         shown = {k: v for k, v in base_params.items() if k in editable}
+        steps = t.slots.get("steps")
+        steps_hint = (
+            f"只有批注涉及细节程度时才给 steps（{steps.min:g}–{steps.max:g}），否则填 0。"
+            if steps
+            else "该模板没有 steps 参数，steps 填 0。"
+        )
         task = (
             f"把批注翻译成参数修改。模板 {template}，可改参数：{', '.join(editable)}\n"
             f"当前参数：{json.dumps(shown, ensure_ascii=False)}\n批注：{note}\n"
-            "输出 prompt 为修改后的完整新 prompt（不需要改则为空字符串）；"
-            "只有批注涉及细节程度时才给 steps。"
+            "输出 prompt 为修改后的完整新 prompt（不需要改则为空字符串）；" + steps_hint
         )
         msgs = self.build(task, project_id, session_id, before_id)
         data = self._call("note", msgs, DELTA_SCHEMA, project_id, session_id)
         delta = {}
         if data.get("prompt"):
             delta["prompt"] = data["prompt"]
-        if data.get("steps"):
-            delta["steps"] = data["steps"]
-        bad = set(delta) - set(editable)
-        if bad:
-            raise ParamError(f"规划器给出了不可改的参数：{', '.join(sorted(bad))}")
+        if data.get("steps") and steps:
+            try:  # 越界或模板不支持的 steps 直接忽略，保留 prompt 的修改
+                self._validate(template, {**shown, "steps": data["steps"]}, None, partial=True)
+                delta["steps"] = data["steps"]
+            except ParamError:
+                pass
         self._validate(template, {**shown, **delta}, None, partial=True)
         self.maybe_summarize(session_id)
         mems = [m for m in data.get("memories") or [] if m.strip()][:3]

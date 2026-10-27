@@ -146,8 +146,8 @@ def test_planner_validates_output(studio):
             [{"prompt": "b", "image": "/etc/passwd", "steps": 99, "memories": [], "reply": ""}]
         ),
     )
-    with pytest.raises(ParamError, match="超过上限"):  # steps 越界被拦；image 字段被忽略
-        note.translate_note("flux2-edit", {"prompt": "a"}, "换图", None)
+    delta, _, _ = note.translate_note("flux2-edit", {"prompt": "a"}, "换图", None)
+    assert delta == {"prompt": "b"}  # 越界的 steps 与 image 字段被忽略，prompt 修改保留
 
 
 # ---- Actions：命令、按钮、批注 ----
@@ -323,3 +323,17 @@ def test_telegram_photo_becomes_upload(studio):
     text, att = seen[0]
     assert text == "参照这张" and att[0]["name"] == "p1.jpg"
     assert studio.store.get_upload(att[0]["id"])["path"].endswith(".jpg")
+
+
+def test_note_on_video_template_ignores_steps(studio):
+    """h3 模板没有 steps（只有 base_steps / refine_steps）：模型给了 steps 也不能让整条批注失败。"""
+    planner = Planner(
+        studio.orch.cfg,
+        studio.store,
+        studio.orch.registry,
+        chat=fake_chat(
+            [{"prompt": "she smiles and turns", "steps": 20, "memories": [], "reply": "ok"}]
+        ),
+    )
+    delta, _, _ = planner.translate_note("h3-i2v", {"prompt": "she walks"}, "more smile", None)
+    assert delta == {"prompt": "she smiles and turns"}
