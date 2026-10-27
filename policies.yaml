@@ -1,0 +1,40 @@
+# aco_lw runtime policies (defaults). Override any key in data/policies.yaml.
+# Rule: the runtime never changes what a task means on its own. Retries, tier changes and
+# automatic next steps happen only where this file says so; anything not covered goes back
+# to the LLM (or to you).
+
+# What to do when an asynchronous tool result arrives (a render finished, failed, ...).
+continuation:
+  round_succeeded: resume_llm          # hand the candidates back to the LLM
+  round_failed:
+    oom:                               # out-of-memory errors from the executor
+      action: retry                    # retry | resume_llm
+      max_retries: 1                   # same template, tier, prompt and seeds — nothing else changes
+    lost:                              # executor lost the job
+      action: resume_llm
+    other:
+      action: resume_llm
+  pipeline_step_succeeded: auto_next   # auto_next: queue the next step without waking the LLM
+  pipeline_step_failed: resume_llm     # let the LLM re-plan
+  pipeline_finished: resume_llm
+
+# What tools may do. allow: true | false. approval: never | unless_named | always
+#   unless_named = needs your button unless your own message named it (e.g. "use #2", "hd 60s")
+execution:
+  network: false                       # no tool may reach the internet (web_search etc. later)
+  tools:
+    get_status: {allow: true}
+    list_templates: {allow: true}
+    get_project: {allow: true}
+    get_round: {allow: true}
+    queue_round: {allow: true, max_n: 8, unmeasured_video: unless_named}
+    queue_pipeline: {allow: true, max_steps: 8}
+    wait_for_round: {allow: true}
+    redo_round: {allow: true}
+    refine_candidate: {allow: true}
+    reject_round: {allow: true}
+    propose_selection: {allow: true, approval: unless_named}
+    propose_memory: {allow: true}
+    ask_user: {allow: true}
+    shell: {allow: false}              # not implemented; would need a command whitelist + workdir
+    web_search: {allow: false}         # phase 7

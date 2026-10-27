@@ -217,3 +217,102 @@ def test_step_budget(env):
     a.inbound("web", "loop", lambda t, b=None: None)
     run_all(a)
     assert last_run(studio)["status"] == "done" and "budget" in said[-1][0]
+
+
+# ---------------- 策略层（P1 / P2 / D1） ----------------
+def test_execution_policy_rejects_without_changing_args(env):
+    studio, make, _ = env
+    a, script = make(
+        {"tool_calls": [call("queue_round", {"template": "flux2-t2i", "prompt": "x", "n": 20})]},
+        {"text": "ok"},
+    )
+    a.inbound("web", "lots", lambda t, b=None: None)
+    run_all(a)
+    err = json.loads(script.seen[-1][-1]["content"])["error"]
+    assert "exceeds the policy limit of 8" in err
+    assert studio.store.rounds(state="generating") == []  # 没有偷偷改成 8 张
+
+
+def test_user_override_policy_file(env, tmp_path):
+    studio, make, _ = env
+    (studio.orch.cfg.data_dir / "policies.yaml").write_text(
+        "execution:\n  tools:\n    queue_round: {allow: false}\n"
+        "    propose_selection: {allow: true, approval: always}\n"
+    )
+    a, script = make(
+        {"tool_calls": [call("queue_round", {"template": "flux2-t2i", "prompt": "x"})]},
+        {"text": "ok"},
+    )
+    a.inbound("web", "go", lambda t, b=None: None)
+    run_all(a)
+    assert "not permitted" in json.loads(script.seen[-1][-1]["content"])["error"]
+    rnd = studio.start_round("flux2-t2i", {"seed": 1})
+    drain(studio)
+    b, _ = make(
+        {"tool_calls": [call("propose_selection", {"round_id": rnd["id"], "idx": 1})]},
+        {"text": "ok"},
+    )
+    b.inbound("web", "就用 #1", lambda t, b=None: None)  # 策略 always：即使点名也要按钮
+    run_all(b)
+    assert studio.store.get_round(rnd["id"])["state"] == "review"
+
+
+def test_oom_retries_once_with_same_seeds_then_returns_to_llm(make_orch):
+    from conftest import FakeComfy
+
+    fake = FakeComfy(fail=True)  # 执行端报 "OOM"
+    studio = Studio(make_orch(fake), round_size=1)
+    script = Script(
+        {"tool_calls": [call("queue_round", {"template": "flux2-t2i", "prompt": "x", "n": 1})]},
+        lambda m: {
+            "tool_calls": [
+                call("wait_for_round", {"round_id": json.loads(m[-1]["content"])["round_id"]})
+            ]
+        },
+        {"text": "it failed twice"},
+    )
+    planner = Planner(studio.orch.cfg, studio.store, studio.orch.registry, chat=script)
+    a = Actions(studio, planner)
+    a.inbound("web", "go", lambda t, b=None: None)
+    run_all(a)
+    first = studio.store.rounds(state="generating")[0]
+    seed = studio.store.round_tasks(first["id"])[0]["params"]["seed"]
+    drain(studio)
+    a.runtime.on_round_ready(studio.store.get_round(first["id"]))
+    retry = studio.store.rounds(state="generating")[0]  # 策略：同参数同种子重试 1 次，LLM 不参与
+    assert retry["parent_round"] == first["id"] and len(script.seen) == 2
+    assert studio.store.round_tasks(retry["id"])[0]["params"]["seed"] == seed
+    drain(studio)
+    a.runtime.on_round_ready(studio.store.get_round(retry["id"]))
+    run_all(a)
+    assert json.loads(script.seen[-1][-1]["content"])["outcome"] == "failed:oom"
+    assert last_run(studio)["status"] == "done"
+
+
+def test_pipeline_runs_steps_without_waking_llm(env):
+    studio, make, _ = env
+    steps = [
+        {"template": "flux2-t2i", "prompt": "portrait", "n": 1},
+        {"template": "h3-i2v", "prompt": "she turns", "image": "@prev"},
+    ]
+    a, script = make(
+        {"tool_calls": [call("queue_pipeline", {"steps": steps})]}, {"text": "pipeline done"}
+    )
+    a.inbound("web", "portrait then video", lambda t, b=None: None)
+    run_all(a)
+    drain(studio)
+    first = studio.store.rounds(state="review")[0]
+    a.runtime.on_round_ready(first)  # 第 1 步完成 → 策略 auto_next
+    video = studio.store.rounds(state="generating")[0]
+    assert video["template"] == "h3-i2v" and video["parent_round"] == first["id"]
+    img_task = studio.store.round_tasks(first["id"])[0]
+    assert studio.store.round_tasks(video["id"])[0]["params"]["image"].endswith(
+        img_task["outputs"][0]["file"]
+    )
+    assert len(script.seen) == 1  # 中间没有唤醒 LLM
+    drain(studio)
+    a.runtime.on_round_ready(studio.store.get_round(video["id"]))
+    run_all(a)
+    result = json.loads(script.seen[-1][-1]["content"])
+    assert result["finished"] and len(result["pipeline"]) == 2
+    assert last_run(studio)["status"] == "done"

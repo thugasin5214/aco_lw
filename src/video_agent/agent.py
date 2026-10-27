@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 
 from .config import ROOT
 from .i18n import tr
+from .policy import Policies, classify_round
 from .render import ParamError
 from .studio import StudioError
 
@@ -174,7 +175,13 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
         unmeasured = bool(tier) and not tpl.tiers[tier].verified
         from .daemon import explicit_tier
 
-        if tpl.kind == "video" and unmeasured and not explicit_tier(ctx["origin_text"], tier):
+        rule = rt.policies.approval("queue_round", "unmeasured_video")
+        named = explicit_tier(ctx["origin_text"], tier) if tier else False
+        if (
+            tpl.kind == "video"
+            and unmeasured
+            and (rule == "always" or (rule == "unless_named" and not named))
+        ):
             return Pending(
                 "approval",
                 "",
@@ -239,8 +246,11 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
         if rnd is None or rnd["state"] != "review":
             return Done({"error": "round is not waiting for review"})
         role = a.get("role") or None
-        if explicit_pick(ctx["origin_text"], a["idx"]):  # 你在原话里点名了 → 视为已批准
-            return Done(_select(ctx, a))
+        rule = rt.policies.approval("propose_selection")
+        if rule == "never" or (
+            rule == "unless_named" and explicit_pick(ctx["origin_text"], a["idx"])
+        ):
+            return Done(_select(ctx, a))  # 策略允许 / 你在原话里点名了 → 视为已批准
         txt = tr(
             "agent_select_approval",
             idx=a["idx"],
@@ -278,6 +288,39 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
                 ],
             )
         return Done({"proposed": [m["text"] for m in mems], "note": "applies after user confirms"})
+
+    def queue_pipeline(ctx, a):
+        steps = a.get("steps") or []
+        if not steps:
+            return Done({"error": "steps is empty"})
+        for st in steps:  # 先整体校验，避免跑到一半才发现模板不存在
+            studio.orch.registry.template(st["template"])
+        rnd = _queue_step(ctx, steps[0], None)
+        pipe = {"steps": steps, "index": 0, "rounds": [rnd["id"]]}
+        return Pending("event", f"round:{rnd['id']}", info={"pipeline": pipe})
+
+    def _queue_step(ctx, st, prev_round):
+        params = {"prompt": st["prompt"]} if st.get("prompt") else {}
+        image = st.get("image")
+        if image == "@prev" and prev_round:  # 上一步的第一个成功产物
+            ok = next(t for t in store.round_tasks(prev_round) if t["outputs"])
+            image = f"@task:{ok['id']}"
+        if image:
+            params["image"] = image
+        return studio.start_round(
+            st["template"],
+            params,
+            st.get("n") or None,
+            st.get("tier") or None,
+            st.get("title"),
+            origin=ctx["channel"],
+            request=f"pipeline:{ctx['run_id']}",
+            parent_round=prev_round,
+            project_id=ctx["project_id"],
+            allow_unverified=True,
+        )
+
+    rt._queue_step = _queue_step
 
     def ask_user(ctx, a):
         return Pending("user", f"ask:{ctx['run_id']}", a["question"])
@@ -377,6 +420,26 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
             propose_memory,
         ),
         Tool(
+            "queue_pipeline",
+            "Run several rounds in order without consulting you between them (per policy): each "
+            'step {template, prompt, image, tier, n, title}; image "@prev" uses the previous '
+            "step's first output. Returns when all steps finish or one fails.",
+            _obj(
+                {
+                    "steps": {
+                        "type": "array",
+                        "items": _obj(
+                            {"template": S, "prompt": S, "image": S, "tier": S, "n": I, "title": S},
+                            ["template", "prompt"],
+                        ),
+                    }
+                },
+                ["steps"],
+            ),
+            "wait",
+            queue_pipeline,
+        ),
+        Tool(
             "ask_user",
             "Ask the user one short question and wait for the answer.",
             _obj({"question": S}, ["question"]),
@@ -415,6 +478,7 @@ class AgentRuntime:
         """enqueue：把一步放进规划器队列（单线程）；say_for(channel)：给某个渠道发消息的函数。"""
         self.studio, self.planner, self.store = studio, planner, studio.store
         self.enqueue, self.say_for, self.max_steps = enqueue, say_for, max_steps
+        self.policies = Policies.load(studio.orch.cfg.data_dir)
         self.tools = build_tools(self)
         self.spec = tools_spec(self.tools)
         self._lock = threading.RLock()
@@ -553,6 +617,9 @@ class AgentRuntime:
             return self._tool_done(run, call, {}, {"error": f"arguments are not valid JSON: {e}"})
         if tool is None or not tool.description:
             return self._tool_done(run, call, args, {"error": f"unknown tool {call['name']}"})
+        denied = self.policies.check(call["name"], args)
+        if denied:  # 执行策略：只拒绝，不替你改参数
+            return self._tool_done(run, call, args, {"error": denied})
         try:
             out = tool.handler(ctx, args)
         except (StudioError, ParamError, KeyError, ValueError) as e:
@@ -646,8 +713,94 @@ class AgentRuntime:
             self._advance(m["run_id"])
         return n
 
+    def resolve_msg(self, m: dict, result: dict) -> None:
+        self.store.update_agent_msg(
+            m["id"],
+            content=json.dumps(result, ensure_ascii=False),
+            status="done",
+            meta={"full": result},
+        )
+        self._advance(m["run_id"])
+
     def on_round_ready(self, rnd: dict) -> None:
-        self.resolve(f"round:{rnd['id']}", _round_view(self.store, rnd))
+        """渲染结果到了：按续跑策略决定交回 LLM、自动下一步、还是有限重试。"""
+        key = f"round:{rnd['id']}"
+        for m in self.store.pending_tool_msgs():
+            if m["meta"].get("key") != key:
+                continue
+            run = self.store.get_run(m["run_id"])
+            pipe = (m["meta"].get("info") or {}).get("pipeline")
+            outcome = classify_round(self.store, rnd["id"])
+            retries = m["meta"].get("retries", 0)
+            last = bool(pipe) and pipe["index"] >= len(pipe["steps"]) - 1
+            action = self.policies.on_round(outcome, retries, bool(pipe), last)
+            if action == "retry":
+                new = self._retry(rnd, run)
+                if pipe:
+                    pipe["rounds"][-1] = new["id"]
+                self.store.update_agent_msg(
+                    m["id"],
+                    meta={
+                        "key": f"round:{new['id']}",
+                        "retries": retries + 1,
+                        "info": {"pipeline": pipe} if pipe else {},
+                    },
+                )
+                self._log_policy(run, f"{outcome} → retry {retries + 1} (same parameters)")
+                continue
+            if action == "auto_next":
+                pipe["index"] += 1
+                nxt = self._queue_step(
+                    {
+                        "channel": run["channel"],
+                        "project_id": run["project_id"],
+                        "run_id": run["id"],
+                    },
+                    pipe["steps"][pipe["index"]],
+                    rnd["id"],
+                )
+                pipe["rounds"].append(nxt["id"])
+                self.store.update_agent_msg(
+                    m["id"],
+                    meta={"key": f"round:{nxt['id']}", "retries": 0, "info": {"pipeline": pipe}},
+                )
+                self._log_policy(
+                    run,
+                    f"step {pipe['index']} of {len(pipe['steps'])} done "
+                    "→ next step queued (no LLM)",
+                )
+                continue
+            if pipe:
+                result = {
+                    "pipeline": [
+                        _round_view(self.store, self.store.get_round(r)) for r in pipe["rounds"]
+                    ],
+                    "finished": action == "finished",
+                    "outcome": outcome,
+                }
+            else:
+                result = {**_round_view(self.store, rnd), "outcome": outcome}
+            self.resolve_msg(m, result)
+
+    def _retry(self, rnd: dict, run: dict) -> dict:
+        tasks = self.store.round_tasks(rnd["id"])
+        seeds = [t["params"].get("seed") for t in tasks]
+        return self.studio.start_round(
+            rnd["template"],
+            rnd["base_params"],
+            rnd["n"],
+            rnd["tier"],
+            rnd["title"],
+            origin=run["channel"],
+            request="policy retry",
+            parent_round=rnd["id"],
+            project_id=rnd["project_id"],
+            allow_unverified=True,
+            seeds=seeds if all(isinstance(x, int) for x in seeds) else None,
+        )
+
+    def _log_policy(self, run: dict, text: str) -> None:
+        self.studio.log("agent", "out", f"⚙️ policy: {text}", run["project_id"], run_id=run["id"])
 
     def on_round_decided(self, rnd: dict) -> None:
         """你用普通审阅按钮做了决定：等这轮的批准请求也就有了答案。"""
@@ -711,7 +864,7 @@ class AgentRuntime:
             if key.startswith("round:"):
                 rnd = self.store.get_round(key.split(":", 1)[1])
                 if rnd and rnd["state"] != "generating":
-                    self.resolve(key, _round_view(self.store, rnd))
+                    self.on_round_ready(rnd)
         for run in self.store.runs(None, "running", "waiting_resources"):
             if not self._unresolved(run["id"]):
                 self.enqueue(lambda rid=run["id"]: self.step(rid))
