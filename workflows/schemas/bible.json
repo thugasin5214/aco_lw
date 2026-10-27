@@ -60,6 +60,10 @@
           "reference": {
             "type": "string",
             "description": "id of a provided reference image (brief.references) this entry is based on"
+          },
+          "voice": {
+            "type": "string",
+            "description": "how the character sounds (accent, age, timbre, delivery)"
           }
         }
       }

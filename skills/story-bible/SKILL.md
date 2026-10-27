@@ -32,6 +32,11 @@ Each has an `id`, `label`, `role` (character / location / style / prop), `use` a
   as is, or redrawn in the film's style. Still write `look`, consistent with the label and note.
 - Put the ids of `style` references in `style.references`, and let them inform `style.look`.
 - Never attach one reference to two entries, and never invent ids.
+
+## Voices
+Give every speaking character a `voice`: accent, age, timbre and delivery in a few words
+("young British woman, crisp upper-class accent, soft and dry"). It keeps their voice the same in
+every shot.
 - These may be photos of real people the user chose to cast; describe them only visually, as with
   any character.
 

@@ -342,6 +342,16 @@ G0 结论（详见 `docs/baseline.md`）：LLM 加载仅约 15 s；视频峰值�
 4. **入口**：控制台新建制片支持多行链接 + 多图上传（每张图填名字、类型、用法）；agent 工具 `create_production` 接受 `sources`；Telegram 发的照片已是上传，可直接引用。
 5. 依赖：`trafilatura`（网页正文）、`yt-dlp`（YouTube 元数据 / 字幕 / 缩略图 / 低清视频抽帧）。不下载模型。
 
+### 3.2 一致性与 ComfyUI 智能控制（用户 2026-10-27 决定）
+背景：「马尔福小姐」试片里关键帧与视频都没保住定妆脸，双人镜头特征串了。根因：视频只靠“首帧 + 一句话”，H3 提示词不合官方格式，FLUX 单参考。
+决定：
+1. **视频一致性走 FreeVideo 角色卡 + 电影**：新增 FreeVideo 执行端（本机 `/freevideo/agent/v1`，token 只在进程内读取、不打印）。人物 / 场景 → FreeVideo 角色卡（最多 6 张标注图 + 声音）；镜头视频 → FreeVideo 多镜头电影（plan → start → 每镜 takes → 我们的审阅里选 → 续拍用上一镜选中 take 的末帧 → finish）。暂停 / 审核仍由我们控制（电影的暂停只有用户能在 FreeVideo 页面操作：我们暂停时不再推进 choose / finish）。
+2. **agent 的 ComfyUI 权限**：可以探索模型、节点、你的 workflow，搭建与修改 workflow，按最低档试跑（经编排器、受暂停与资源闸门）；**安装节点 / 下载模型仍需你批准**。
+3. **接 artokun/comfyui-mcp，但由我们的编排器调度**：编排器作为 MCP 客户端启动它（stdio），把它的工具按类别登记进我们的工具表与策略：读（模型 / 节点 / workflow 查询）直接放行；搭建（改图、校验）放行；执行类调用改为经编排器提交成我们的任务（可追踪进度、受暂停与资源调度）；安装类需要审批。
+4. **装 MiniMax 官方 `h3-prompt-writing` skill**（data/skills），视频提示词按 H3 官方格式（英文分段、`<d>[English] …</d>` 台词、说话人 ID、镜头切换时间）。
+5. 这部片全英文（英式英语）。
+顺序：H3 skill + 英文 → FreeVideo 角色卡（马尔福用你的 7 张高清图）→ FreeVideo 电影执行端接镜头视频阶段 → comfyui-mcp 由编排器调度 → 关键帧双参考。
+
 ### 已定（用户 2026-10-27）
 1. skill 来源：内置 + 兼容 Claude Code SKILL.md 格式的外部 skill（`data/skills/`，按阶段映射）；不默认扫描 `~/.claude/skills`。
 2. 改编 / 分镜的 LLM：可配置（阶段级），默认本地 27B；本地被视频占用时按 `llm_fallback` 回退。

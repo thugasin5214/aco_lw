@@ -633,13 +633,21 @@ class Daemon:
         self.worker = Worker(self.orch, self.studio, self.notify_round, self.stop)
         self.actions = Actions(self.studio, self.planner, self.worker)
         self.orch.on_llm_restored = self.actions.prewarm_current
+        fv = None
+        if cfg.freevideo_agent:
+            from .freevideo import FreeVideo
+
+            fv = FreeVideo(cfg.comfy_url)
         self.production = Production(
             self.studio,
             SkillLibrary.from_settings(cfg),
             load_workflows(cfg.workflows_dir, cfg.data_dir / "workflows"),
             self.skill_llm,
             log=lambda m: log.info(m),
+            freevideo=fv,
         )
+        if self.production.film is not None:
+            self.production.film.notify_round = self.notify_round  # 导入的一轮 take：推送审阅
         self.production.listeners.append(self.notify_stage)
         self.orch.resources.listeners.append(self.production.wake)  # 渲染结束 → 排队的 skill 再试
         self.actions.production = self.production

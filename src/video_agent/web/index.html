@@ -328,7 +328,7 @@ const I18N = {
     "na.run_stage": "Run “{s}”", "na.review": "Review “{s}”", "na.wait": "Working on “{s}”…", "na.stale": "“{s}”: upstream changed — keep or redo?", "na.none": "Done",
     "ps.completed": "done", "ps.ready": "ready", "ps.active": "running", "ps.review": "review", "ps.blocked": "blocked",
     "is.current": "approved", "is.stale": "stale", "is.missing": "missing", "is.running": "running", "is.queued": "queued", "is.review": "review",
-    "is.failed": "failed", "is.invalid": "invalid", "is.rejected": "rejected", "pk.input": "input", "pk.skill": "skill", "pk.render": "render", "pk.assemble": "FFmpeg",
+    "is.failed": "failed", "is.invalid": "invalid", "is.rejected": "rejected", "pk.input": "input", "pk.skill": "skill", "pk.render": "render", "pk.assemble": "FFmpeg", "pk.film": "FreeVideo film",
     new: "New", all: "All", images: "Images", videos: "Videos",
     "flow.title": "Creative flow (DAG)", "flow.all": "All projects",
     "flow.hint": "One node = one round of candidates (or a standalone task). Arrows = derived from a previous decision (tweak / redo / reject) or reuse of its output. Green outline = selected candidate.",
@@ -419,7 +419,7 @@ const I18N = {
     "na.run_stage": "开跑「{s}」", "na.review": "审核「{s}」", "na.wait": "「{s}」进行中……", "na.stale": "「{s}」的上游变了——保留还是重做？", "na.none": "已完成",
     "ps.completed": "完成", "ps.ready": "就绪", "ps.active": "进行中", "ps.review": "待审核", "ps.blocked": "等待上游",
     "is.current": "已通过", "is.stale": "已过期", "is.missing": "未生成", "is.running": "生成中", "is.queued": "排队", "is.review": "待审核",
-    "is.failed": "失败", "is.invalid": "未通过校验", "is.rejected": "打回", "pk.input": "输入", "pk.skill": "skill", "pk.render": "渲染", "pk.assemble": "FFmpeg",
+    "is.failed": "失败", "is.invalid": "未通过校验", "is.rejected": "打回", "pk.input": "输入", "pk.skill": "skill", "pk.render": "渲染", "pk.assemble": "FFmpeg", "pk.film": "FreeVideo 电影",
     new: "新建", all: "全部", images: "图片", videos: "视频",
     "flow.title": "创作流程 DAG", "flow.all": "全部项目",
     "flow.hint": "一个节点 = 一轮候选（或一个独立任务）；箭头 = 由上一轮决定派生（微调 / 重做 / 打回）或引用其产物。绿框 = 选中的候选。",
@@ -1140,7 +1140,7 @@ function stageActions(s){
   else if (s.kind !== "input" && s.state !== "blocked" && idle)
     b.push(`<button class="btn sm" data-rerun-all="${esc(s.id)}">${t("prod.rerun_all")}</button>`);
   if (["skill","tool","assemble"].includes(s.kind) && s.items.length) b.push(`<button class="btn sm" data-view-art="${esc(s.id)}">${t("detail")}</button>`);
-  if (s.kind === "render" && s.state === "review") b.push(`<button class="btn sm" data-goto="review">${t("prod.open_review")}</button>`);
+  if (["render","film"].includes(s.kind) && s.state === "review") b.push(`<button class="btn sm" data-goto="review">${t("prod.open_review")}</button>`);
   return b.join("");
 }
 async function renderProdDetail(){
@@ -1162,7 +1162,7 @@ async function renderProdDetail(){
         <span class="badge ${PTONE[s.state] ?? ""} ${s.state === "active" ? "live" : ""}">${esc(t("ps." + s.state))}</span>
         ${s.blocked_by.length ? `<span class="hint">${esc(t("prod.blocked", {s: s.blocked_by.map(sTitle).join(", ")}))}</span>` : ""}
         <span class="sp"></span>${stageActions(s)}</div>
-        ${s.kind === "render" && s.items.length ? `<div class="chips">${s.items.map(it => itemThumb(s, it, arts)).join("")}</div>`
+        ${["render","film"].includes(s.kind) && s.items.length ? `<div class="chips">${s.items.map(it => itemThumb(s, it, arts)).join("")}</div>`
           : s.items.length && s.kind !== "input" ? `<div class="hint">${s.items.map(it => `<span class="badge ${ITONE[it.state] ?? ""}">${esc(t("is." + it.state))}</span> v${it.version ?? "–"}`).join(" ")}</div>` : ""}
       </div></div>`).join("")}</div>
     <div id="prod-art"></div>`;

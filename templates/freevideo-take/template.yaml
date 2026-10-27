@@ -1,0 +1,14 @@
+title: FreeVideo 电影镜头 take（由 FreeVideo agent API 拍摄）
+kind: video
+model: freevideo-h3
+executor: freevideo
+release_after: keep
+# 不经 Worker 执行：take 由 FreeVideo 电影拍出后导入为待审阅的任务；重做 / 打回转成 FreeVideo reshoot
+slots:
+  prompt: {node: "1", field: prompt, type: str}
+  film:   {node: "1", field: film, type: str, required: true}
+  shot:   {node: "1", field: shot, type: str, required: true}
+  take:   {node: "1", field: take, type: int, min: 1}
+tiers:
+  take: {verified: true}
+default_tier: take

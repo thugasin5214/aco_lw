@@ -73,10 +73,12 @@ class Stage(BaseModel):
 
     id: str
     title: str = ""
-    kind: Literal["input", "tool", "skill", "render", "assemble"]
+    kind: Literal["input", "tool", "skill", "render", "assemble", "film"]
+    cast: str | None = None  # film：角色卡来自哪个阶段（{"characters": {key: card id}}）
     tool: str | None = None  # tool 阶段：编排器里注册的确定性工具（例如 ingest）
     needs: list[str] = []
     skill: str | None = None
+    extra_skills: list[str] = []  # 一并读的参考 skill（例如 MiniMax 官方 h3-prompt-writing）；没装就跳过
     llm: str | None = None  # 指定后端（如 claude_code）；留空用制片设置 / 主后端
     instructions: str = ""
     output_schema: dict | str | None = Field(None, alias="schema")
@@ -109,6 +111,8 @@ class Workflow(BaseModel):
                 raise ValueError(f"阶段 {st.id} 依赖未定义或排在后面的阶段：{missing}")
             if st.kind == "skill" and not (st.skill and st.output_schema):
                 raise ValueError(f"skill 阶段 {st.id} 需要 skill 与 schema")
+            if st.kind == "film" and not st.fan_out:
+                raise ValueError(f"film 阶段 {st.id} 需要 fan_out（按镜头展开）")
             if st.kind == "tool" and not st.tool:
                 raise ValueError(f"tool 阶段 {st.id} 需要 tool")
             if st.kind == "render" and not st.render:
@@ -222,10 +226,17 @@ class Production:
         log: Callable[[str], None] = print,
         work_dir: Path | None = None,
         tools: dict[str, Callable] | None = None,
+        freevideo=None,
     ):
         self.studio, self.store, self.skills = studio, studio.store, skills
         # tool 阶段的确定性工具：fn(production, stage, inputs) -> data；可注册更多
         self.tools: dict[str, Callable] = {"ingest": self._tool_ingest, **(tools or {})}
+        self.film = None  # film 阶段（FreeVideo 多镜头电影）；没有 FreeVideo 时这类阶段不能开跑
+        if freevideo is not None:
+            from .film import FilmDriver
+
+            self.film = FilmDriver(self, freevideo)
+            self.tools.setdefault("freevideo_cards", self.film.cards_tool)
         self.workflows, self.llm, self.log = workflows, llm, log
         self.work_dir = work_dir or (self.store.jobs_dir.parent / "productions")
         self.listeners: list[Callable[[dict], None]] = []  # 阶段进入待审阅 / 失败 / 完成 → 通知
@@ -270,6 +281,8 @@ class Production:
 
     def holds(self, task: dict) -> bool:
         """Worker 取任务前问一句：所属制片暂停了就先不执行（队列保留，继续后照常跑）。"""
+        if task.get("template") == "freevideo-take":
+            return True  # FreeVideo 的 take 由 FreeVideo 自己拍，不经 Worker
         pid = self.task_production(task)
         if pid is None:
             return False
@@ -283,6 +296,8 @@ class Production:
             raise ProductionError(f"制片状态 {prod['state']}，不能暂停")
         prod = self.store.update_production(production_id, state="paused")
         stopped = self.stop_running(production_id) if stop_running else None
+        if stop_running and self.film is not None:
+            self.film.cancel(production_id)  # 取消还没拍完的 take（拍好的保留）
         self.log(f"production {production_id}: paused" + (f", interrupted {stopped['id']}" if stopped else ""))
         return {**prod, "interrupted": stopped and stopped["id"]}
 
@@ -549,6 +564,15 @@ class Production:
             idx = self._index(production_id)
             ctx = self._ctx(prod, wf, idx)
             made = []
+            if st.kind == "film":
+                if self.film is None:
+                    raise ProductionError("film 阶段需要 FreeVideo（freevideo_agent 未启用）")
+                if keys:
+                    made = self.film.start(
+                        prod, st, idx, ctx, keys, note,
+                        lambda k: self._item_deps(prod, st, idx, ctx, k),
+                    )
+                keys = []
             for k in keys:
                 if st.kind in ("skill", "tool"):
                     made.append(self._queue_skill(prod, wf, st, idx, note))
@@ -597,10 +621,16 @@ class Production:
         ctx = self._ctx(prod, wf, idx)
         skill = self.skills.get(st.skill)
         schema = st.output_schema
+        extras = [
+            f"## Reference skill: {name}\n\n" + self.skills.get(name).prompt()
+            for name in st.extra_skills
+            if name in self.skills.skills
+        ]
         system = "\n\n".join(
             p
             for p in (
                 skill.prompt(),
+                *extras,
                 st.instructions.strip(),
                 "## Output contract\nReply with exactly one JSON object (no prose, no code fence) "
                 "that validates against this JSON Schema:\n"
@@ -731,6 +761,13 @@ class Production:
         """skill 工作线程：依次执行排队作业；LLM 不可用时等渲染结束（wake）或超时再试。"""
         while not stop.is_set():
             parked = False
+            filming = 0
+            if self.film is not None:
+                try:
+                    self.film.tick()
+                    filming = len(self._films_waiting())
+                except Exception as e:  # noqa: BLE001 — FreeVideo 暂时不可达：下轮再看
+                    self.log(f"film poll failed: {e}")
             for art in self.pending_skill_jobs():
                 try:
                     self.run_skill_job(art)
@@ -738,11 +775,35 @@ class Production:
                     self.log(f"skill {art['stage']} parked: {e}")
                     parked = True
                     break
-            self._wake.wait(idle_s if parked or not self.pending_skill_jobs() else 0.1)
+            idle = min(idle_s, 10.0) if filming else idle_s
+            self._wake.wait(idle if parked or not self.pending_skill_jobs() else 0.1)
             self._wake.clear()
+
+    def _films_waiting(self) -> list[dict]:
+        out = []
+        for prod in self.store.productions():
+            if prod["state"] == "active":
+                out += [a for a in self.store.artifacts(prod["id"], None, "running")
+                        if (a["meta"] or {}).get("film") and not a["round_id"]]
+        return out
 
     def wake(self) -> None:
         self._wake.set()
+
+    def _item_deps(self, prod, st, idx, ctx, key) -> list[dict]:
+        """展开阶段某个条目的依赖：它在上游列表里的那一项（按内容指纹）+ 其余上游阶段（宽松）。"""
+        item = dict(self._items(st, ctx)).get(key, {})
+        src_stage = st.fan_out.items.split(".")[0]
+        cur = self._current(idx, src_stage, "main")
+        deps = [{
+            "stage": src_stage, "key": "main", "path": st.fan_out.items.split(".", 1)[1],
+            "field": st.fan_out.key, "item": key, "hash": fingerprint(item),
+            "version": cur and cur["version"],
+        }]
+        if st.cast:
+            c = self._current(idx, st.cast, "main")
+            deps.append({"stage": st.cast, "key": "main", "version": c and c["version"]})
+        return deps
 
     # render：一轮候选，选中即通过
     def _start_render(self, prod, st, idx, ctx, key, origin) -> dict:
@@ -952,6 +1013,8 @@ class Production:
     def _on_round_created(self, rnd: dict) -> None:
         if not rnd.get("parent_round") or self.store.artifact_by_round(rnd["id"]):
             return
+        if self.film is not None and self.film.intercept_round(rnd):
+            return  # FreeVideo take 的重做 / 打回：转成 FreeVideo reshoot
         parent = self.store.artifact_by_round(rnd["parent_round"])
         if parent is None:
             return
@@ -964,6 +1027,8 @@ class Production:
         art = self._sync(art)
         prod = self._prod(art["production_id"])
         if art["status"] == "current":
+            if self.film is not None:
+                self.film.on_chosen(art, rnd)  # FreeVideo：选中这条，后面的续拍从它接着拍
             self._supersede(art)
             self.advance(prod["id"])
             return

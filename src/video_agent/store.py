@@ -367,19 +367,23 @@ class Store:
         round_id: str | None = None,
         idx: int | None = None,
         priority: int | None = None,
+        state: str = "draft",
+        outputs: list | None = None,
+        note: str | None = None,
     ) -> dict:
+        """新建任务。state / outputs 只给“导入外部已完成结果”用（例如 FreeVideo 的 take）。"""
         now = time.time()
         task_id = _new_id()
         with self.db:
             self.db.execute(
                 "INSERT INTO tasks (id, created, updated, state, template, template_sha, kind, tier,"
-                " title, parent_id, params, params_hash, project_id, round_id, idx, priority)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " title, parent_id, params, params_hash, project_id, round_id, idx, priority, outputs)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     task_id,
                     now,
                     now,
-                    "draft",
+                    state,
                     template,
                     template_sha,
                     kind,
@@ -392,11 +396,12 @@ class Store:
                     round_id,
                     idx,
                     priority,
+                    json.dumps(outputs or [], ensure_ascii=False),
                 ),
             )
             self.db.execute(
                 "INSERT INTO events (task_id, ts, state, note) VALUES (?,?,?,?)",
-                (task_id, now, "draft", None),
+                (task_id, now, state, note),
             )
         self.task_dir(task_id).mkdir(parents=True, exist_ok=True)
         self.write_manifest(task_id)

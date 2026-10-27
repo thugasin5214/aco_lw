@@ -1,0 +1,86 @@
+{
+  "type": "object",
+  "required": [
+    "shots"
+  ],
+  "properties": {
+    "shots": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 24,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "scene",
+          "frame",
+          "framing",
+          "camera",
+          "motion",
+          "seconds"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9_-]+$"
+          },
+          "scene": {
+            "type": "string"
+          },
+          "cast": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {
+              "type": "string"
+            },
+            "description": "character ids (from the bible) visible in the shot"
+          },
+          "frame": {
+            "type": "string",
+            "description": "what the camera sees: subjects, setting, light (English)"
+          },
+          "framing": {
+            "type": "string"
+          },
+          "camera": {
+            "type": "string"
+          },
+          "motion": {
+            "type": "string",
+            "description": "the one action that happens during the shot (English)"
+          },
+          "seconds": {
+            "type": "number",
+            "minimum": 4,
+            "maximum": 15
+          },
+          "continue": {
+            "type": "boolean",
+            "description": "true = carries on from the previous shot's last frame (needs >= 10 s)"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "who",
+                "line"
+              ],
+              "properties": {
+                "who": {
+                  "type": "string"
+                },
+                "line": {
+                  "type": "string"
+                },
+                "how": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

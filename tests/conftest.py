@@ -123,6 +123,7 @@ def make_orch(tmp_path, no_side_effects):
             templates_dir=ROOT / "templates",
             poll_interval_s=0,
             memory_wait_s=0.0,
+            freevideo_agent=False,  # 测试不碰真实 FreeVideo
         )
         cfg.jobs_dir.mkdir(parents=True, exist_ok=True)
         comfy = Comfy("http://fake", transport=httpx.MockTransport(fake_comfy.handler))

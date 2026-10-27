@@ -61,7 +61,12 @@ class Executor(Protocol):
 
 
 def get_executors(cfg, comfy=None) -> dict[str, Executor]:
+    from ..freevideo import FreeVideo
     from .comfy import ComfyExecutor
     from .ffmpeg import FFmpegExecutor
+    from .freevideo import FreeVideoExecutor
 
-    return {"comfy": ComfyExecutor(comfy, cfg), "ffmpeg": FFmpegExecutor(cfg)}
+    out = {"comfy": ComfyExecutor(comfy, cfg), "ffmpeg": FFmpegExecutor(cfg)}
+    if getattr(cfg, "freevideo_agent", True):
+        out["freevideo"] = FreeVideoExecutor(FreeVideo(cfg.comfy_url))
+    return out
