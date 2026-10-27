@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 from collections.abc import Callable
@@ -133,6 +134,7 @@ class Planner:
         self.store = store
         self.registry = registry
         self.backend = FuncBackend(chat) if chat else (backend or make_backend(cfg, store))
+        self.resources = None  # 由 daemon 注入 ResourceManager
 
     # ---- 驻留 ----
     @property
@@ -273,7 +275,9 @@ class Planner:
         session_id: str | None,
         log: bool = True,
     ) -> dict:
-        res: ChatResult = self.backend.chat(messages, schema)
+        inflight = self.resources.llm.inference() if self.resources else contextlib.nullcontext()
+        with inflight:  # 推理进行中，渲染把关会等它答完再卸载 LLM
+            res: ChatResult = self.backend.chat(messages, schema)
         data = _parse_json(res.text)
         if log:
             self.store.log_message(

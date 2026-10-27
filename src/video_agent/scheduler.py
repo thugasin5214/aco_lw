@@ -15,13 +15,13 @@ import uuid
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
-from . import llm, memgate
 from .comfy import Comfy
 from .config import Settings
 from .executors import Executor, Poll, get_executors
 from .memory import Sampler
 from .registry import Registry, Template
 from .render import params_hash, resolve
+from .resources import ResourceManager
 from .store import Store
 
 LOST_POLLS = 5  # 连续几次在队列与历史里都找不到，才认定任务丢失
@@ -55,6 +55,7 @@ class Orchestrator:
         self.log = log
         self.sleep = sleep
         self.on_llm_restored: Callable[[], None] | None = None  # 由 daemon 注入：恢复后预热会话缓存
+        self.resources = ResourceManager(cfg, self.registry, self.store, log, sleep)
 
     def executor_for(self, t: Template) -> Executor:
         if t.executor not in self.executors:
@@ -84,6 +85,7 @@ class Orchestrator:
         project_id: str | None = None,
         round_id: str | None = None,
         idx: int | None = None,
+        priority: int | None = None,
     ) -> dict:
         t = self.registry.template(template)
         params = dict(params)
@@ -112,6 +114,7 @@ class Orchestrator:
             project_id=project_id,
             round_id=round_id,
             idx=idx,
+            priority=priority,
         )
         self.store.touch_project(project_id)
         return task
@@ -203,7 +206,6 @@ class Orchestrator:
         task = self.store.get(task_id)
         t = self.registry.template(task["template"])
         ex = self.executor_for(t)
-        model = self.registry.model_of(t)
         tdir = self.store.task_dir(task_id)
 
         try:
@@ -215,10 +217,13 @@ class Orchestrator:
         self.store.transition(task_id, "validated", prepared.note or None)
         self.store.update(task_id, metrics={"uploads": prepared.uploads})
 
+        est = self.resources.estimator.estimate(t, task["tier"])
         self.store.transition(
-            task_id, "waiting_memory", f"需要 {model.peak_gib + self.cfg.memory_margin_gib} GiB"
+            task_id,
+            "waiting_memory",
+            f"需要 {est.peak_gib + self.cfg.memory_margin_gib:.0f} GiB · 预计 {est.exec_s:.0f} s",
         )
-        gate = memgate.ensure(ex, model, self.cfg, self.log, self.sleep)
+        gate = self.resources.prepare_render(t, task["tier"], ex, task_id)
         metrics = {
             **self.store.get(task_id)["metrics"],
             "gate": {
@@ -302,19 +307,11 @@ class Orchestrator:
         )
 
     def _after(self, t: Template, ex: Executor, unloaded_llm: bool) -> None:
+        released = False
         if t.release_after == "free":
-            if ex.release():
-                self.log(f"{ex.name} 空闲，已请求释放模型")
-            else:
-                self.log(f"{ex.name} 有其他任务，跳过释放")
-        if unloaded_llm and self.cfg.llm_restore_after_video:
-            try:
-                llm.load(self.cfg.llm_model, self.cfg.llm_context, self.cfg.llm_idle_ttl_s)
-                self.log(f"已恢复 LLM（空闲 {self.cfg.llm_idle_ttl_s}s 后自动卸载）")
-                if self.on_llm_restored:
-                    self.on_llm_restored()
-            except Exception as e:  # noqa: BLE001 — 恢复失败不影响任务结果
-                self.log(f"恢复 LLM 失败：{e}")
+            released = ex.release()
+            self.log(f"{ex.name} {'released' if released else 'busy; release skipped'}")
+        self.resources.render_done(t, released, unloaded_llm, self.on_llm_restored)
 
     # ---- 恢复 ----
     def recover(self) -> list[tuple[str, str]]:

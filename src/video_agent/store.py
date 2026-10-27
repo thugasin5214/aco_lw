@@ -175,6 +175,7 @@ MIGRATIONS = {
         ("project_id", "TEXT"),
         ("round_id", "TEXT"),
         ("idx", "INTEGER"),
+        ("priority", "INTEGER"),  # 2 交互 / 1 agent / 0 后台（调度器排序用）
     ],
     "messages": [("session_id", "TEXT")],
 }
@@ -295,14 +296,15 @@ class Store:
         project_id: str | None = None,
         round_id: str | None = None,
         idx: int | None = None,
+        priority: int | None = None,
     ) -> dict:
         now = time.time()
         task_id = _new_id()
         with self.db:
             self.db.execute(
                 "INSERT INTO tasks (id, created, updated, state, template, template_sha, kind, tier,"
-                " title, parent_id, params, params_hash, project_id, round_id, idx)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " title, parent_id, params, params_hash, project_id, round_id, idx, priority)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     task_id,
                     now,
@@ -319,6 +321,7 @@ class Store:
                     project_id,
                     round_id,
                     idx,
+                    priority,
                 ),
             )
             self.db.execute(

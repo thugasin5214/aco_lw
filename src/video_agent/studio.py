@@ -237,9 +237,12 @@ class Studio:
         seeds: list[int] | None = None,
         allow_unverified: bool = False,
         parent_task: str | None = None,
+        priority: int | None = None,
     ) -> dict:
         t = self.orch.registry.template(template)
         pid = project_id or self.current_project()["id"]
+        if priority is None:  # 你发起的 → 交互；agent 自主发起 → 1；试跑等后台 → 0
+            priority = {"agent": 1, "background": 0}.get(origin, 2)
         base = {k: v for k, v in params.items() if k != "seed" and k not in TIER_KEYS}
         if n is None:
             n = 1 if t.kind == "video" else self.round_size
@@ -272,6 +275,7 @@ class Studio:
                     round_id=rnd["id"],
                     idx=i + 1,
                     parent_id=parent_task,
+                    priority=priority,
                 )
                 if i == 0 and tier is None:
                     self.store.update_round(rnd["id"], tier=task["tier"])

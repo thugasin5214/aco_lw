@@ -218,7 +218,7 @@ class Workshop:
             1,
             tier,
             f"Trial · {meta['name']}",
-            origin=origin,
+            origin="background",
             request="workflow trial",
             project_id=meta["project_id"],
             allow_unverified=True,

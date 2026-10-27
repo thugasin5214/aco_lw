@@ -52,7 +52,7 @@ class Worker(threading.Thread):
             if self.store.get_kv("paused"):
                 self.stop.wait(2)
                 continue
-            task = self.store.next_draft()
+            task = self.orch.resources.choose_next(self.store.by_state("draft"))
             if task is None:
                 self.stop.wait(2)
                 continue
@@ -129,7 +129,10 @@ class Actions:
             except queue.Empty:
                 continue
             warned = False
-            while self.worker and self.worker.busy_kind == "video" and not stop.is_set():
+            rm = self.studio.orch.resources
+            while not stop.is_set():  # LLM 推理前把关：资源不够就等渲染结束（不打断渲染）
+                if rm.llm_admit()[0]:
+                    break
                 if not warned:
                     reply(tr("llm_queued_video"))
                     warned = True
@@ -549,6 +552,7 @@ class Daemon:
         self.orch = Orchestrator(cfg, log=lambda m: log.info(m))
         self.studio = Studio(self.orch, cfg.round_size)
         self.planner = Planner(cfg, self.orch.store, self.orch.registry)
+        self.planner.resources = self.orch.resources
         self.bot: TelegramBot | None = None
         self.worker = Worker(self.orch, self.studio, self.notify_round, self.stop)
         self.actions = Actions(self.studio, self.planner, self.worker)
