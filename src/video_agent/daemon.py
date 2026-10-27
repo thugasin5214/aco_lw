@@ -85,6 +85,7 @@ class Worker(threading.Thread):
                     "paused": bool(self.store.get_kv("paused")),
                 },
             )
+            self.orch.resources.record()
             self.stop.wait(5)
 
     def _after(self, task: dict) -> None:

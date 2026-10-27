@@ -334,3 +334,24 @@ def test_finished_runs_are_compact_and_stable_across_runs(env):
     assert two[1] == {"role": "user", "content": "## User\none"}
     assert two[2] == {"role": "assistant", "content": "first answer"}
     assert three[:3] == two[:3]  # 之后每次请求，这部分逐字不变（缓存可命中）
+
+
+def test_queue_and_runs_api(env):
+    from fastapi.testclient import TestClient
+
+    from video_agent.web import create_app
+
+    studio, make, _ = env
+    a, _ = make({"tool_calls": [call("ask_user", {"question": "Which style?"})]})
+    a.inbound("web", "make something", lambda t, b=None: None)
+    run_all(a)
+    studio.start_round("flux2-t2i", {"seed": 3})
+    studio.orch.resources.record()
+    c = TestClient(create_app(studio.orch.cfg, a))
+    q = c.get("/api/queue").json()
+    assert len(q["plan"]) == 2 and q["plan"][0]["end"] > q["plan"][0]["start"]
+    assert q["runs"][0]["status"] == "waiting_user" and len(q["history"]) == 1
+    sid = studio.current_session()["id"]
+    run = c.get(f"/api/runs?session={sid}").json()[-1]
+    assert c.post(f"/api/runs/{run['id']}/cancel").json()["ok"]
+    assert studio.store.get_run(run["id"])["status"] == "cancelled"

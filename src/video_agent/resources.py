@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import collections
 import contextlib
 import statistics
 import threading
@@ -153,7 +154,18 @@ class ResourceManager:
         self.render_active: dict | None = None  # {"task_id", "family", "kind", "exclusive"}
         self.resident_family: str | None = None
         self.listeners: list[Callable[[], None]] = []  # 渲染结束 → 唤醒被暂存的 LLM 作业
+        self.history: collections.deque = collections.deque(maxlen=720)  # 约 1 小时（5 s 一次）
+
         self._lock = threading.RLock()
+
+    def record(self) -> None:
+        """心跳线程定期调用：记录资源曲线（控制台 Queue 页）。"""
+        snap = self.snap()
+        with self._lock:
+            ra = self.render_active
+        self.history.append(
+            {"t": time.time(), **snap, "render": ra and ra["kind"], "llm": self.llm.in_flight > 0}
+        )
 
     @staticmethod
     def snap() -> dict:

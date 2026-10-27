@@ -161,6 +161,17 @@ pre{font-size:12px;background:var(--bg);border:1px solid var(--line);border-radi
 .toolbar{display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
 iframe{width:100%;height:calc(100vh - 120px);border:1px solid var(--line);border-radius:12px;background:var(--card)}
 kbd{font:11.5px ui-monospace,monospace;border:1px solid var(--line);border-radius:4px;padding:0 4px;background:var(--bg)}
+/* queue & agent */
+.qgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px}
+@media (max-width:980px){.qgrid{grid-template-columns:1fr}}
+.qtable{width:100%;border-collapse:collapse;font-size:13px}
+.qtable th,.qtable td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
+.qtable th{color:var(--muted);font-weight:600}
+.msg.agent{align-self:flex-start;background:transparent;border:1px dashed var(--line);color:var(--muted);
+  font:12px/1.5 ui-monospace,Menlo,monospace;padding:4px 8px;max-width:95%}
+.runbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:13px;margin:6px 0 8px;
+  padding:6px 10px;border-radius:8px;background:var(--acc-tint);color:var(--accent)}
+.chart{width:100%;height:180px;display:block}
 /* modal */
 .modal{position:fixed;inset:0;background:var(--shade);display:none;align-items:flex-start;justify-content:center;z-index:20;padding:40px 16px;overflow:auto}
 .modal.on{display:flex}
@@ -187,6 +198,7 @@ kbd{font:11.5px ui-monospace,monospace;border:1px solid var(--line);border-radiu
     <button class="tab on" data-view="flow" data-t="tab.flow">Flow</button>
     <button class="tab" data-view="review"><span data-t="tab.review">Review</span><span class="count" id="c-review" hidden></span></button>
     <button class="tab" data-view="projects" data-t="tab.projects">Projects &amp; Chat</button>
+    <button class="tab" data-view="queue" data-t="tab.queue">Queue</button>
     <button class="tab" data-view="gallery" data-t="tab.gallery">Outputs</button>
     <button class="tab" data-view="progress" data-t="tab.progress">Progress</button>
     <button class="tab" data-view="runbook" data-t="tab.runbook">Runbook</button>
@@ -223,6 +235,15 @@ kbd{font:11.5px ui-monospace,monospace;border:1px solid var(--line);border-radiu
       </div>
       <div class="card" id="pdetail"></div>
     </div>
+  </section>
+
+  <section class="view" id="v-queue">
+    <div class="qgrid">
+      <div class="card"><h2 data-t="q.now">Now</h2><div id="q-now"></div>
+        <h2 style="margin-top:16px" data-t="q.mem">Memory (last 30 min)</h2><div id="q-chart"></div></div>
+      <div class="card"><h2 data-t="q.runs">Agent runs</h2><div id="q-runs"></div></div>
+    </div>
+    <div class="card" style="margin-top:18px"><h2 data-t="q.plan">Queue &amp; ETA</h2><div id="q-plan"></div></div>
   </section>
 
   <section class="view" id="v-gallery">
@@ -292,6 +313,14 @@ const I18N = {
     "st.running": "Running", "st.review": "To review", "st.done": "Done", "st.rejected": "Rejected", "st.failed": "Failed",
     "st.timeout": "Timed out", "st.generating": "Generating", "st.closed": "Decided", "st.active": "Active",
     "st.archived": "Archived", "st.open": "Open",
+    "tab.queue": "Queue", "q.now": "Now", "q.mem": "Memory (last 30 min)", "q.runs": "Agent runs", "q.plan": "Queue & ETA",
+    "q.idle": "No render running.", "q.rendering": "Rendering {k}: {t}", "q.family": "Resident model family: {f}",
+    "q.llm": "LLM: {l}{f}", "q.inflight": " · answering now", "q.empty": "Nothing queued.", "q.noruns": "No agent run is waiting.",
+    "q.col.task": "Task", "q.col.tpl": "Template / tier", "q.col.est": "Est.", "q.col.eta": "Starts / ends", "q.col.src": "Estimate from",
+    "q.in": "in {m}", "q.chart.empty": "Collecting samples… (needs the daemon)", "q.free": "free GiB",
+    "run.running": "working", "run.waiting_resources": "waiting for resources", "run.waiting_event": "waiting for a render",
+    "run.waiting_user": "waiting for you", "run.done": "done", "run.failed": "failed", "run.cancelled": "cancelled",
+    "run.bar": "Agent is {s}{w}", "run.cancel": "Stop", "who.agent": "Agent",
     "wf.export": "⬇ Export workflow", "wf.open": "Open ComfyUI ↗", "wf.import": "⬆ Import edited workflow",
     "wf.howto": "Edit in ComfyUI: export this task's workflow, drag the file onto the ComfyUI canvas (or Ctrl+O), change it, then Workflow → Export (API) and import that file here.",
     "pt.workflows": "Workflows", "wf.empty": "No imported workflows yet. Open a task, export its workflow, edit it in ComfyUI and import it back.",
@@ -352,6 +381,14 @@ const I18N = {
     "st.running": "生成中", "st.review": "待审阅", "st.done": "完成", "st.rejected": "打回", "st.failed": "失败",
     "st.timeout": "超时", "st.generating": "生成中", "st.closed": "已决定", "st.active": "进行中",
     "st.archived": "已归档", "st.open": "进行中",
+    "tab.queue": "队列", "q.now": "当前", "q.mem": "内存（最近 30 分钟）", "q.runs": "Agent 运行", "q.plan": "排队与预计时间",
+    "q.idle": "没有渲染在跑。", "q.rendering": "正在渲染{k}：{t}", "q.family": "常驻模型族：{f}",
+    "q.llm": "LLM：{l}{f}", "q.inflight": " · 正在回答", "q.empty": "没有排队的任务。", "q.noruns": "没有在等待的 agent 运行。",
+    "q.col.task": "任务", "q.col.tpl": "模板 / 档位", "q.col.est": "预计耗时", "q.col.eta": "开始 / 结束", "q.col.src": "估计依据",
+    "q.in": "{m} 后", "q.chart.empty": "正在采样……（需要 daemon 运行）", "q.free": "可用 GiB",
+    "run.running": "处理中", "run.waiting_resources": "在等资源", "run.waiting_event": "在等渲染",
+    "run.waiting_user": "在等你", "run.done": "完成", "run.failed": "失败", "run.cancelled": "已取消",
+    "run.bar": "Agent {s}{w}", "run.cancel": "停止", "who.agent": "Agent",
     "wf.export": "⬇ 导出 workflow", "wf.open": "打开 ComfyUI ↗", "wf.import": "⬆ 导入改好的 workflow",
     "wf.howto": "在 ComfyUI 里改：导出这个任务的 workflow，把文件拖到 ComfyUI 画布上（或 Ctrl+O），改完后用 Workflow → Export (API) 导出，再在这里导入。",
     "pt.workflows": "Workflow", "wf.empty": "还没有导入的 workflow。打开一个任务，导出它的 workflow，在 ComfyUI 里改完再导回来。",
@@ -766,7 +803,7 @@ function chatHtml(p, msgs, canChat){
   const sess = p.sessions.map(s => `<span class="sess ${s.id === selSession ? "on" : ""}" onclick="selSession='${esc(s.id)}';loadProject(true)">${esc(s.title || s.id)}${s.id === p.current_session ? " ●" : ""}<span class="c">${s.n_messages}</span></span>`).join("");
   let lastLlm = "";
   const bubbles = msgs.map(m => {
-    const cls = m.channel === "system" ? "sys" : m.direction === "in" ? "in" : "out";
+    const cls = m.channel === "system" ? "sys" : m.channel === "agent" ? "agent" : m.direction === "in" ? "in" : "out";
     let text = m.text;  // 渠道回复会重复 LLM 原话（Telegram 需要）；控制台只显示新增部分
     if (m.channel === "llm") lastLlm = m.text;
     else if (m.direction === "out" && lastLlm && text.startsWith(lastLlm)) { text = text.slice(lastLlm.length).trim(); lastLlm = ""; if (!text) return ""; }
@@ -780,12 +817,22 @@ function chatHtml(p, msgs, canChat){
       ${p.state === "active" ? `<button class="btn sm" onclick="newSession()">${t("new.session")}</button>` : ""}
       ${selSession && selSession !== p.current_session && p.state === "active" ? `<button class="btn sm" onclick="act('/api/sessions/${esc(selSession)}/use', {})">${t("set.current")}</button>` : ""}
       ${selSession ? `<button class="btn sm" onclick="renameSession()">${t("rename")}</button><button class="btn sm" onclick="showContext()">${t("ctx.view")}</button>` : ""}</h3>
+    <div id="runbar"></div>
     <div class="chat">${bubbles}</div>
     ${canChat ? `<form class="chatbox" id="chatform"><label class="btn" style="margin:0">${t("attach")}<input type="file" id="chat-file" accept="image/*,video/mp4" hidden multiple></label>
       <input type="text" id="chat-in" placeholder="${esc(t("chat.ph"))}" autocomplete="off"><button class="btn primary">${t("send")}</button></form>
       <div class="chips" id="chips"></div>` : `<div class="hint" style="margin-top:8px">${t("chat.readonly")}</div>`}`;
 }
+async function loadRunbar(){
+  const el = $("#runbar"); if (!el || !selSession) return;
+  let runs = []; try { runs = await api(`/api/runs?session=${encodeURIComponent(selSession)}`); } catch { return; }
+  const r = runs.filter(x => !["done","failed","cancelled"].includes(x.status)).at(-1);
+  el.innerHTML = r ? `<div class="runbar"><span class="badge live">${esc(t("run." + r.status))}</span>
+    <span>${esc(t("run.bar", {s: t("run." + r.status), w: r.waiting?.reason ? " · " + r.waiting.reason : ""}))}</span>
+    <span class="sp" style="flex:1"></span><button class="btn sm" onclick="act('/api/runs/${esc(r.id)}/cancel', {})">${t("run.cancel")}</button></div>` : "";
+}
 function bindChat(){
+  loadRunbar();
   const f = $("#chatform"); if (!f) return;
   renderChips();
   f.onsubmit = async e => {
@@ -848,6 +895,36 @@ function packHtml(p){
       }).join("")}<span class="hint">${esc(v.note || "")} · ${fmtT(v.created)}</span></div>`).join("") || `<div class="hint">${t("pack.empty")}</div>`}</div>`;
 }
 
+/* ================= queue & resources ================= */
+const rel = ts => { const m = Math.max(0, Math.round((ts - Date.now()/1000) / 60)); return m < 1 ? t("q.in", {m: "<1 " + t("min")}) : t("q.in", {m: `${m} ${t("min")}`}); };
+function renderQueue(q){
+  const ra = q.render_active;
+  $("#q-now").innerHTML = `<div>${ra ? esc(t("q.rendering", {k: ra.kind, t: ra.title || ra.task_id})) : t("q.idle")}</div>
+    <div class="hint">${q.resident_family ? esc(t("q.family", {f: q.resident_family})) : ""}</div>
+    <div class="hint">${esc(t("q.llm", {l: q.llm.loaded ? t("loaded") : t("unloaded"), f: q.llm.in_flight ? t("q.inflight") : ""}))}</div>`;
+  $("#q-runs").innerHTML = q.runs.length ? q.runs.map(r => `<div class="mem"><span class="badge live">${esc(t("run." + r.status))}</span>
+      <span class="tx">${esc((r.origin_text || "").slice(0, 120))}${r.waiting?.reason ? `<div class="hint">${esc(r.waiting.reason)}</div>` : ""}${r.waiting?.keys ? `<div class="hint">${esc(r.waiting.keys.join(", "))}</div>` : ""}</span>
+      <button class="btn sm" onclick="act('/api/runs/${esc(r.id)}/cancel', {})">${t("run.cancel")}</button></div>`).join("")
+    : `<div class="hint">${t("q.noruns")}</div>`;
+  $("#q-plan").innerHTML = q.plan.length ? `<div class="table"><table class="qtable"><tr><th>#</th><th>${t("q.col.task")}</th><th>${t("q.col.tpl")}</th><th>${t("q.col.est")}</th><th>${t("q.col.eta")}</th><th>${t("q.col.src")}</th></tr>
+      ${q.plan.map((p, i) => `<tr><td>${i + 1}</td><td>${esc(p.title || p.task_id)}</td><td>${esc(p.template)} / ${esc(p.tier)}</td><td>${fmtS(p.exec_s)}</td>
+      <td>${rel(p.start)} → ${rel(p.end)}</td><td class="hint">${esc(p.source)}</td></tr>`).join("")}</table></div>`
+    : `<div class="hint">${t("q.empty")}</div>`;
+  const h = q.history.filter(x => x.t > Date.now()/1000 - 1800);
+  if (h.length < 2){ $("#q-chart").innerHTML = `<div class="hint">${t("q.chart.empty")}</div>`; return; }
+  const W = 600, H = 170, t0 = h[0].t, t1 = h.at(-1).t, ymax = Math.max(...h.map(x => x.avail_gib), 64);
+  const X = v => ((v - t0) / Math.max(1, t1 - t0)) * (W - 40) + 30, Y = v => H - 20 - (v / ymax) * (H - 30);
+  let bands = "";
+  for (let i = 1; i < h.length; i++) if (h[i].render) bands += `<rect x="${X(h[i-1].t)}" y="10" width="${Math.max(1, X(h[i].t) - X(h[i-1].t))}" height="${H - 30}" fill="${h[i].render === "video" ? "var(--warn-tint)" : "var(--acc-tint)"}"/>`;
+  const line = h.map(x => `${X(x.t).toFixed(1)},${Y(x.avail_gib).toFixed(1)}`).join(" ");
+  const press = h.filter(x => x.pressure >= 2).map(x => `<circle cx="${X(x.t)}" cy="${Y(x.avail_gib)}" r="2.5" fill="${x.pressure >= 4 ? "var(--bad)" : "var(--warn)"}"/>`).join("");
+  $("#q-chart").innerHTML = `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(t("q.mem"))}">
+    ${bands}<line x1="30" x2="${W - 10}" y1="${Y(0)}" y2="${Y(0)}" stroke="var(--line)"/>
+    ${[0, Math.round(ymax / 2), Math.round(ymax)].map(v => `<text x="2" y="${Y(v) + 4}" font-size="10" fill="var(--muted)">${v}</text>`).join("")}
+    <polyline points="${line}" fill="none" stroke="var(--accent)" stroke-width="1.8"/>${press}
+    <text x="${W - 10}" y="${H - 4}" font-size="10" fill="var(--muted)" text-anchor="end">${t("q.free")} · ${new Date(t0 * 1000).toLocaleTimeString()} – ${new Date(t1 * 1000).toLocaleTimeString()}</text></svg>`;
+}
+
 /* ================= gallery ================= */
 function renderGallery(){
   const items = TASKS.flatMap(tk => (tk.outputs || []).map(o => ({tk, o}))).filter(x => galleryKind === "all" || x.o.kind === galleryKind);
@@ -879,6 +956,10 @@ async function refreshAll(force){
     if (force || k !== keys.p){ keys.p = k; renderProjects(); }
     if (!selProject && SYS){ selProject = SYS.project.id; renderProjects(); }
     loadProject(!!force);
+    if (ptab === "chat") loadRunbar();
+  } else if (view === "queue"){
+    let q; try { q = await api("/api/queue"); } catch { return; }
+    renderQueue(q);
   } else if (view === "gallery"){
     try { TASKS = await api("/api/tasks"); } catch { return; }
     const k = LANG + TASKS.map(x => x.id + x.updated).join("|") + galleryKind;
