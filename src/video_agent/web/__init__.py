@@ -667,6 +667,37 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
     ) -> list[dict]:
         return guard(lambda: _production().run_stage(pid, stage, keys, note, origin="web"))
 
+    @app.post("/api/productions/{pid}/provide")
+    def production_provide(
+        pid: str,
+        stage: str = Body(...),
+        key: str = Body(...),
+        upload_id: str = Body(...),
+        note: str | None = Body(None),
+    ) -> dict:
+        up = store.get_upload(upload_id)
+        if up is None:
+            raise HTTPException(404, "upload not found")
+        return guard(lambda: _production().provide(pid, stage, key, up["path"], note))
+
+    @app.get("/api/artifacts/{aid}/file/{i}")
+    def artifact_file(aid: str, i: int) -> FileResponse:
+        """制片产物里不属于任何任务的文件（你提供的图、素材包里的参考图）。"""
+        art = store.get_artifact(aid)
+        if art is None:
+            raise HTTPException(404)
+        data = art["data"] or {}
+        files = [o["path"] for o in data.get("outputs") or []] + [
+            r["path"] for r in data.get("references") or []
+        ]
+        if not 0 <= i < len(files):
+            raise HTTPException(404)
+        path = Path(files[i])
+        base = store.jobs_dir.parent  # data/：上传、制片目录都在这里面
+        if base.resolve() not in path.resolve().parents:
+            raise HTTPException(404)
+        return _safe_file(base, path)
+
     @app.post("/api/productions/{pid}/settings")
     def production_settings(pid: str, settings: dict = Body(..., embed=True)) -> dict:  # noqa: B008
         return guard(lambda: _production().update_settings(pid, settings))

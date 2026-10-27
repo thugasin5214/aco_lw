@@ -99,8 +99,13 @@ def prod(make_orch, fake, tmp_path):
 
 
 def run_skills(p: Production) -> None:
-    for art in p.pending_skill_jobs():
-        p.run_skill_job(art)
+    """依次执行排队的 tool / skill 作业，直到队列空（brief 跑完会接着排改编）。"""
+    for _ in range(10):
+        jobs = p.pending_skill_jobs()
+        if not jobs:
+            return
+        for art in jobs:
+            p.run_skill_job(art)
 
 
 def stage(plan, sid):
@@ -137,8 +142,8 @@ def test_full_pipeline_with_gates_and_confirm(prod):
     pr = p.create("novel-to-film", "Lost cat", {"source": "Mei lost her cat..."})
     plan = p.plan(pr["id"])
     assert stage(plan, "source")["state"] == "completed"
-    assert stage(plan, "adaptation")["state"] == "active"  # 自动排队（queued 记作 running）
-    assert stage(plan, "bible")["state"] == "blocked"
+    assert stage(plan, "brief")["state"] == "active"  # 素材整理自动排队（queued 记作 running）
+    assert stage(plan, "adaptation")["state"] == "blocked"
 
     run_skills(p)
     plan = p.plan(pr["id"])
@@ -147,7 +152,8 @@ def test_full_pipeline_with_gates_and_confirm(prod):
     # skill 的系统提示词 = SKILL.md + 输出契约；用户消息带上游输入
     sys_msg, user_msg = p.fake_llm.calls[0][1]
     assert "short-film treatment" in sys_msg["content"] and '"scenes"' in sys_msg["content"]
-    assert json.loads(user_msg["content"])["inputs"]["source"].startswith("Mei")
+    brief = json.loads(user_msg["content"])["inputs"]["brief"]
+    assert "Mei lost her cat" in brief["text"] and brief["references"] == []
 
     p.review(pr["id"], "adaptation", "approve")
     run_skills(p)
@@ -262,6 +268,7 @@ def test_park_keeps_job_queued(prod):
     p = prod
     p.fake_llm.park = True
     pr = p.create("novel-to-film", "x", {"source": "..."})
+    p.run_skill_job(p.pending_skill_jobs()[0])  # brief：工具，不需要 LLM
     with pytest.raises(Park):
         p.run_skill_job(p.pending_skill_jobs()[0])
     assert p.store.artifacts(pr["id"], "adaptation")[0]["status"] == "queued"
@@ -459,3 +466,116 @@ def test_assemble_keeps_clip_audio(tmp_path, transition):
     subprocess.run(build_command(tl, out, None), check=True)
     assert has_audio(out)
     assert abs(probe_seconds(out) - (2.0 - (0.3 if transition else 0))) < 0.15
+
+
+# ---- 3.1 多来源输入 + 自带定妆 ----
+class FakeHTTP:
+    """假的 httpx.Client：按 URL 返回网页或图片。"""
+
+    def __init__(self, pages):
+        self.pages = pages
+
+    def stream(self, method, url):
+        import contextlib
+
+        import httpx
+
+        body, ctype = self.pages[str(url)]
+
+        @contextlib.contextmanager
+        def cm():
+            r = httpx.Response(200, content=body, headers={"content-type": ctype},
+                               request=httpx.Request("GET", url))
+            yield r
+
+        return cm()
+
+
+class FakeYDL:
+    def __init__(self, opts):
+        self.opts = opts
+
+    def extract_info(self, url, download=True):
+        from pathlib import Path
+
+        out = Path(self.opts["outtmpl"]).parent
+        (out / "abc.zh-Hans.vtt").write_text("WEBVTT\n\n00:00.000 --> 00:01.000\n<c>你好</c>\n\n00:01.000 --> 00:02.000\n你好\n世界\n")
+        return {"title": "测试视频", "uploader": "chan", "duration": 2, "description": "简介",
+                "chapters": [{"start_time": 0, "title": "开头"}], "thumbnail": "https://img/thumb.jpg"}
+
+
+def test_ingest_text_image_url_youtube(tmp_path):
+    from video_agent.ingest import Ingest, vtt_to_text
+
+    img = tmp_path / "me.png"
+    img.write_bytes(b"\x89PNG fake")
+    html = ("<html><head><title>T</title><meta property='og:image' content='/og.jpg'></head><body><article>"
+            + "<p>一个关于雨夜修表铺的故事。老人和小女孩。</p>" * 20 + "</article></body></html>").encode()
+    http = FakeHTTP({
+        "https://site/a": (html, "text/html; charset=utf-8"),
+        "https://site/og.jpg": (b"jpg", "image/jpeg"),
+        "https://img/thumb.jpg": (b"jpg", "image/jpeg"),
+        "https://site/bad": (b"%PDF", "application/pdf"),
+    })
+    ing = Ingest(tmp_path / "w", lambda uid: str(img), http=http, ytdl=FakeYDL)
+    out = ing({"text": "雨夜修表", "sources": [
+        {"kind": "image", "upload": "u1", "label": "陈师傅", "role": "character", "use": "as_is"},
+        {"url": "https://site/a"},
+        {"url": "https://www.youtube.com/watch?v=abc"},
+        {"url": "https://site/bad"},
+    ]}, {"youtube_frames": 0})
+    assert "雨夜修表" in out["text"] and "修表铺的故事" in out["text"]
+    assert "Transcript:\n你好\n世界" in out["text"] and "开头" in out["text"]
+    refs = {r["label"]: r for r in out["references"]}
+    assert refs["陈师傅"]["use"] == "as_is" and refs["陈师傅"]["role"] == "character"
+    assert len(out["references"]) == 3  # 你的图 + 网页主图 + 视频缩略图
+    status = [s["status"] for s in out["sources"]]
+    assert status == ["ok", "ok", "ok", "ok", "failed"]  # 坏链接只标失败，不影响其他来源
+    assert vtt_to_text("WEBVTT\n\n1\n00:00.000 --> 00:01.000\na\na\n") == "a"
+
+
+def test_provided_casting_photo_as_is_and_stylize(prod, tmp_path):
+    p = prod
+    a, b = tmp_path / "a.png", tmp_path / "b.png"
+    a.write_bytes(b"\x89PNG a")
+    b.write_bytes(b"\x89PNG b")
+    bible = json.loads(json.dumps(BIBLE))
+    bible["characters"][0]["reference"] = "r1"  # mei：原样使用
+    bible["characters"][1]["reference"] = "r2"  # cat：按风格重画
+    p.fake_llm.out["bible"] = [bible]
+    pr = p.create("novel-to-film", "x", {"source": {"text": "story", "sources": [
+        {"kind": "image", "path": str(a), "label": "Mei", "role": "character", "use": "as_is"},
+        {"kind": "image", "path": str(b), "label": "Cat", "role": "character"},
+    ]}})
+    run_skills(p)
+    p.review(pr["id"], "adaptation", "approve")
+    run_skills(p)
+    p.review(pr["id"], "bible", "approve")
+    items = {i["key"]: i["state"] for i in stage(p.plan(pr["id"]), "characters")["items"]}
+    assert items == {"mei": "current", "cat": "running"}  # 你的照片直接通过；猫按风格重画
+    cat_round = next(r for r in p.store.rounds(None, "generating") if r["title"].endswith("cat"))
+    assert cat_round["template"] == "flux2-edit"
+    mei = p._current(p._index(pr["id"]), "characters", "mei")
+    assert mei["data"]["provided"] and mei["data"]["outputs"][0]["path"].endswith(".png")
+
+
+def test_manual_provide_replaces_an_item_and_downstream_uses_it(prod, tmp_path):
+    p = prod
+    pr = _to_keyframes(p)
+    img = tmp_path / "mine.png"
+    img.write_bytes(b"\x89PNG mine")
+    p.provide(pr["id"], "characters", "mei", str(img))
+    kf = {i["key"]: i["state"] for i in stage(p.plan(pr["id"]), "keyframes")["items"]}
+    assert kf["sh02"] == "running" and kf["sh01"] == "current"  # 引用 mei 的镜头按新照片重出
+    rnd = next(r for r in p.store.rounds(None, "generating") if r["title"].endswith("sh02"))
+    assert p.store.round_tasks(rnd["id"])[0]["params"]["image"].endswith(".png")
+
+
+def test_done_production_reactivates_when_work_reappears(prod):
+    p = prod
+    pr = p.create("novel-to-film", "x", {"source": "..."})
+    p.store.update_production(pr["id"], state="done")  # 例如之前跑完过
+    p.run_stage(pr["id"], "brief") if p.pending_skill_jobs() == [] else None
+    assert p.plan(pr["id"])["production"]["state"] == "active"
+    run_skills(p)
+    assert stage(p.plan(pr["id"]), "adaptation")["state"] == "review"

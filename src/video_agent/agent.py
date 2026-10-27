@@ -376,12 +376,9 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
         )
 
     def create_production(ctx, a):
+        source = {"text": a.get("source") or "", "sources": a.get("sources") or []}
         prod = _prod().create(
-            a["workflow"],
-            a["title"],
-            {"source": a["source"]},
-            a.get("settings") or {},
-            ctx["project_id"],
+            a["workflow"], a["title"], {"source": source}, a.get("settings") or {}, ctx["project_id"]
         )
         return Done(_plan_view(_prod().plan(prod["id"])))
 
@@ -547,19 +544,27 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
         ),
         Tool(
             "create_production",
-            "Start a multi-stage production (e.g. novel → film) from source text. Planning "
-            "stages start automatically; every stage waits for the user's review before the next.",
+            "Start a multi-stage production (e.g. novel → film) from a story or description, plus "
+            "optional links (web pages, YouTube) and the user's pictures (e.g. their own casting "
+            "photos). Planning stages start automatically; every stage waits for the user's review.",
             _obj(
                 {
                     "workflow": S,
                     "title": S,
                     "source": S,
+                    "sources": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "{url} for a web page or YouTube link; {kind: image, upload: "
+                        "<upload id>, label, role: character|location|style|prop, use: "
+                        "stylize|as_is, note} for the user's pictures",
+                    },
                     "settings": {
                         "type": "object",
-                        "description": "e.g. video_tier, image_candidates, subtitles",
+                        "description": "e.g. video_tier, image_candidates, subtitles, language",
                     },
                 },
-                ["workflow", "title", "source"],
+                ["workflow", "title"],
             ),
             "act",
             create_production,

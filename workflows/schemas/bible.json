@@ -1,37 +1,118 @@
 {
   "type": "object",
-  "required": ["style", "characters", "locations"],
+  "required": [
+    "style",
+    "characters",
+    "locations"
+  ],
   "properties": {
     "style": {
-      "type": "object", "required": ["look"],
-      "properties": {"look": {"type": "string"}, "palette": {"type": "string"}, "lens": {"type": "string"}}
+      "type": "object",
+      "required": [
+        "look"
+      ],
+      "properties": {
+        "look": {
+          "type": "string"
+        },
+        "palette": {
+          "type": "string"
+        },
+        "lens": {
+          "type": "string"
+        },
+        "references": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "ids of style reference images"
+        }
+      }
     },
     "characters": {
-      "type": "array", "maxItems": 6,
+      "type": "array",
+      "maxItems": 6,
       "items": {
-        "type": "object", "required": ["id", "name", "look"],
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "look"
+        ],
         "properties": {
-          "id": {"type": "string", "pattern": "^[a-z0-9_-]+$"},
-          "name": {"type": "string"},
-          "look": {"type": "string"},
-          "wardrobe": {"type": "string"},
-          "personality": {"type": "string"}
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9_-]+$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "look": {
+            "type": "string"
+          },
+          "wardrobe": {
+            "type": "string"
+          },
+          "personality": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string",
+            "description": "id of a provided reference image (brief.references) this entry is based on"
+          }
         }
       }
     },
     "locations": {
-      "type": "array", "minItems": 1, "maxItems": 6,
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 6,
       "items": {
-        "type": "object", "required": ["id", "name", "look"],
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "look"
+        ],
         "properties": {
-          "id": {"type": "string", "pattern": "^[a-z0-9_-]+$"},
-          "name": {"type": "string"},
-          "look": {"type": "string"},
-          "time_of_day": {"type": "string"}
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9_-]+$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "look": {
+            "type": "string"
+          },
+          "time_of_day": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string",
+            "description": "id of a provided reference image (brief.references) this entry is based on"
+          }
         }
       }
     },
-    "props": {"type": "array", "items": {"type": "object", "required": ["id", "look"],
-      "properties": {"id": {"type": "string"}, "look": {"type": "string"}}}}
+    "props": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "look"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "look": {
+            "type": "string"
+          }
+        }
+      }
+    }
   }
 }

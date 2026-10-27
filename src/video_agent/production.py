@@ -18,7 +18,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
@@ -49,12 +51,30 @@ class RenderSpec(BaseModel):
     n: int | str | None = None
 
 
+class When(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str  # 上下文里的路径，例如 ref.use
+    equals: Any = None  # 省略：路径的值为真即可
+
+
+class Alternative(BaseModel):
+    """渲染条目的条件分支（第一条匹配的生效）：直接采用一张图（provide），或换一种渲染。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    when: When
+    provide: str | None = None  # 图片路径表达式，例如 "{ref.path}"：原样作为已通过的产物
+    render: RenderSpec | None = None
+
+
 class Stage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str
     title: str = ""
-    kind: Literal["input", "skill", "render", "assemble"]
+    kind: Literal["input", "tool", "skill", "render", "assemble"]
+    tool: str | None = None  # tool 阶段：编排器里注册的确定性工具（例如 ingest）
     needs: list[str] = []
     skill: str | None = None
     llm: str | None = None  # 指定后端（如 claude_code）；留空用制片设置 / 主后端
@@ -62,6 +82,7 @@ class Stage(BaseModel):
     output_schema: dict | str | None = Field(None, alias="schema")
     fan_out: FanOut | None = None
     render: RenderSpec | None = None
+    alternatives: list[Alternative] = []
     timeline: str | None = None  # assemble：时间线来自哪个阶段
     clips: str | None = None  # assemble：片段来自哪个阶段
     gate: Literal["review", "auto"] = "review"
@@ -88,6 +109,8 @@ class Workflow(BaseModel):
                 raise ValueError(f"阶段 {st.id} 依赖未定义或排在后面的阶段：{missing}")
             if st.kind == "skill" and not (st.skill and st.output_schema):
                 raise ValueError(f"skill 阶段 {st.id} 需要 skill 与 schema")
+            if st.kind == "tool" and not st.tool:
+                raise ValueError(f"tool 阶段 {st.id} 需要 tool")
             if st.kind == "render" and not st.render:
                 raise ValueError(f"render 阶段 {st.id} 需要 render")
             if st.kind == "assemble" and not (st.timeline and st.clips):
@@ -198,8 +221,11 @@ class Production:
         llm: Callable[[Stage, list[dict], dict], tuple[str, dict]] | None = None,
         log: Callable[[str], None] = print,
         work_dir: Path | None = None,
+        tools: dict[str, Callable] | None = None,
     ):
         self.studio, self.store, self.skills = studio, studio.store, skills
+        # tool 阶段的确定性工具：fn(production, stage, inputs) -> data；可注册更多
+        self.tools: dict[str, Callable] = {"ingest": self._tool_ingest, **(tools or {})}
         self.workflows, self.llm, self.log = workflows, llm, log
         self.work_dir = work_dir or (self.store.jobs_dir.parent / "productions")
         self.listeners: list[Callable[[dict], None]] = []  # 阶段进入待审阅 / 失败 / 完成 → 通知
@@ -313,7 +339,10 @@ class Production:
         lang = (prod["settings"].get("language") or "").strip()
         ctx = {
             # speech_hint：由 language 派生，供视频提示词使用（H3 会生成人声）
-            "settings": {**prod["settings"], "speech_hint": f" Dialogue and speech in {lang}." if lang else ""},
+            "settings": {
+                **prod["settings"],
+                "speech_hint": f" Dialogue and speech in {lang}." if lang else "",
+            },
             "production": {"id": prod["id"], "title": prod["title"]},
         }
         for st in wf.stages:
@@ -329,6 +358,8 @@ class Production:
             cur = self._current(idx, d["stage"], d["key"])
             if cur is None:
                 return True
+            if d.get("any"):
+                continue
             if "item" in d:
                 lst = lookup({"x": cur["data"]}, "x." + d["path"]) or []
                 item = next((i for i in lst if str(i.get(d["field"])) == d["item"]), None)
@@ -434,6 +465,9 @@ class Production:
             done = all(s["state"] == "completed" for s in stages)
             if done and prod["state"] == "active":
                 prod = self.store.update_production(production_id, state="done")
+            elif not done and prod["state"] == "done":  # 完成后又重跑 / 换图 / 加了阶段：回到进行中
+                prod = self.store.update_production(production_id, state="active")
+                self._wake.set()  # 它排着的作业现在可以执行了
             return {
                 "production": prod,
                 "workflow": {"name": wf.name, "title": wf.title},
@@ -477,7 +511,7 @@ class Production:
             ctx = self._ctx(prod, wf, idx)
             made = []
             for k in keys:
-                if st.kind == "skill":
+                if st.kind in ("skill", "tool"):
                     made.append(self._queue_skill(prod, wf, st, idx, note))
                 elif st.kind == "render":
                     made.append(self._start_render(prod, st, idx, ctx, k, origin))
@@ -485,16 +519,23 @@ class Production:
                     made.append(self._start_assemble(prod, wf, st, idx, ctx, origin))
             self.log(f"production {production_id}: {stage_id} started ({len(made)} item(s))")
             self._wake.set()
+            if any(m["status"] == "current" for m in made):  # 有条目直接采用了你的图：可能已能推进
+                self.advance(production_id)
             return made
 
     def _whole_deps(self, wf: Workflow, st: Stage, idx) -> list[dict]:
         deps = []
         for n in st.needs:
+            # 规划阶段读的是展开渲染阶段的“有哪些已通过的条目”，不是像素：换一张定妆图不让分镜过期
+            loose = wf.stage(n).kind in ("render", "assemble") and wf.stage(n).fan_out is not None
             for s, k in idx:
                 if s == n and self._current(idx, s, k):
-                    deps.append(
-                        {"stage": s, "key": k, "version": self._current(idx, s, k)["version"]}
-                    )
+                    if loose:
+                        deps.append({"stage": s, "key": k, "any": True})
+                    else:
+                        deps.append(
+                            {"stage": s, "key": k, "version": self._current(idx, s, k)["version"]}
+                        )
         return deps
 
     # skill：排队，由 skill 工作线程在 LLM 可用时执行
@@ -545,6 +586,8 @@ class Production:
         """执行一个排队的 skill 作业。LLM 不可用时抛 Park（作业仍在队列里）。"""
         prod = self._prod(art["production_id"])
         st = self._wf(prod).stage(art["stage"])
+        if st.kind == "tool":
+            return self._run_tool(prod, st, art)
         if self.llm is None:
             raise Park("no LLM configured")
         messages = self.skill_messages(prod, st, art)
@@ -596,6 +639,37 @@ class Production:
             self._supersede(art)
             self.advance(prod["id"])
         return art
+
+    def _run_tool(self, prod: dict, st: Stage, art: dict) -> dict:
+        self.store.update_artifact(art["id"], status="running")
+        try:
+            ctx = self._ctx(prod, self._wf(prod), self._index(prod["id"]))
+            data = self.tools[st.tool](prod, st, {n: ctx[n] for n in st.needs})
+            if st.output_schema:
+                jsonschema.validate(data, st.output_schema)
+        except Exception as e:  # noqa: BLE001 — 记下原因，等你决定重跑
+            art = self.store.update_artifact(art["id"], status="failed", note=str(e)[:500])
+            self._emit(prod, st, art, "failed")
+            return art
+        status = "current" if st.gate == "auto" else "review"
+        art = self.store.update_artifact(art["id"], status=status, data=data)
+        self._emit(prod, st, art, status)
+        if status == "current":
+            self._supersede(art)
+            self.advance(prod["id"])
+        return art
+
+    def _tool_ingest(self, prod: dict, st: Stage, inputs: dict) -> dict:
+        from .ingest import Ingest
+
+        def upload_path(uid: str) -> str:
+            up = self.store.get_upload(uid)
+            if up is None:
+                raise FileNotFoundError(f"upload {uid} not found")
+            return up["path"]
+
+        work = self.work_dir / prod["id"] / f"{st.id}_{int(time.time())}"
+        return Ingest(work, upload_path)(inputs[st.needs[0]], prod["settings"])
 
     def pending_skill_jobs(self) -> list[dict]:
         jobs = []
@@ -653,18 +727,33 @@ class Production:
             )
         else:
             deps = self._whole_deps(self._wf(prod), st, idx)
+        ref_stage, ref = self._reference(ctx, item.get("reference"))
+        if ref is not None:
+            local["ref"] = ref
+            cur = self._current(idx, ref_stage, "main")
+            deps.append({"stage": ref_stage, "key": "main", "version": cur and cur["version"]})
+        spec = st.render
+        for alt in st.alternatives:
+            v = lookup(local, alt.when.path)
+            if (v == alt.when.equals) if alt.when.equals is not None else bool(v):
+                if alt.provide:  # 原样采用（例如你提供的定妆照）：直接作为已通过的产物
+                    return self._provided(
+                        prod, st.id, key, interp(alt.provide, local), deps, "provided by reference"
+                    )
+                spec = alt.render or spec
+                break
         params = {}
-        for name, v in st.render.params.items():
+        for name, v in spec.params.items():
             v = interp(v, local)
             if isinstance(v, str) and v.startswith("@art:"):
                 v, dep = self._art_ref(idx, v)
                 deps.append(dep)
             if v not in (None, ""):
                 params[name] = v
-        tier = interp(st.render.tier, local) if st.render.tier else None
-        n = interp(st.render.n, local) if st.render.n is not None else None
+        tier = interp(spec.tier, local) if spec.tier else None
+        n = interp(spec.n, local) if spec.n is not None else None
         rnd = self.studio.start_round(
-            st.render.template,
+            spec.template,
             params,
             int(n) if n else None,
             tier or None,
@@ -678,17 +767,74 @@ class Production:
             rnd, prod["id"], st.id, key, deps
         )
 
+    @staticmethod
+    def _reference(ctx: dict, ref_id: str | None) -> tuple[str | None, dict | None]:
+        """条目上的 reference（素材包里的参考图 ID）→ (所在阶段, 参考图)。"""
+        if not ref_id:
+            return None, None
+        for sid, data in ctx.items():
+            if isinstance(data, dict) and isinstance(data.get("references"), list):
+                for r in data["references"]:
+                    if r.get("id") == ref_id:
+                        return sid, r
+        return None, None
+
     def _art_ref(self, idx, ref: str) -> tuple[str, dict]:
-        """@art:阶段/key → 该产物当前版本选中的任务（@task:ID），并记作依赖。"""
+        """@art:阶段/key → 该产物当前版本选中的任务（@task:ID）或你提供的文件，并记作依赖。"""
         stage, _, key = ref[len("@art:") :].partition("/")
         cur = self._current(idx, stage, key or "main")
-        if cur is None or not cur.get("task_id"):
+        if cur is None or not (cur.get("task_id") or (cur.get("data") or {}).get("provided")):
             raise ProductionError(f"引用的产物 {stage}/{key} 还没有通过")
-        return f"@task:{cur['task_id']}", {
+        if cur.get("task_id"):
+            value = f"@task:{cur['task_id']}"
+        else:
+            value = next(o["path"] for o in cur["data"]["outputs"])
+        return value, {
             "stage": stage,
             "key": key or "main",
             "version": cur["version"],
         }
+
+    def _provided(self, prod, stage, key, path: str, deps: list, note: str) -> dict:
+        src = Path(path)
+        if not src.is_file():
+            raise ProductionError(f"找不到文件 {path}")
+        d = self.work_dir / prod["id"] / "provided"
+        d.mkdir(parents=True, exist_ok=True)
+        dest = d / f"{stage}_{key}_{int(time.time() * 1000)}{src.suffix.lower()}"
+        shutil.copy2(src, dest)
+        kind = "video" if dest.suffix in (".mp4", ".mov", ".webm") else "image"
+        art = self.store.add_artifact(
+            prod["id"],
+            stage,
+            key,
+            "current",
+            deps=deps,
+            note=note,
+            data={
+                "provided": True,
+                "outputs": [{"kind": kind, "file": dest.name, "path": str(dest)}],
+            },
+        )
+        self._supersede(art)
+        return art
+
+    def provide(
+        self, production_id: str, stage_id: str, key: str, path: str, note: str | None = None
+    ) -> dict:
+        """用你自己的图片 / 视频作为某个渲染条目（例如定妆照），视为已通过；下游照常按依赖过期。"""
+        with self._lock:
+            prod = self._prod(production_id)
+            st = self._wf(prod).stage(stage_id)
+            if st.kind not in ("render", "assemble"):
+                raise ProductionError("只有渲染类阶段的条目可以用你自己的文件替换")
+            idx = self._index(production_id)
+            latest = self._latest(idx, stage_id, key)
+            if latest and latest["status"] in RUNNING:
+                raise ProductionError(f"{stage_id}/{key} 正在生成，先等它结束或打回")
+            art = self._provided(prod, stage_id, key, path, [], note or "provided by you")
+            self.advance(production_id)
+            return art
 
     def _adopt(self, rnd, production_id, stage, key, deps) -> dict:
         return self.store.add_artifact(
@@ -877,7 +1023,7 @@ class Production:
                 continue
             plan = self.plan(prod["id"])
             for s in plan["stages"]:
-                if s["kind"] != "skill" or s["state"] == "blocked":
+                if s["kind"] not in ("skill", "tool") or s["state"] == "blocked":
                     continue
                 for it in s["items"]:
                     if it["state"] in ("review", "invalid", "stale"):

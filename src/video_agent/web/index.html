@@ -311,9 +311,13 @@ const I18N = {
     "tab.progress": "Progress", "tab.runbook": "Runbook", "tab.architecture": "Architecture", "tab.productions": "Productions", productions: "Productions",
     "prod.hint": "A production runs a workflow (e.g. novel → film) stage by stage. Planning stages are written by the LLM from a skill; render stages are rounds of candidates — select one in Review to approve it. Each stage waits for your approval before the next starts.",
     "prod.empty": "No productions yet. Click New and paste a short story.", "prod.pick": "Pick a production on the left.",
-    "prod.new": "New production", "prod.workflow": "Workflow", "prod.title": "Title", "prod.source": "Source text",
+    "prod.new": "New production", "prod.workflow": "Workflow", "prod.title": "Title", "prod.source": "Story or description",
     "prod.vtier": "Video tier", "prod.ncand": "Image candidates", "prod.subs": "Subtitles", "prod.create": "Create",
-    "prod.run": "Run", "prod.start": "Start (long render)", "prod.rerun": "Re-run", "prod.rerun_all": "Re-run all…", "prod.in_flow": "Show in Flow",
+    "prod.run": "Run", "prod.start": "Start (long render)", "prod.rerun": "Re-run", "prod.provide": "Use my image…", "prod.links": "Links (web pages, YouTube)", "prod.images": "Reference images (cast photos, places, style)",
+    "prod.source.ph": "A story, or describe the film you want…", "prod.img.label": "Name (e.g. the character)", "prod.img.note": "Note (optional)",
+    "prod.need.input": "Give some text, a link or an image.",
+    "role.character": "Character", "role.location": "Location", "role.style": "Style", "role.prop": "Prop",
+    "use.stylize": "Redraw in the film's style", "use.as_is": "Use as is", "prod.rerun_all": "Re-run all…", "prod.in_flow": "Show in Flow",
     "prod.rerun.confirm": "Re-run {n} item(s) of “{s}”? Approved versions stay valid until you approve the new ones.",
     "prod.item.busy": "Generating or waiting for review — decide in Review first.", "prod.approve": "Approve", "prod.redo": "Redo…",
     "prod.reject": "Reject", "prod.lang": "Dialogue language", "prod.lang.ph": "same as the source", "prod.settings": "Settings", save: "Save",
@@ -395,9 +399,13 @@ const I18N = {
     "tab.progress": "项目进度", "tab.runbook": "手册", "tab.architecture": "架构", "tab.productions": "制片", productions: "制片",
     "prod.hint": "制片按工作流（例如小说 → 成片）逐阶段推进。规划阶段由 LLM 按 skill 写出；渲染阶段是一轮轮候选——在「审阅」里选中即通过。每个阶段都等你通过后才进入下一阶段。",
     "prod.empty": "还没有制片。点「新建」，贴一段短篇小说。", "prod.pick": "在左侧选一个制片。",
-    "prod.new": "新建制片", "prod.workflow": "工作流", "prod.title": "标题", "prod.source": "原文",
+    "prod.new": "新建制片", "prod.workflow": "工作流", "prod.title": "标题", "prod.source": "故事或描述",
     "prod.vtier": "视频档位", "prod.ncand": "图片候选数", "prod.subs": "字幕", "prod.create": "创建",
-    "prod.run": "开跑", "prod.start": "开始（渲染较久）", "prod.rerun": "重跑", "prod.rerun_all": "全部重跑…", "prod.in_flow": "在 Flow 里查看",
+    "prod.run": "开跑", "prod.start": "开始（渲染较久）", "prod.rerun": "重跑", "prod.provide": "用我的图片…", "prod.links": "链接（网页、YouTube）", "prod.images": "参考图（定妆照、场景、风格）",
+    "prod.source.ph": "一段故事，或描述你想要的片子……", "prod.img.label": "名字（例如人物名）", "prod.img.note": "备注（可选）",
+    "prod.need.input": "至少给一段文字、一个链接或一张图。",
+    "role.character": "人物", "role.location": "场景", "role.style": "风格", "role.prop": "道具",
+    "use.stylize": "按片子风格重画", "use.as_is": "原样使用", "prod.rerun_all": "全部重跑…", "prod.in_flow": "在 Flow 里查看",
     "prod.rerun.confirm": "重跑「{s}」的 {n} 个条目？新版本通过前，已通过的版本继续有效。",
     "prod.item.busy": "正在生成或等待审阅——请先在「审阅」里处理。", "prod.approve": "通过", "prod.redo": "重做…",
     "prod.reject": "打回", "prod.lang": "对白语言", "prod.lang.ph": "与原文相同", "prod.settings": "设置", save: "保存",
@@ -1100,12 +1108,18 @@ function renderProdList(){
     <div class="hint">${esc(p.workflow)} · ${fmtT(p.created)}</div></button>`).join("");
   box.querySelectorAll("[data-pid]").forEach(b => b.onclick = () => { selProd = b.dataset.pid; prodArt = null; keys.pd = ""; refreshAll(true); });
 }
+const artFile = (aid, i) => `/api/artifacts/${encodeURIComponent(aid)}/file/${i}`;
+async function uploadFile(file){
+  const r = await fetch(`/api/upload?name=${encodeURIComponent(file.name)}`, {method:"POST", body:file});
+  const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.detail || r.status); return j;
+}
 function itemThumb(stage, it, arts){
   const a = arts.filter(x => x.stage === stage.id && x.key === it.key && x.data && x.data.outputs).pop();
   const o = a && a.data.outputs.find(o => o.kind === "video" || o.kind === "image");
+  const src = o && (a.data.task_id ? fileUrl(a.data.task_id, o.file) : artFile(a.id, a.data.outputs.indexOf(o)));
   const m = !o ? `<div class="ph"></div>` : o.kind === "video"
-    ? `<video src="${fileUrl(a.data.task_id, o.file)}#t=0.5" muted preload="metadata"></video>`
-    : `<img src="${fileUrl(a.data.task_id, o.file)}" alt="" loading="lazy">`;
+    ? `<video src="${src}#t=0.5" muted preload="metadata"></video>`
+    : `<img src="${src}" alt="" loading="lazy">`;
   return `<button class="chip" data-stage="${esc(stage.id)}" data-key="${esc(it.key)}">${m}
     <span class="k"><span>${esc(it.key)}</span><span class="badge ${ITONE[it.state] ?? ""}">${esc(t("is." + it.state))}</span></span></button>`;
 }
@@ -1117,7 +1131,7 @@ function stageActions(s){
     b.push(`<button class="btn sm ${s.confirm ? "primary" : ""}" data-run="${esc(s.id)}">${t(s.confirm ? "prod.start" : "prod.run")}</button>`);
   else if (s.kind !== "input" && s.state !== "blocked" && idle)
     b.push(`<button class="btn sm" data-rerun-all="${esc(s.id)}">${t("prod.rerun_all")}</button>`);
-  if ((s.kind === "skill" || s.kind === "assemble") && s.items.length) b.push(`<button class="btn sm" data-view-art="${esc(s.id)}">${t("detail")}</button>`);
+  if (["skill","tool","assemble"].includes(s.kind) && s.items.length) b.push(`<button class="btn sm" data-view-art="${esc(s.id)}">${t("detail")}</button>`);
   if (s.kind === "render" && s.state === "review") b.push(`<button class="btn sm" data-goto="review">${t("prod.open_review")}</button>`);
   return b.join("");
 }
@@ -1172,12 +1186,25 @@ async function renderProdDetail(){
         ${it.round_id ? `<button class="btn" id="it-flow">${t("prod.in_flow")}</button>` : ""}
         ${it.state === "review" ? `<button class="btn" id="it-review">${t("prod.open_review")}</button>` : ""}
         <button class="btn" onclick="closeModal()">${t("close")}</button>
+        ${!["running","queued"].includes(it.state) && s.state !== "blocked" ? `<label class="btn">${t("prod.provide")}<input type="file" id="it-file" accept="image/*,video/*" hidden></label>` : ""}
         ${!busy && s.state !== "blocked" ? `<button class="btn primary" id="it-run">${t(it.state === "current" ? "prod.rerun" : "prod.run")}</button>` : ""}</div>`);
+    $("#it-file") && ($("#it-file").onchange = async e => {
+      const f = e.target.files[0]; if (!f) return; closeModal();
+      try { const up = await uploadFile(f); await act(url + "/provide", {stage: s.id, key: it.key, upload_id: up.id}); }
+      catch(err){ toast(t("not.done") + err.message, true); }
+    });
     $("#it-flow") && ($("#it-flow").onclick = () => { closeModal(); selNode = it.round_id; show("flow"); });
     $("#it-review") && ($("#it-review").onclick = () => { closeModal(); show("review"); });
     $("#it-run") && ($("#it-run").onclick = () => { closeModal(); act(url + "/run", {stage: s.id, keys: [it.key], note: "manual re-run"}); });
   });
   if (prodArt) showArtifact(arts);
+}
+function briefHtml(a){
+  const refs = a.data.references.map((r, i) => `<div class="chip" style="cursor:default"><img src="${artFile(a.id, (a.data.outputs || []).length + i)}" alt="">
+    <span class="k"><span>${esc(r.id)} · ${esc(r.label)}</span></span><span class="hint">${esc(t("role." + r.role))} · ${esc(t("use." + r.use))}</span></div>`).join("");
+  const srcs = (a.data.sources || []).map(x => `<li><span class="badge ${x.status === "ok" ? "ok" : "bad"}">${esc(x.status)}</span> ${esc(x.kind)} ${esc(x.title || x.url || "")}
+    ${x.chars ? `<span class="hint">${x.chars} chars</span>` : ""}${x.frames ? ` <span class="hint">${x.frames} frames</span>` : ""}${x.error ? ` <span class="err">${esc(x.error)}</span>` : ""}</li>`).join("");
+  return `<ul class="hint" style="margin:6px 0">${srcs}</ul>${refs ? `<div class="chips">${refs}</div>` : ""}`;
 }
 function showArtifact(arts){
   const s = PLAN.stages.find(x => x.id === prodArt); if (!s) return;
@@ -1195,6 +1222,7 @@ function showArtifact(arts){
       <span class="hint">${esc(t("prod.versions"))}: ${vs.map(v => `v${v.version} ${esc(t("is." + v.status) || v.status)}`).join(" · ")}</span></h3>
     <div class="row" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">${actions}</div>
     ${a && a.note ? `<div class="hint">${esc(a.note)}</div>` : ""}
+    ${a && a.data && a.data.references ? briefHtml(a) : ""}
     <pre class="json">${esc(a ? JSON.stringify(a.data, null, 2) : "")}</pre>`;
   $("#prod-art").querySelectorAll("[data-act]").forEach(b => b.onclick = async () => {
     const k = b.dataset.act;
@@ -1218,7 +1246,10 @@ $("#prod-new").onclick = async () => {
   modal(`<h3>${t("prod.new")}</h3>
     <label class="hint">${t("prod.workflow")}</label><select id="pn-wf" style="width:100%">${WORKFLOWS.map(w => `<option value="${esc(w.name)}">${esc(w.title)}</option>`).join("")}</select>
     <label class="hint">${t("prod.title")}</label><input id="pn-title" style="width:100%">
-    <label class="hint">${t("prod.source")}</label><textarea id="pn-src" style="width:100%;min-height:200px"></textarea>
+    <label class="hint">${t("prod.source")}</label><textarea id="pn-src" style="width:100%;min-height:160px" placeholder="${esc(t("prod.source.ph"))}"></textarea>
+    <label class="hint">${t("prod.links")}</label><textarea id="pn-links" style="width:100%;min-height:56px" placeholder="https://… (web page or YouTube), one per line"></textarea>
+    <label class="hint">${t("prod.images")}</label> <input type="file" id="pn-files" accept="image/*" multiple>
+    <div id="pn-imgs" style="display:flex;flex-direction:column;gap:6px;margin-top:6px"></div>
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;align-items:center">
       <label class="hint">${t("prod.vtier")} <select id="pn-vt">${vt.map(x => `<option ${x === "smoke" ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></label>
       <label class="hint">${t("prod.ncand")} <input id="pn-n" type="number" min="1" max="8" value="4" style="width:60px"></label>
@@ -1226,10 +1257,29 @@ $("#prod-new").onclick = async () => {
       <label class="hint">${t("prod.lang")} <input id="pn-lang" placeholder="${esc(t("prod.lang.ph"))}" value="${LANG === "zh" ? "Mandarin Chinese (普通话)" : ""}" style="width:200px"></label></div>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px"><button class="btn" onclick="closeModal()">${t("cancel")}</button>
       <button class="btn primary" id="pn-go">${t("prod.create")}</button></div>`);
+  const files = [];
+  $("#pn-files").onchange = e => {
+    for (const f of e.target.files) files.push(f);
+    $("#pn-imgs").innerHTML = files.map((f, i) => `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+      <img src="${URL.createObjectURL(f)}" style="width:44px;height:44px;object-fit:cover;border-radius:6px">
+      <input class="pi-label" data-i="${i}" placeholder="${esc(t("prod.img.label"))}" value="${esc(f.name.replace(/\.[^.]+$/, ""))}" style="width:150px">
+      <select class="pi-role" data-i="${i}">${["character","location","style","prop"].map(r => `<option value="${r}">${esc(t("role." + r))}</option>`).join("")}</select>
+      <select class="pi-use" data-i="${i}"><option value="stylize">${esc(t("use.stylize"))}</option><option value="as_is">${esc(t("use.as_is"))}</option></select>
+      <input class="pi-note" data-i="${i}" placeholder="${esc(t("prod.img.note"))}" style="flex:1;min-width:120px"></div>`).join("");
+  };
   $("#pn-go").onclick = async () => {
-    const body = {workflow: $("#pn-wf").value, title: $("#pn-title").value.trim() || "Untitled", inputs: {source: $("#pn-src").value},
+    const text = $("#pn-src").value.trim();
+    const links = $("#pn-links").value.split(/\s+/).filter(x => /^https?:\/\//.test(x));
+    if (!text && !links.length && !files.length) { toast(t("prod.need.input"), true); return; }
+    const sources = links.map(url => ({url}));
+    try {
+      for (const [i, f] of files.entries()){
+        const up = await uploadFile(f), q = c => document.querySelector(`.${c}[data-i="${i}"]`).value.trim();
+        sources.push({kind: "image", upload: up.id, label: q("pi-label"), role: q("pi-role"), use: q("pi-use"), note: q("pi-note") || undefined});
+      }
+    } catch(err){ toast(t("not.done") + err.message, true); return; }
+    const body = {workflow: $("#pn-wf").value, title: $("#pn-title").value.trim() || "Untitled", inputs: {source: {text, sources}},
       settings: {video_tier: $("#pn-vt").value, image_candidates: +$("#pn-n").value || 4, subtitles: $("#pn-subs").checked, language: $("#pn-lang").value.trim()}};
-    if (!body.inputs.source.trim()) { toast(t("prod.source"), true); return; }
     closeModal(); const p = await act("/api/productions", body); if (p) { selProd = p.id; refreshAll(true); }
   };
 };

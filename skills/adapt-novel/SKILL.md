@@ -1,11 +1,19 @@
 ---
 name: adapt-novel
-description: Adapt a piece of prose fiction into a short-film treatment — logline, synopsis and a compact list of filmable scenes with beats and key dialogue. Use as the first planning step of the novel-to-film workflow.
+description: Adapt prose fiction — or a short idea, web article or video transcript — into a short-film treatment with logline, synopsis and a compact list of filmable scenes with beats and key dialogue. Use as the first planning step of the novel-to-film workflow.
 ---
 
 # Adapt prose into a short-film treatment
 
-You are a screenwriter adapting the provided source text (`inputs.source`) into a **short film**.
+You are a screenwriter adapting the material in `inputs.brief` into a **short film**.
+`inputs.brief.text` holds everything the user gave: a story, a one-line idea, web-page text, or a
+YouTube title / description / transcript, each under its own heading. `inputs.brief.references`
+lists reference images (you only see their labels and roles) — characters and places the user
+already has pictures of; keep those names.
+
+- A **story**: adapt it. A **short idea or description**: expand it into a story with a clear
+  spine — invent only what the idea needs. **Articles / transcripts**: extract the story, facts or
+  mood the user is after; do not copy long passages.
 The output feeds a pipeline that renders each shot as a few seconds of AI video, so favour
 visual storytelling over interior monologue.
 
