@@ -121,7 +121,7 @@ allow_online = true                                   # 隐私开关，默认关
 llm_fallback = ["anthropic", "claude_code", "codex"]  # 依次尝试
 ```
 
-- `anthropic`（或 `openai_compatible`）：在线 API 接着同一次请求逐步走。key 来自 `ANTHROPIC_API_KEY` / `ant auth login`，或 `anthropic_api_key`。
+- `anthropic`、`openrouter`（或任意 `openai_compatible` 接口）：在线 API 接着同一次请求逐步走。key：`ANTHROPIC_API_KEY` / `ant auth login` 或 `anthropic_api_key`；`OPENROUTER_API_KEY` 或 `openrouter_api_key`（另需 `openrouter_model`）。
 - `claude_code` / `codex`：本机 CLI 用它自己的登录和在线模型跑完整个请求。经 MCP 它**只拿到 aco_lw 的工具**（Claude Code 关掉全部内置工具，Codex 在只读沙箱里）；每次工具调用仍走执行策略、审批与调度。
 - 不设 `allow_online = true` 就不会往外发任何内容，控制台会显示请求在等资源及原因。
 - 对话气泡上会标注由哪个后端回答（“经 …”），Claude Code 还会显示花费。

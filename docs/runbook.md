@@ -121,7 +121,7 @@ allow_online = true                                   # privacy switch, off by d
 llm_fallback = ["anthropic", "claude_code", "codex"]  # tried in order
 ```
 
-- `anthropic` (or `openai_compatible`): the online API continues the same request step by step. Your key comes from `ANTHROPIC_API_KEY` / `ant auth login` or `anthropic_api_key`.
+- `anthropic`, `openrouter` (or any `openai_compatible` endpoint): the online API continues the same request step by step. Keys: `ANTHROPIC_API_KEY` / `ant auth login` or `anthropic_api_key`; `OPENROUTER_API_KEY` or `openrouter_api_key` (plus `openrouter_model`).
 - `claude_code` / `codex`: the local CLI, with its own login and online model, runs the whole request. It gets **only aco_lw's tools** over MCP (Claude Code with all built-in tools disabled, Codex in a read-only sandbox); every tool call still goes through the execution policy, approvals and the scheduler.
 - Without `allow_online = true` nothing is sent out, and the console shows the request waiting for resources with the reason.
 - Chat bubbles show which backend answered ("via …") and, for Claude Code, the cost.

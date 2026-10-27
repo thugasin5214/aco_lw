@@ -104,7 +104,7 @@ class Plan:
     memories: list[str] = field(default_factory=list)
 
 
-API_BACKENDS = ("lmstudio", "openai_compatible", "anthropic")
+API_BACKENDS = ("lmstudio", "openai_compatible", "openrouter", "anthropic")
 AGENT_CLIS = ("claude_code", "codex")
 
 
@@ -112,6 +112,16 @@ def make_named_backend(cfg: Settings, store: Store, name: str):
     """按名字建后端：lmstudio（本地）、openai_compatible、anthropic（在线）。"""
     if name == "openai_compatible":
         return OpenAICompatBackend(cfg.openai_base_url, cfg.openai_model, cfg.openai_api_key)
+    if name == "openrouter":
+        import os
+
+        if not cfg.openrouter_model:
+            raise PlannerUnavailable("openrouter_model is not set in config.toml")
+        key = cfg.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY")
+        b = OpenAICompatBackend(cfg.openrouter_base_url, cfg.openrouter_model, key)
+        b.name = "openrouter"
+        b.http.headers["X-Title"] = "aco_lw"  # OpenRouter 用来标注来源应用（可选）
+        return b
     if name == "anthropic":
         from .backends import AnthropicBackend
 
@@ -125,7 +135,7 @@ def make_named_backend(cfg: Settings, store: Store, name: str):
 
 
 def make_backend(cfg: Settings, store: Store):
-    if cfg.planner_backend in ("openai_compatible", "anthropic"):
+    if cfg.planner_backend in ("openai_compatible", "openrouter", "anthropic"):
         return make_named_backend(cfg, store, cfg.planner_backend)
 
     def ttl() -> int | None:

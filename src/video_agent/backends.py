@@ -151,6 +151,9 @@ class OpenAICompatBackend:
                 if d.get("usage"):
                     res.prompt_tokens = d["usage"].get("prompt_tokens", 0)
                     res.completion_tokens = d["usage"].get("completion_tokens", 0)
+                    details = d["usage"].get("prompt_tokens_details") or {}
+                    if details.get("cached_tokens") is not None:  # 服务端报告的真实缓存命中
+                        res.cached_tokens = details["cached_tokens"]
         res.text = "".join(parts)
         res.reasoning = "".join(thinking)
         res.backend = self.name

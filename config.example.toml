@@ -24,14 +24,16 @@
 # ---- When the local LLM can't run (e.g. a video render holds the memory) ----
 # Online fallback is OFF unless allow_online = true (your requests and project context would be sent out).
 # allow_online = false
-# llm_fallback = ["anthropic", "claude_code", "codex"]   # tried in order
-#   anthropic / openai_compatible : online API, continues the same request step by step
+# llm_fallback = ["anthropic", "openrouter", "claude_code", "codex"]   # tried in order
+#   anthropic / openrouter / openai_compatible : online API, continues the same request step by step
 #   claude_code / codex           : the local agent CLI (its own login + online model) runs the whole
 #                                   request with only aco_lw's MCP tools — no shell, no file access
 # anthropic_model = "claude-opus-5-5"
 # anthropic_effort = "medium"           # low | medium | high | xhigh | max
 # anthropic_api_key = ""                # empty: the SDK uses ANTHROPIC_API_KEY or `ant auth login`
 # anthropic_fallbacks = true            # server-side retry on a safety-classifier refusal
+# openrouter_model = ""                # an OpenRouter model ID (required for openrouter)
+# openrouter_api_key = ""              # empty: OPENROUTER_API_KEY
 # claude_cmd = "claude"
 # claude_model = ""                     # empty: Claude Code's own default
 # codex_cmd = "codex"

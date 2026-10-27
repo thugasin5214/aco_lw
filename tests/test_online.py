@@ -292,3 +292,60 @@ def test_agent_tool_endpoint_only_for_delegated_runs(env):  # noqa: F811
     r = c.post("/api/agent/tool", json={"run_id": last_run(studio)["id"], "name": "get_status"})
     assert "not delegated" in r.json()["error"]
     pytest.importorskip("anthropic")
+
+
+def test_openrouter_backend(env, monkeypatch):  # noqa: F811
+    import httpx
+
+    from video_agent.planner import PlannerUnavailable, make_named_backend
+
+    studio, _, _ = env
+    cfg = studio.orch.cfg
+    with pytest.raises(PlannerUnavailable, match="openrouter_model"):
+        make_named_backend(cfg, studio.store, "openrouter")
+    cfg.openrouter_model = "vendor/model"
+    monkeypatch.setenv("OPENROUTER_API_KEY", "k-test")
+    b = make_named_backend(cfg, studio.store, "openrouter")
+    assert b.name == "openrouter" and b.base_url == "https://openrouter.ai/api" and not b.local
+    seen = {}
+
+    def handler(req):
+        seen["url"], seen["auth"] = str(req.url), req.headers.get("authorization")
+        seen["body"] = json.loads(req.content)
+        chunks = [
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "t1",
+                                    "function": {"name": "get_status", "arguments": "{}"},
+                                }
+                            ]
+                        },
+                    }
+                ]
+            },
+            {
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 5,
+                    "prompt_tokens_details": {"cached_tokens": 800},
+                },
+            },
+        ]
+        body = "".join(f"data: {json.dumps(c)}\n\n" for c in chunks) + "data: [DONE]\n\n"
+        return httpx.Response(200, text=body)
+
+    b.http = httpx.Client(transport=httpx.MockTransport(handler), headers=b.http.headers)
+    res = b.chat([{"role": "user", "content": "x", "reasoning_content": "r"}], tools=[])
+    assert seen["url"] == "https://openrouter.ai/api/v1/chat/completions"
+    assert (
+        seen["auth"] == "Bearer k-test" and "reasoning_content" not in seen["body"]["messages"][0]
+    )
+    assert res.tool_calls[0]["name"] == "get_status" and res.cached_tokens == 800
+    assert res.backend == "openrouter"

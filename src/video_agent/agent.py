@@ -585,7 +585,7 @@ class AgentRuntime:
             return "park", f"{why}; online fallback is configured but allow_online is off"
         fresh = len(self.store.agent_msgs(run["id"])) == 1  # 还没开始：可以整个交给 CLI
         for name in chain:
-            if name in ("anthropic", "openai_compatible"):
+            if name in ("anthropic", "openrouter", "openai_compatible"):
                 return "backend", self._api_backend(name)
             if name in ("claude_code", "codex") and fresh:
                 return "delegate", name
