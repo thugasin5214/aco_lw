@@ -14,6 +14,8 @@ from .render import TIER_KEYS
 from .scheduler import Orchestrator
 from .store import Store
 
+IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp"}
+VIDEO_EXT = {".mp4", ".mov", ".webm"}
 RUNNING_STATES = {"draft", "validated", "waiting_memory", "submitted", "running"}
 
 
@@ -71,9 +73,144 @@ class Studio:
         project_id: str | None = None,
         author: str | None = None,
         **meta,
-    ) -> None:
+    ) -> int:
         pid = project_id or self.current_project()["id"]
-        self.store.log_message(channel, direction, text, pid, author, **meta)
+        sid = self.current_session(pid)["id"]
+        return self.store.log_message(channel, direction, text, pid, author, session_id=sid, **meta)
+
+    # ---- 会话 ----
+    def current_session(self, project_id: str | None = None) -> dict:
+        """项目的当前会话；没有则新建。旧版本没有会话的消息归入“历史会话”。"""
+        pid = project_id or self.current_project()["id"]
+        sid = self.store.get_kv(f"session:{pid}")
+        s = sid and self.store.get_session(sid)
+        if s and s["state"] == "open":
+            return s
+        existing = [x for x in self.store.sessions(pid) if x["state"] == "open"]
+        if existing:
+            s = existing[0]
+        else:
+            s = self.store.create_session(pid, "历史会话")
+            if not self.store.adopt_orphan_messages(pid, s["id"]):
+                s = self.store.update_session(s["id"], title="会话 1")
+        self.store.set_kv(f"session:{pid}", s["id"])
+        return s
+
+    def new_session(self, title: str | None = None, project_id: str | None = None) -> dict:
+        pid = project_id or self.current_project()["id"]
+        n = len(self.store.sessions(pid)) + 1
+        s = self.store.create_session(pid, title or f"会话 {n}")
+        self.store.set_kv(f"session:{pid}", s["id"])
+        return s
+
+    def use_session(self, key: str, project_id: str | None = None) -> dict:
+        """按 ID 或列表序号（1 = 最近活跃）切换会话。"""
+        pid = project_id or self.current_project()["id"]
+        rows = self.store.sessions(pid)
+        s = (
+            self.store.get_session(key)
+            if not key.isdigit()
+            else (rows[int(key) - 1] if 0 < int(key) <= len(rows) else None)
+        )
+        if s is None or s["project_id"] != pid:
+            raise StudioError(f"当前项目里没有会话 {key}")
+        if s["state"] != "open":
+            s = self.store.update_session(s["id"], state="open")
+        self.store.set_kv(f"session:{pid}", s["id"])
+        return s
+
+    # ---- 项目记忆（LLM 提议，用户确认后生效） ----
+    def propose_memories(
+        self, texts: list[str], source: dict, project_id: str | None = None
+    ) -> list[dict]:
+        pid = project_id or self.current_project()["id"]
+        have = {m["text"] for m in self.store.memories(pid, "active", "proposed")}
+        return [
+            self.store.add_memory(pid, t.strip(), source=source)
+            for t in texts
+            if t.strip() and t.strip() not in have
+        ]
+
+    def add_memory(self, text: str, project_id: str | None = None) -> dict:
+        pid = project_id or self.current_project()["id"]
+        return self.store.add_memory(pid, text.strip(), status="active", source={"by": "user"})
+
+    def set_memory(self, memory_id: int, action: str, text: str | None = None) -> dict:
+        """accept / ignore / archive / restore / pin / unpin / edit（编辑 = 新版本取代旧版本）。"""
+        m = self.store.get_memory(memory_id)
+        if m is None:
+            raise StudioError(f"找不到记忆 {memory_id}")
+        if action == "accept":
+            return self.store.update_memory(memory_id, status="active")
+        if action in ("ignore", "archive"):
+            return self.store.update_memory(memory_id, status="archived")
+        if action == "restore":
+            return self.store.update_memory(memory_id, status="active")
+        if action in ("pin", "unpin"):
+            return self.store.update_memory(memory_id, pinned=int(action == "pin"))
+        if action == "edit" and text:
+            self.store.update_memory(memory_id, status="archived")
+            return self.store.add_memory(
+                m["project_id"],
+                text.strip(),
+                m["category"],
+                "active",
+                {"by": "user", "edited": memory_id},
+                memory_id,
+            )
+        raise StudioError(f"未知记忆操作 {action}")
+
+    # ---- 上传的参考图 ----
+    def save_upload(self, name: str, data: bytes, project_id: str | None = None) -> dict:
+        pid = project_id or self.current_project()["id"]
+        ext = Path(name).suffix.lower() or ".png"
+        if ext not in IMAGE_EXT | VIDEO_EXT:
+            raise StudioError(f"不支持的文件类型 {ext}")
+        d = self.store.jobs_dir.parent / "uploads" / pid
+        d.mkdir(parents=True, exist_ok=True)
+        up = self.store.add_upload(pid, name, "", "video" if ext in VIDEO_EXT else "image")
+        path = d / f"{up['id']}{ext}"
+        path.write_bytes(data)
+        with self.store._lock, self.store.db:
+            self.store.db.execute("UPDATE uploads SET path=? WHERE id=?", (str(path), up["id"]))
+        return self.store.get_upload(up["id"])
+
+    # ---- 手动微调（W1，不经 LLM） ----
+    def tweak(
+        self,
+        task_id: str,
+        params: dict,
+        tier: str | None = None,
+        n: int | None = None,
+        origin: str = "web",
+    ) -> dict:
+        """以某个任务的参数为底，覆盖用户改动后开新一轮；DAG 连到原任务。"""
+        task = self.store.get(task_id)
+        if task is None:
+            raise StudioError(f"找不到任务 {task_id}")
+        base = {k: v for k, v in task["params"].items() if k not in TIER_KEYS}
+        base.update(params)
+        seed = base.pop("seed", None)
+        n = n or 1
+        seeds = [seed + i for i in range(n)] if isinstance(seed, int) else None
+        rnd = self.start_round(
+            task["template"],
+            base,
+            n,
+            tier or task["tier"],
+            (task["title"] or task["template"]).split(" #")[0] + " · 手动微调",
+            origin=origin,
+            request="手动微调",
+            project_id=task["project_id"],
+            seeds=seeds,
+            allow_unverified=True,
+            parent_task=task_id,
+        )
+        changed = ", ".join(f"{k}" for k in params) or "无参数改动"
+        self.log(
+            origin, "in", f"手动微调 {task_id}：{changed}", task["project_id"], round_id=rnd["id"]
+        )
+        return rnd
 
     # ---- 候选轮 ----
     def start_round(
@@ -89,6 +226,7 @@ class Studio:
         project_id: str | None = None,
         seeds: list[int] | None = None,
         allow_unverified: bool = False,
+        parent_task: str | None = None,
     ) -> dict:
         t = self.orch.registry.template(template)
         pid = project_id or self.current_project()["id"]
@@ -123,6 +261,7 @@ class Studio:
                     project_id=pid,
                     round_id=rnd["id"],
                     idx=i + 1,
+                    parent_id=parent_task,
                 )
                 if i == 0 and tier is None:
                     self.store.update_round(rnd["id"], tier=task["tier"])

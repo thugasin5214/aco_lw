@@ -133,6 +133,38 @@ CREATE TABLE IF NOT EXISTS kv (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL,
+  created REAL NOT NULL,
+  updated REAL NOT NULL,
+  title TEXT,
+  summary TEXT NOT NULL DEFAULT '',
+  summary_upto INTEGER NOT NULL DEFAULT 0,
+  state TEXT NOT NULL DEFAULT 'open'
+);
+CREATE INDEX IF NOT EXISTS sessions_project ON sessions(project_id);
+CREATE TABLE IF NOT EXISTS memories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id TEXT NOT NULL,
+  created REAL NOT NULL,
+  updated REAL NOT NULL,
+  text TEXT NOT NULL,
+  category TEXT,
+  status TEXT NOT NULL DEFAULT 'proposed',
+  pinned INTEGER NOT NULL DEFAULT 0,
+  source TEXT NOT NULL DEFAULT '{}',
+  supersedes INTEGER
+);
+CREATE INDEX IF NOT EXISTS memories_project ON memories(project_id);
+CREATE TABLE IF NOT EXISTS uploads (
+  id TEXT PRIMARY KEY,
+  project_id TEXT,
+  created REAL NOT NULL,
+  name TEXT,
+  path TEXT NOT NULL,
+  kind TEXT NOT NULL
+);
 """
 
 # 旧库升级：给 tasks 补列
@@ -142,9 +174,10 @@ MIGRATIONS = {
         ("round_id", "TEXT"),
         ("idx", "INTEGER"),
     ],
+    "messages": [("session_id", "TEXT")],
 }
 
-JSON_COLS = ("params", "outputs", "metrics", "base_params", "decision", "assets", "meta")
+JSON_COLS = ("params", "outputs", "metrics", "base_params", "decision", "assets", "meta", "source")
 
 
 class TransitionError(RuntimeError):
@@ -179,6 +212,7 @@ class Store:
                 if name not in have:
                     self.db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {typ}")
         self.db.execute("CREATE INDEX IF NOT EXISTS tasks_round ON tasks(round_id)")
+        self.db.execute("CREATE INDEX IF NOT EXISTS messages_session ON messages(session_id)")
         self.db.commit()
 
     # ---- 通用 ----
@@ -466,14 +500,16 @@ class Store:
         text: str,
         project_id: str | None = None,
         author: str | None = None,
+        session_id: str | None = None,
         **meta,
-    ) -> None:
+    ) -> int:
         with self.db:
-            self.db.execute(
-                "INSERT INTO messages (project_id, ts, channel, direction, author, text, meta)"
-                " VALUES (?,?,?,?,?,?,?)",
+            cur = self.db.execute(
+                "INSERT INTO messages (project_id, session_id, ts, channel, direction, author,"
+                " text, meta) VALUES (?,?,?,?,?,?,?,?)",
                 (
                     project_id,
+                    session_id,
                     time.time(),
                     channel,
                     direction,
@@ -482,6 +518,131 @@ class Store:
                     json.dumps(meta, ensure_ascii=False),
                 ),
             )
+        if session_id:
+            with self.db:
+                self.db.execute(
+                    "UPDATE sessions SET updated=? WHERE id=?", (time.time(), session_id)
+                )
+        return cur.lastrowid
+
+    @_locked
+    def session_messages(self, session_id: str, after: int = 0) -> list[dict]:
+        return self._rows(
+            "SELECT * FROM messages WHERE session_id=? AND id>? ORDER BY id", (session_id, after)
+        )
+
+    # ---- 会话 ----
+    @_locked
+    def create_session(self, project_id: str, title: str | None = None) -> dict:
+        now, sid = time.time(), _new_id()
+        with self.db:
+            self.db.execute(
+                "INSERT INTO sessions (id, project_id, created, updated, title) VALUES (?,?,?,?,?)",
+                (sid, project_id, now, now, title),
+            )
+        return self.get_session(sid)
+
+    @_locked
+    def get_session(self, session_id: str) -> dict | None:
+        return self._one("SELECT * FROM sessions WHERE id=?", (session_id,))
+
+    @_locked
+    def sessions(self, project_id: str) -> list[dict]:
+        return self._rows(
+            "SELECT s.*, (SELECT COUNT(*) FROM messages m WHERE m.session_id=s.id) AS n_messages"
+            " FROM sessions s WHERE project_id=? ORDER BY updated DESC",
+            (project_id,),
+        )
+
+    @_locked
+    def update_session(self, session_id: str, **fields) -> dict:
+        cols = ", ".join(f"{k}=?" for k in fields)
+        with self.db:
+            self.db.execute(
+                f"UPDATE sessions SET {cols}, updated=? WHERE id=?",
+                (*fields.values(), time.time(), session_id),
+            )
+        return self.get_session(session_id)
+
+    @_locked
+    def adopt_orphan_messages(self, project_id: str, session_id: str) -> int:
+        with self.db:
+            cur = self.db.execute(
+                "UPDATE messages SET session_id=? WHERE project_id=? AND session_id IS NULL",
+                (session_id, project_id),
+            )
+        return cur.rowcount
+
+    # ---- 项目记忆 ----
+    @_locked
+    def add_memory(
+        self,
+        project_id: str,
+        text: str,
+        category: str | None = None,
+        status: str = "proposed",
+        source: dict | None = None,
+        supersedes: int | None = None,
+    ) -> dict:
+        now = time.time()
+        with self.db:
+            cur = self.db.execute(
+                "INSERT INTO memories (project_id, created, updated, text, category, status,"
+                " source, supersedes) VALUES (?,?,?,?,?,?,?,?)",
+                (
+                    project_id,
+                    now,
+                    now,
+                    text,
+                    category,
+                    status,
+                    json.dumps(source or {}, ensure_ascii=False),
+                    supersedes,
+                ),
+            )
+        return self.get_memory(cur.lastrowid)
+
+    @_locked
+    def get_memory(self, memory_id: int) -> dict | None:
+        return self._one("SELECT * FROM memories WHERE id=?", (memory_id,))
+
+    @_locked
+    def memories(self, project_id: str, *statuses: str) -> list[dict]:
+        if statuses:
+            marks = ",".join("?" * len(statuses))
+            return self._rows(
+                f"SELECT * FROM memories WHERE project_id=? AND status IN ({marks})"
+                " ORDER BY pinned DESC, id",
+                (project_id, *statuses),
+            )
+        return self._rows(
+            "SELECT * FROM memories WHERE project_id=? ORDER BY id DESC", (project_id,)
+        )
+
+    @_locked
+    def update_memory(self, memory_id: int, **fields) -> dict:
+        cols = ", ".join(f"{k}=?" for k in fields)
+        with self.db:
+            self.db.execute(
+                f"UPDATE memories SET {cols}, updated=? WHERE id=?",
+                (*fields.values(), time.time(), memory_id),
+            )
+        return self.get_memory(memory_id)
+
+    # ---- 上传（参考图） ----
+    @_locked
+    def add_upload(self, project_id: str | None, name: str, path: str, kind: str) -> dict:
+        uid = uuid.uuid4().hex[:10]
+        with self.db:
+            self.db.execute(
+                "INSERT INTO uploads (id, project_id, created, name, path, kind) VALUES (?,?,?,?,?,?)",
+                (uid, project_id, time.time(), name, path, kind),
+            )
+        return self.get_upload(uid)
+
+    @_locked
+    def get_upload(self, upload_id: str) -> dict | None:
+        return self._one("SELECT * FROM uploads WHERE id=?", (upload_id,))
 
     @_locked
     def messages(self, project_id: str | None = None, limit: int = 500) -> list[dict]:

@@ -28,6 +28,8 @@ HELP = """aco_lw 命令（不唤醒 LLM）：
 /project 当前项目 · /projects 全部项目
 /project new 名称 · /project use 名称 · /project done
 /pack 当前基准包
+/session 会话列表 · /session new [标题] · /session use 序号
+/memory 项目记忆 · /memory add 文本 · /memory del 编号
 /whoami 显示 chat_id
 其它文字：新需求或批注，会唤醒 LLM 理解。"""
 

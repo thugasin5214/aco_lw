@@ -133,8 +133,12 @@ class Actions:
         return say
 
     # ---- 入站文字 ----
-    def inbound(self, channel: str, text: str, reply: Reply) -> None:
-        self.studio.log(channel, "in", text)
+    def inbound(
+        self, channel: str, text: str, reply: Reply, attachments: list[dict] | None = None
+    ) -> None:
+        """attachments：已保存的上传 [{id, name}]（控制台上传或 Telegram 发图）。"""
+        meta = {"attachments": attachments} if attachments else {}
+        msg_id = self.studio.log(channel, "in", text, **meta)
         say = self._say(channel, reply)
         if text.startswith("/"):
             return self.command(channel, text, say)
@@ -142,23 +146,57 @@ class Actions:
         if pending:
             self.store.set_kv(f"pending:{channel}", None)
             if pending["action"] == "refine":
-                return self.refine_note(pending["round"], pending["idx"], text, channel, say)
+                return self.refine_note(
+                    pending["round"], pending["idx"], text, channel, say, msg_id
+                )
             if pending["action"] == "reject":
-                return self.reject_note(pending["round"], text, channel, say)
-        self.request(text, channel, say)
+                return self.reject_note(pending["round"], text, channel, say, msg_id)
+        self.request(text, channel, say, msg_id, attachments)
 
-    def request(self, text: str, channel: str, say: Reply) -> None:
-        if self.planner.mode == "command_only":
+    def _ctx(self) -> tuple[str, str]:
+        pid = self.studio.current_project()["id"]
+        return pid, self.studio.current_session(pid)["id"]
+
+    def _offer_memories(self, texts: list[str], source: dict, say: Reply) -> None:
+        for m in self.studio.propose_memories(texts, source):
+            say(
+                f"💡 要把这条记进项目记忆吗？\n「{m['text']}」",
+                [[("✅ 记住", f"m:{m['id']}:accept"), ("忽略", f"m:{m['id']}:ignore")]],
+            )
+
+    def request(
+        self,
+        text: str,
+        channel: str,
+        say: Reply,
+        msg_id: int | None = None,
+        attachments: list[dict] | None = None,
+    ) -> None:
+        if not self.planner.available():
             say("当前是纯命令模式，文字不会唤醒 LLM。用 /round 直接出图，或 /mode on_demand。")
             return
-        say("收到，正在理解（LLM 冷启动约 15 秒）……")
-        pid = self.studio.current_project()["id"]
+        say("收到，正在理解……")
+        pid, sid = self._ctx()
 
         def job() -> None:
-            plan = self.planner.plan_request(text, pid)
+            plan = self.planner.plan_request(text, pid, sid, msg_id, attachments)
+            self._offer_memories(plan.memories, {"message": msg_id}, say)
+            ref = plan.round_ref and self.store.get_round(plan.round_ref)
+            if plan.action == "select" and ref:
+                rnd = self.studio.select(ref["id"], plan.pick or 1, role=plan.role, origin=channel)
+                say(plan.reply + (f"\n已锁定为「{plan.role}」" if plan.role else ""))
+                if not plan.role:
+                    say("要锁进基准包吗？", lock_buttons(rnd["decision"]["task_id"]))
+                return
             if plan.action != "round":
                 say(plan.reply)
                 return
+            parent = None
+            if ref:  # 对某一轮的反馈：关闭该轮（打回 + 原话作批注）并连线
+                parent = ref["id"]
+                if ref["state"] == "review":
+                    self.studio.reject(ref["id"], text, origin=channel)
+            kind = self.studio.orch.registry.template(plan.template).kind
             rnd = self.studio.start_round(
                 plan.template,
                 plan.params,
@@ -167,35 +205,43 @@ class Actions:
                 plan.title,
                 origin=channel,
                 request=text,
+                parent_round=parent,
                 project_id=pid,
                 # 图片档位风险低，允许未实测档位；视频必须用已实测档位（内存）
-                allow_unverified=self.studio.orch.registry.template(plan.template).kind == "image",
+                allow_unverified=kind == "image",
             )
             say(f"{plan.reply}\n已排队：{rnd['n']} 个候选（{rnd['template']} / {rnd['tier']}）")
 
         self.jobs.put((job, say))
 
-    def refine_note(self, round_id: str, idx, note: str, channel: str, say: Reply) -> None:
+    def refine_note(
+        self, round_id: str, idx, note: str, channel: str, say: Reply, msg_id: int | None = None
+    ) -> None:
         say(f"收到微调 #{idx}：{note}。正在把批注翻译成参数……")
         rnd = self.store.get_round(round_id)
         task = next(t for t in self.store.round_tasks(round_id) if str(t["idx"]) == str(idx))
+        _, sid = self._ctx()
 
         def job() -> None:
-            delta, why = self.planner.translate_note(
-                rnd["template"], task["params"], note, rnd["project_id"]
+            delta, why, mems = self.planner.translate_note(
+                rnd["template"], task["params"], note, rnd["project_id"], sid, msg_id
             )
             new = self.studio.refine(round_id, idx, delta, note, origin=channel)
             say(f"{why}\n已排队新一轮：{new['n']} 个候选（保留 #{idx} 的种子）")
+            self._offer_memories(mems, {"round": round_id, "message": msg_id}, say)
 
         self.jobs.put((job, say))
 
-    def reject_note(self, round_id: str, note: str, channel: str, say: Reply) -> None:
+    def reject_note(
+        self, round_id: str, note: str, channel: str, say: Reply, msg_id: int | None = None
+    ) -> None:
         rnd = self.studio.reject(round_id, note, origin=channel)
         say(f"已打回。正在按批注调整：{note}")
+        _, sid = self._ctx()
 
         def job() -> None:
-            delta, why = self.planner.translate_note(
-                rnd["template"], rnd["base_params"], note, rnd["project_id"]
+            delta, why, mems = self.planner.translate_note(
+                rnd["template"], rnd["base_params"], note, rnd["project_id"], sid, msg_id
             )
             new = self.studio.start_round(
                 rnd["template"],
@@ -210,8 +256,14 @@ class Actions:
                 allow_unverified=True,
             )
             say(f"{why}\n已排队新一轮：{new['n']} 个候选")
+            self._offer_memories(mems, {"round": round_id, "message": msg_id}, say)
 
         self.jobs.put((job, say))
+
+    def prewarm_current(self) -> None:
+        """LLM 被视频卸载后重新加载：后台预热当前会话的前缀缓存。"""
+        _, sid = self._ctx()
+        self.jobs.put((lambda: self.planner.prewarm(sid), lambda *a, **k: None))
 
     # ---- 按钮（Telegram callback_data 与 Web 共用格式） ----
     def button(self, channel: str, data: str, reply: Reply) -> bool:
@@ -244,6 +296,11 @@ class Actions:
             if kind == "r":
                 new = self.studio.redo(rest, origin=channel)
                 say(f"整轮重做：已排队 {new['n']} 个新候选")
+                return True
+            if kind == "m":
+                mid, act = rest.split(":")
+                m = self.studio.set_memory(int(mid), act)
+                say(("已记住：" if act == "accept" else "已忽略：") + m["text"])
                 return True
             if kind == "noop":
                 return True
@@ -309,6 +366,43 @@ class Actions:
                 say(f"项目「{s.finish_project()['name']}」已标记完成，历史永久保留。")
             else:
                 say("用法：/project [new 名称 | use 名称 | done]")
+        elif cmd == "/session":
+            sub = args[0] if args else ""
+            if sub == "new":
+                ns = s.new_session(" ".join(args[1:]) or None)
+                say(f"已新开会话「{ns['title']}」。项目记忆会带过来，之前的对话不会。")
+            elif sub == "use" and len(args) > 1:
+                us = s.use_session(args[1])
+                say(f"已切换到会话「{us['title']}」（{us.get('n_messages', '')}）")
+            else:
+                cur = s.current_session()
+                rows = store.sessions(s.current_project()["id"])
+                say(
+                    "会话（1 = 最近活跃）：\n"
+                    + "\n".join(
+                        f"{i}. {r['title']} · {r['n_messages']} 条"
+                        + (" ← 当前" if r["id"] == cur["id"] else "")
+                        for i, r in enumerate(rows, 1)
+                    )
+                    + "\n/session new [标题] · /session use 序号"
+                )
+        elif cmd == "/memory":
+            pid = s.current_project()["id"]
+            if args and args[0] == "add" and len(args) > 1:
+                m = s.add_memory(" ".join(args[1:]))
+                say(f"已记住（#{m['id']}）：{m['text']}")
+            elif args and args[0] in ("del", "archive") and len(args) > 1:
+                m = s.set_memory(int(args[1]), "archive")
+                say(f"已归档 #{m['id']}：{m['text']}")
+            else:
+                act = store.memories(pid, "active")
+                prop = store.memories(pid, "proposed")
+                say(
+                    "项目记忆：\n"
+                    + ("\n".join(f"#{m['id']} {m['text']}" for m in act) or "（空）")
+                    + (f"\n待确认 {len(prop)} 条（控制台“项目与对话”里处理）" if prop else "")
+                    + "\n/memory add 文本 · /memory del 编号"
+                )
         elif cmd == "/pack":
             pack = store.pack(s.current_project()["id"])
             if not pack:
@@ -391,6 +485,7 @@ class Daemon:
         self.bot: TelegramBot | None = None
         self.worker = Worker(self.orch, self.studio, self.notify_round, self.stop)
         self.actions = Actions(self.studio, self.planner, self.worker)
+        self.orch.on_llm_restored = self.actions.prewarm_current
         if cfg.telegram_token:
             self.bot = TelegramBot(
                 TelegramAPI(cfg.telegram_token), self.actions, cfg.telegram_chat_ids

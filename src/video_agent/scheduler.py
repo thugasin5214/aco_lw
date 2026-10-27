@@ -63,6 +63,7 @@ class Orchestrator:
         self.log = log
         self.sleep = sleep
         self._object_info: dict | None = None
+        self.on_llm_restored: Callable[[], None] | None = None  # 由 daemon 注入：恢复后预热会话缓存
 
     # ---- 串行锁：同一时刻只有一个编排器进程在提交/对账 ----
     @contextlib.contextmanager
@@ -127,6 +128,11 @@ class Orchestrator:
             if not pack or role not in pack["assets"]:
                 raise ValueError(f"基准包里没有 {role}")
             return pack["assets"][role]["file"]
+        if value.startswith("@upload:"):
+            up = self.store.get_upload(value[len("@upload:") :])
+            if up is None:
+                raise ValueError(f"找不到上传的图片 {value}")
+            return up["path"]
         if value.startswith("@task:"):
             src = self.store.get(value[len("@task:") :])
             if src is None:
@@ -352,6 +358,8 @@ class Orchestrator:
             try:
                 llm.load(self.cfg.llm_model, self.cfg.llm_context, self.cfg.llm_idle_ttl_s)
                 self.log(f"已恢复 LLM（空闲 {self.cfg.llm_idle_ttl_s}s 后自动卸载）")
+                if self.on_llm_restored:
+                    self.on_llm_restored()
             except Exception as e:  # noqa: BLE001 — 恢复失败不影响任务结果
                 self.log(f"恢复 LLM 失败：{e}")
 

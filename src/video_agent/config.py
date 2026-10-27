@@ -17,6 +17,13 @@ class Settings:
     llm_context: int = 131072
     llm_idle_ttl_s: int = 300  # G0：加载约 15 s，空闲 5 min 卸载
     llm_restore_after_video: bool = True
+    llm_session_ttl_s: int = 1200  # 会话活跃时延长驻留，保住前缀缓存
+    session_summary_tokens: int = 16000  # 上一次调用超过此 prompt 长度即压缩较早消息
+    session_keep_messages: int = 8  # 压缩时保留的最近原话条数
+    planner_backend: str = "lmstudio"  # lmstudio | openai_compatible
+    openai_base_url: str = ""
+    openai_model: str = ""
+    openai_api_key: str = ""
     memory_margin_gib: float = 8.0
     memory_wait_s: float = 600.0
     poll_interval_s: float = 2.0

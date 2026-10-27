@@ -141,9 +141,11 @@ def test_planner_validates_output(studio):
         studio.orch.cfg,
         store,
         reg,
-        chat=fake_chat([{"params_delta": {"image": "/etc/passwd"}, "reply": ""}]),
+        chat=fake_chat(
+            [{"prompt": "b", "image": "/etc/passwd", "steps": 99, "memories": [], "reply": ""}]
+        ),
     )
-    with pytest.raises(ParamError, match="不可改"):
+    with pytest.raises(ParamError, match="超过上限"):  # steps 越界被拦；image 字段被忽略
         note.translate_note("flux2-edit", {"prompt": "a"}, "换图", None)
 
 
