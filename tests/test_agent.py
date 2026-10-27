@@ -355,3 +355,23 @@ def test_queue_and_runs_api(env):
     run = c.get(f"/api/runs?session={sid}").json()[-1]
     assert c.post(f"/api/runs/{run['id']}/cancel").json()["ok"]
     assert studio.store.get_run(run["id"])["status"] == "cancelled"
+
+
+def test_cancelled_round_releases_waiting_run(env):
+    studio, make, _ = env
+    a, script = make(
+        {"tool_calls": [call("queue_round", {"template": "flux2-t2i", "prompt": "x", "n": 1})]},
+        lambda m: {
+            "tool_calls": [
+                call("wait_for_round", {"round_id": json.loads(m[-1]["content"])["round_id"]})
+            ]
+        },
+        {"text": "it was cancelled"},
+    )
+    a.inbound("web", "go", lambda t, b=None: None)
+    run_all(a)
+    rnd = studio.store.rounds(state="generating")[0]
+    studio.cancel_round(rnd["id"], "user cancelled")
+    run_all(a)
+    assert last_run(studio)["status"] == "done"
+    assert json.loads(script.seen[-1][-1]["content"])["decision"]["action"] == "cancel"

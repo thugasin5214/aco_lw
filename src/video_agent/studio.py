@@ -299,9 +299,11 @@ class Studio:
         for t in self.store.round_tasks(round_id):
             if t["state"] == "draft":
                 self.store.transition(t["id"], "failed", f"已取消：{reason}", error="cancelled")
-        self.store.update_round(
+        closed = self.store.update_round(
             round_id, state="closed", decision={"action": "cancel", "note": reason}
         )
+        for cb in self.decision_listeners:  # 在等这一轮的 agent 运行也要收到结果
+            cb(closed)
 
     def cancel_queued(self, project_id: str | None = None, reason: str = "用户取消") -> int:
         n = 0
