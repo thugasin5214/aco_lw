@@ -257,3 +257,25 @@ def test_board_style_and_looks_reach_freevideo_and_new_board_starts_new_film(fil
     assert "no beards" in sp["style"] and "Avoid: polyester" in sp["style"]
     assert sp["characters"]["mei"]["look"] == "Mei, 19, emerald knit top"
     assert "cut to close-up" in sp["shots"][0]["action"]
+
+
+def test_cancelled_film_fails_its_unfinished_shots(film_prod):
+    p = film_prod
+    pr = to_film(p)
+    p.run_stage(pr["id"], "clips")
+    p.fv.finish_takes("sh01")
+    p.fv.film_state["status"] = "cancelled"
+    assert p.film.tick() == 1  # 拍完的 take 照样导入
+    items = {i["key"]: i["state"] for i in stage(p.plan(pr["id"]), "clips")["items"]}
+    assert items == {"sh01": "review", "sh02": "failed"}
+
+
+def test_rerun_one_shot_after_cancel_starts_film_with_only_that_shot(film_prod):
+    p = film_prod
+    pr = to_film(p)
+    p.run_stage(pr["id"], "clips")
+    p.fv.film_state["status"] = "cancelled"
+    p.film.tick()
+    p.run_stage(pr["id"], "clips", ["sh01"])
+    sp, _ = p.fv.started[-1]
+    assert p.fv.reshot == [] and [s["id"] for s in sp["shots"]] == ["sh01"]

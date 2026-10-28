@@ -179,6 +179,12 @@ class FilmDriver:
         film_id = self.current_film(prod["id"], st.id)
         made = []
         script = _script_hash(self.screenplay(prod, st, ctx))
+        if film_id:
+            try:
+                if self.fv.film(film_id).get("status") == "cancelled":
+                    film_id = None  # 取消了的片不再 reshoot：开新片
+            except FreeVideoError:
+                film_id = None
         if film_id and self._film_script(prod["id"], st.id, film_id) not in (None, script):
             # 分镜 / 风格 / 人物造型改了：FreeVideo 的 reshoot 只会沿用旧剧本，所以取消旧片、整部重开
             self.engine.log(f"film {film_id}: screenplay changed; cancelling it and starting a new film")
@@ -195,7 +201,7 @@ class FilmDriver:
             except FreeVideoError as e:  # 电影已结束或已取消：为这些镜头开一部新的
                 self.engine.log(f"film {film_id}: reshoot failed ({e}); starting a new film")
                 made = []
-        sp = self.screenplay(prod, st, ctx, keys if film_id else None)
+        sp = self.screenplay(prod, st, ctx, keys)
         takes = int(prod["settings"].get("video_candidates") or 1)
         ref = f"aco-{prod['id']}-{st.id}-{int(time.time())}"
         plan, fixed = self._validated_plan(sp, takes)  # 先校验（不提交）：写错的地方在这里就报出来
@@ -359,6 +365,13 @@ class FilmDriver:
                     art = arts.get(shot["id"])
                     if art is not None:
                         imported += self._import(prod, art, film, shot)
+                if film.get("status") == "cancelled":  # 片被取消：没拍完的镜头不会再有 take，标失败好让你重跑
+                    for art in arts.values():
+                        cur = self.store.get_artifact(art["id"])
+                        if cur["status"] == "running" and not cur["round_id"]:
+                            self.store.update_artifact(
+                                art["id"], status="failed", note=f"film {film_id} was cancelled"
+                            )
         return imported
 
     def _retry_pending_start(self, prod: dict) -> None:
