@@ -78,6 +78,9 @@
                 }
               }
             }
+          },
+          "transition_to_next": {
+            "type": "string"
           }
         },
         "allOf": [
@@ -102,6 +105,34 @@
           }
         ]
       }
+    },
+    "title": {
+      "type": "string"
+    },
+    "visual_style": {
+      "type": "string",
+      "description": "whole-film look; sent to FreeVideo as style"
+    },
+    "characters": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "per character id: locked look / wardrobe / age (sent as the character's look)"
+    },
+    "continuity": {
+      "type": "string",
+      "description": "continuity bible appended to the style"
+    },
+    "directing_rules": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "negative_prompt": {
+      "type": "string",
+      "description": "what to avoid; appended to the style"
     }
   }
 }

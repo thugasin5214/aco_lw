@@ -235,3 +235,25 @@ def test_restart_keeps_film_shots_running(film_prod):
     assert p.recover() == 0  # 电影镜头不是 LLM 作业：不重排
     assert all(a["status"] == "running" for a in p.store.artifacts(pr["id"], "clips"))
     assert p.pending_skill_jobs() == []
+
+
+def test_board_style_and_looks_reach_freevideo_and_new_board_starts_new_film(film_prod):
+    p = film_prod
+    pr = to_film(p)
+    p.run_stage(pr["id"], "clips")
+    assert len(p.fv.started) == 1
+    board = {**BOARD, "visual_style": "35mm romance", "continuity": "same outfit",
+             "directing_rules": ["no beards"], "negative_prompt": "polyester",
+             "characters": {"mei": "Mei, 19, emerald knit top"}}
+    board["shots"] = [dict(BOARD["shots"][0], transition_to_next="cut to close-up"), BOARD["shots"][1]]
+    p.review(pr["id"], "storyboard", "approve", data=board)  # 手改分镜
+    for a in p.store.artifacts(pr["id"], "clips"):  # 旧片的镜头被打回 / 失败后，你点重跑
+        p.store.update_artifact(a["id"], status="failed")
+    p.run_stage(pr["id"], "clips")
+    assert p.fv.reshot == [] and p.fv.cancelled == "d000000000001"  # 剧本变了：不 reshoot 旧片
+    sp, _ = p.fv.started[-1]
+    assert len(p.fv.started) == 2 and [s["id"] for s in sp["shots"]] == ["sh01", "sh02"]
+    assert sp["style"].startswith("35mm romance") and "same outfit" in sp["style"]
+    assert "no beards" in sp["style"] and "Avoid: polyester" in sp["style"]
+    assert sp["characters"]["mei"]["look"] == "Mei, 19, emerald knit top"
+    assert "cut to close-up" in sp["shots"][0]["action"]

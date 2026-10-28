@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -28,6 +29,10 @@ TAKE_TEMPLATE = "freevideo-take"
 MIN_CONTINUE_S = 10.0
 RETRY_S = 60.0  # 等你在 FreeVideo 页面批准时，多久重发一次开拍请求
 _FIX = re.compile(r"Use /screenplay/shots/(\d+)/seconds ([\d.]+)")
+
+
+def _script_hash(sp: dict) -> str:
+    return hashlib.sha256(json.dumps(sp, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
 
 
 class FilmDriver:
@@ -91,21 +96,36 @@ class FilmDriver:
         cast_map = (ctx.get(st.cast) or {}).get("characters", {}) if st.cast else {}
         bible = ctx.get("bible") or {}
         looks = {c["id"]: c for c in bible.get("characters", [])}
+        # 手写 / 导入的分镜可以带整片级的风格、人物造型、连续性、导演规则和负面描述：都要交给 FreeVideo
+        board = ctx.get(st.fan_out.items.split(".")[0]) if st.fan_out else None
+        board = board if isinstance(board, dict) else {}
+        board_looks = board.get("characters") if isinstance(board.get("characters"), dict) else {}
         chars = {}
         for key, card in cast_map.items():
             entry = {"card": card, "language": lang}
             if looks.get(key, {}).get("voice"):
                 entry["voice"] = looks[key]["voice"]
+            if isinstance(board_looks.get(key), str) and board_looks[key].strip():
+                entry["look"] = board_looks[key].strip()
             chars[key] = entry
         shots = []
         for s in self.engine._items(st, ctx):
             key, item = s
             if keys is not None and key not in keys:
                 continue
+            transition = item.get("transition_to_next")
             sh = {
                 "id": key,
                 "seconds": item.get("seconds") or 5,
-                "action": ". ".join(x for x in (item.get("frame"), item.get("motion")) if x),
+                "action": ". ".join(
+                    x
+                    for x in (
+                        item.get("frame"),
+                        item.get("motion"),
+                        transition and f"Ends ready for: {transition}",
+                    )
+                    if x
+                ),
                 "camera": item.get("camera") or "",
                 "framing": item.get("framing") or "",
             }
@@ -124,9 +144,20 @@ class FilmDriver:
                     float(sh["seconds"]), MIN_CONTINUE_S
                 )  # FreeVideo：续拍至少 10 秒
             shots.append(sh)
+        rules = board.get("directing_rules") or []
+        style = " ".join(  # 同一行：换行开头的 "Avoid:" 会被 H3 当成新的 section
+            x
+            for x in (
+                board.get("visual_style") or (bible.get("style") or {}).get("look", ""),
+                board.get("continuity"),
+                "Directing rules: " + " ".join(rules) if rules else None,
+                board.get("negative_prompt") and "Avoid: " + board["negative_prompt"],
+            )
+            if x
+        )
         return {
             "title": prod["title"],
-            "style": (bible.get("style") or {}).get("look", ""),
+            "style": style,
             "aspect": settings.get("aspect", "16:9"),
             "quality": settings.get("film_quality", "medium"),
             "characters": chars,
@@ -147,6 +178,15 @@ class FilmDriver:
     ) -> list[dict]:
         film_id = self.current_film(prod["id"], st.id)
         made = []
+        script = _script_hash(self.screenplay(prod, st, ctx))
+        if film_id and self._film_script(prod["id"], st.id, film_id) not in (None, script):
+            # 分镜 / 风格 / 人物造型改了：FreeVideo 的 reshoot 只会沿用旧剧本，所以取消旧片、整部重开
+            self.engine.log(f"film {film_id}: screenplay changed; cancelling it and starting a new film")
+            try:
+                self.fv.cancel_film(film_id)
+            except FreeVideoError as e:
+                self.engine.log(f"film {film_id}: cancel failed: {e}")
+            film_id, keys = None, [k for k, _ in self.engine._items(st, ctx)]
         if film_id:
             try:
                 for key in keys:
@@ -193,6 +233,7 @@ class FilmDriver:
                     note=None if film else "waiting for your approval in the FreeVideo page",
                     meta={
                         "film": film["id"] if film else None,
+                        "script": script,
                         "pending_start": pending if sh is sp["shots"][0] else None,
                         "pending_ref": None if film else ref,
                         "shot": sh["id"],
@@ -204,6 +245,12 @@ class FilmDriver:
                 )
             )
         return made
+
+    def _film_script(self, prod_id: str, stage_id: str, film_id: str) -> str | None:
+        for a in reversed(self.store.artifacts(prod_id, stage_id)):
+            if (a["meta"] or {}).get("film") == film_id and a["meta"].get("script"):
+                return a["meta"]["script"]
+        return None  # 旧版本开的片没有记录剧本：照旧 reshoot
 
     def _validated_plan(self, sp: dict, takes: int) -> tuple[dict, dict]:
         """plan 校验；FreeVideo 给出明确的时长建议时（例如续拍须 10–11 秒）按建议改一次再校验。
