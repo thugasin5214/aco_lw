@@ -250,7 +250,7 @@ def test_board_style_and_looks_reach_freevideo_and_new_board_starts_new_film(fil
     for a in p.store.artifacts(pr["id"], "clips"):  # 旧片的镜头被打回 / 失败后，你点重跑
         p.store.update_artifact(a["id"], status="failed")
     p.run_stage(pr["id"], "clips")
-    assert p.fv.reshot == [] and p.fv.cancelled == "d000000000001"  # 剧本变了：不 reshoot 旧片
+    assert p.fv.reshot == []  # 剧本变了：不 reshoot 旧片（它只会沿用旧剧本），开新片
     sp, _ = p.fv.started[-1]
     assert len(p.fv.started) == 2 and [s["id"] for s in sp["shots"]] == ["sh01", "sh02"]
     assert sp["style"].startswith("35mm romance") and "same outfit" in sp["style"]
@@ -279,3 +279,17 @@ def test_rerun_one_shot_after_cancel_starts_film_with_only_that_shot(film_prod):
     p.run_stage(pr["id"], "clips", ["sh01"])
     sp, _ = p.fv.started[-1]
     assert p.fv.reshot == [] and [s["id"] for s in sp["shots"]] == ["sh01"]
+
+
+def test_overrides_shoot_a_reviewed_shot_again_in_its_own_film(film_prod):
+    p = film_prod
+    pr = to_film(p)
+    p.run_stage(pr["id"], "clips")
+    p.fv.finish_takes("sh01")
+    p.film.tick()
+    p.run_stage(pr["id"], "clips", ["sh01"], overrides={"quality": "high", "takes": 1})
+    sp, takes = p.fv.started[-1]
+    assert p.fv.reshot == [] and takes == 1 and sp["quality"] == "high"
+    assert [s["id"] for s in sp["shots"]] == ["sh01"]
+    assert p._prod(pr["id"])["settings"].get("film_quality", "medium") == "medium"  # 制片设置不变
+    assert any(r["template"] == "freevideo-take" for r in p.store.rounds(None, "review"))  # 旧的一轮还在

@@ -545,8 +545,10 @@ class Production:
         keys: list[str] | None = None,
         note: str | None = None,
         origin: str = "web",
+        overrides: dict | None = None,
     ) -> list[dict]:
-        """开跑一个阶段（默认只跑缺失 / 过期 / 失败的条目）。返回新建的产物。"""
+        """开跑一个阶段（默认只跑缺失 / 过期 / 失败的条目）。返回新建的产物。
+        overrides（film 阶段）：只对这次生效的 {quality, takes}；这时待审阅的条目也可以再拍一版来对比。"""
         with self._lock:
             prod = self._prod(production_id)
             wf = self._wf(prod)
@@ -557,7 +559,8 @@ class Production:
                 raise ProductionError(f"{stage_id} 还在等上游：{', '.join(ps['blocked_by'])}")
             if st.kind == "input":
                 raise ProductionError("输入阶段不需要运行；要改原文请新建一个版本")
-            busy = {i["key"] for i in ps["items"] if i["state"] in ("running", "review")}
+            busy_states = ("running",) if overrides else ("running", "review")
+            busy = {i["key"] for i in ps["items"] if i["state"] in busy_states}
             if keys is None:
                 keys = [
                     i["key"]
@@ -583,6 +586,7 @@ class Production:
                         keys,
                         note,
                         lambda k: self._item_deps(prod, st, idx, ctx, k),
+                        overrides,
                     )
                 keys = []
             for k in keys:

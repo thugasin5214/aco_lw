@@ -667,8 +667,11 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
         stage: str = Body(...),
         keys: list[str] | None = Body(None),  # noqa: B008
         note: str | None = Body(None),
+        overrides: dict | None = Body(None),  # noqa: B008
     ) -> list[dict]:
-        return guard(lambda: _production().run_stage(pid, stage, keys, note, origin="web"))
+        return guard(
+            lambda: _production().run_stage(pid, stage, keys, note, origin="web", overrides=overrides)
+        )
 
     @app.post("/api/productions/{pid}/provide")
     def production_provide(

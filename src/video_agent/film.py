@@ -174,8 +174,18 @@ class FilmDriver:
         return films[-1] if films else None
 
     def start(
-        self, prod: dict, st: Stage, idx, ctx: dict, keys: list[str], note: str | None, deps_for
+        self,
+        prod: dict,
+        st: Stage,
+        idx,
+        ctx: dict,
+        keys: list[str],
+        note: str | None,
+        deps_for,
+        overrides: dict | None = None,
     ) -> list[dict]:
+        """overrides：只对这一次开拍生效的 {quality, takes}（例如拿一个镜头试 high 档），不改制片设置。"""
+        overrides = {k: v for k, v in (overrides or {}).items() if v}
         film_id = self.current_film(prod["id"], st.id)
         made = []
         script = _script_hash(self.screenplay(prod, st, ctx))
@@ -186,13 +196,11 @@ class FilmDriver:
             except FreeVideoError:
                 film_id = None
         if film_id and self._film_script(prod["id"], st.id, film_id) not in (None, script):
-            # 分镜 / 风格 / 人物造型改了：FreeVideo 的 reshoot 只会沿用旧剧本，所以取消旧片、整部重开
-            self.engine.log(f"film {film_id}: screenplay changed; cancelling it and starting a new film")
-            try:
-                self.fv.cancel_film(film_id)
-            except FreeVideoError as e:
-                self.engine.log(f"film {film_id}: cancel failed: {e}")
-            film_id, keys = None, [k for k, _ in self.engine._items(st, ctx)]
+            # 分镜 / 风格 / 人物造型改了：FreeVideo 的 reshoot 只会沿用旧剧本，所以给这些镜头开新片
+            self.engine.log(f"film {film_id}: screenplay changed; starting a new film for {keys}")
+            film_id = None
+        if overrides:
+            film_id = None  # 档位 / take 数是整部片的参数：单独开一部
         if film_id:
             try:
                 for key in keys:
@@ -202,7 +210,9 @@ class FilmDriver:
                 self.engine.log(f"film {film_id}: reshoot failed ({e}); starting a new film")
                 made = []
         sp = self.screenplay(prod, st, ctx, keys)
-        takes = int(prod["settings"].get("video_candidates") or 1)
+        takes = int(overrides.get("takes") or prod["settings"].get("video_candidates") or 1)
+        if overrides.get("quality"):
+            sp["quality"] = overrides["quality"]
         ref = f"aco-{prod['id']}-{st.id}-{int(time.time())}"
         plan, fixed = self._validated_plan(sp, takes)  # 先校验（不提交）：写错的地方在这里就报出来
         try:
