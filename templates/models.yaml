@@ -19,3 +19,13 @@ comfy-raw:
   peak_gib: 54      # 未知 workflow：按最重的视频模型保守估计（估算）
   exclusive_llm: true
   adaptive: true
+minimax-h3-native:
+  kind: video
+  peak_gib: 54      # 估算：与 FreeVideo 同一套 int8 主干 + nvfp4 编码（FreeVideo 实测 54 GiB）；首次实测后改
+  exclusive_llm: true
+  adaptive: true
+ltx-2.5-distilled:
+  kind: video
+  peak_gib: 50      # 估算：21.5 GB int8 主干 + 15.4 GB Gemma 编码 + VAE / 放大器 + 激活；首次实测后改
+  exclusive_llm: true
+  adaptive: true

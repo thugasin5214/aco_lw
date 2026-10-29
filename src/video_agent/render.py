@@ -99,6 +99,13 @@ def check_graph(graph: dict, object_info: dict) -> list[str]:
             continue
         spec = {**info["input"].get("required", {}), **info["input"].get("optional", {})}
         for field, v in node["inputs"].items():
+            head = field.split(".", 1)[0]
+            if field not in spec and "." in field and head in spec:
+                # V3 动态输入（autogrow / dynamic combo 的子字段，如 ref_images.ref_image_0、format.codec）：
+                # /object_info 只列父字段；只校验连线
+                if isinstance(v, list) and v and str(v[0]) not in graph:
+                    problems.append(f"节点 {nid}.{field} 连到不存在的节点 {v[0]}")
+                continue
             if field not in spec:
                 problems.append(f"节点 {nid}: {node['class_type']} 没有字段 {field}")
                 continue

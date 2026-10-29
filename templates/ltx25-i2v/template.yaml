@@ -1,0 +1,23 @@
+title: 图生视频 · LTX-2.5 蒸馏（首帧驱动，两段：半分辨率 + 2× 潜空间放大）
+kind: video
+model: ltx-2.5-distilled
+source: comfyui_workflow_templates/video_ltx2_5_i2v.json（子图展开成 API 格式；未接提示词增强）
+release_after: free
+output_prefix: {node: "51", field: filename_prefix}
+# 没有参考图模式：角色一致性靠首帧（用 flux2-edit2 按定妆照生成关键帧）。
+# width/height 是第一段尺寸，成片为 2×；frames 须为 8k+1（24 fps：121≈5 s，225≈9.4 s）。
+slots:
+  prompt:   {node: "20", field: text, type: str}
+  negative: {node: "21", field: text, type: str}
+  image:    {node: "10", field: image, type: image, required: true}
+  width:    {node: "30", field: width, type: int, min: 256, max: 1920, multiple_of: 32}
+  height:   {node: "30", field: height, type: int, min: 256, max: 1920, multiple_of: 32}
+  frames:   {node: "30", field: length, type: int, min: 9, max: 481}
+  frames_audio: {node: "32", field: frames_number, type: int, min: 9, max: 481}
+  first_strength: {node: "31", field: strength, type: float, min: 0, max: 1}
+  seed:     {node: "34", field: noise_seed, type: int, min: 0}
+tiers:
+  low:   {width: 448, height: 256, frames: 121, frames_audio: 121, verified: false}   # 成片 896×512
+  hd:    {width: 672, height: 384, frames: 121, frames_audio: 121, verified: false}   # 成片 1344×768
+  hd-9s: {width: 672, height: 384, frames: 225, frames_audio: 225, verified: false}
+default_tier: low
