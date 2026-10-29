@@ -202,6 +202,23 @@ kbd{font:11.5px ui-monospace,monospace;border:1px solid var(--line);border-radiu
 .modal.on{display:flex}
 .modal .box{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;width:min(760px,100%)}
 .modal .box h2{margin:0 0 12px;font-size:16px;display:flex;gap:8px;align-items:center}
+/* lightbox：审阅 / 产物里的图片、视频放大全屏看 */
+#lb-open{position:fixed;z-index:15;display:none;width:30px;height:30px;border-radius:8px;border:0;
+  background:rgba(0,0,0,.62);color:#fff;font-size:16px;line-height:30px;cursor:zoom-in;padding:0}
+#lb-open.on{display:block}
+#lb{position:fixed;inset:0;z-index:30;background:#000;display:none;overflow:hidden;color:#fff;user-select:none}
+#lb.on{display:block}
+#lb .lb-stage{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
+#lb .lb-stage img{width:100vw;height:100vh;object-fit:contain;transform-origin:0 0;cursor:grab;will-change:transform}
+#lb .lb-stage img.drag{cursor:grabbing}
+#lb .lb-stage video{width:100vw;height:100vh;object-fit:contain;background:#000}
+#lb .lb-bar{position:absolute;top:10px;right:10px;display:flex;gap:6px;z-index:2}
+#lb button{background:rgba(255,255,255,.14);color:#fff;border:0;border-radius:8px;min-width:36px;height:36px;font-size:16px;cursor:pointer}
+#lb button:hover{background:rgba(255,255,255,.28)}
+#lb .lb-nav{position:absolute;top:50%;transform:translateY(-50%);z-index:2;height:56px}
+#lb .lb-prev{left:10px} #lb .lb-next{right:10px}
+#lb .lb-cap{position:absolute;left:12px;top:14px;font-size:12.5px;opacity:.8;z-index:2;max-width:60vw;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .form{display:grid;grid-template-columns:max-content 1fr;gap:8px 12px;align-items:center;font-size:13.5px}
 .form label{color:var(--muted)}
 .form input[type=number],.form input[type=text]{border:1px solid var(--line);border-radius:8px;background:var(--bg);padding:5px 8px;width:100%}
@@ -302,11 +319,19 @@ kbd{font:11.5px ui-monospace,monospace;border:1px solid var(--line);border-radiu
 </main>
 
 <div class="modal" id="modal" role="dialog" aria-modal="true"><div class="box" id="modal-box"></div></div>
+<button id="lb-open" type="button">⤢</button>
+<div id="lb" role="dialog" aria-modal="true">
+  <div class="lb-stage"></div>
+  <div class="lb-cap"></div>
+  <div class="lb-bar"><button type="button" class="lb-fit">1:1</button><button type="button" class="lb-full">⛶</button><button type="button" class="lb-close">✕</button></div>
+  <button type="button" class="lb-nav lb-prev">‹</button><button type="button" class="lb-nav lb-next">›</button>
+</div>
 
 <script>
 /* ================= i18n ================= */
 const I18N = {
   en: {
+    "lb.open": "View larger (double-click · V in Review)", "lb.fit": "Actual size / fit", "lb.full": "Browser full screen", "lb.close": "Close (Esc)", "lb.prev": "Previous (←)", "lb.next": "Next (→)",
     title: "aco_lw Console", memory: "Memory", project: "Project", detail: "Details", projects: "Projects",
     "tab.flow": "Flow", "tab.review": "Review", "tab.projects": "Projects & Chat", "tab.gallery": "Outputs",
     "tab.progress": "Progress", "tab.runbook": "Runbook", "tab.architecture": "Architecture", "tab.productions": "Productions", productions: "Productions",
@@ -334,7 +359,7 @@ const I18N = {
     "flow.hint": "One node = one round of candidates (or a standalone task). Arrows = derived from a previous decision (tweak / redo / reject) or reuse of its output. Green outline = selected candidate.",
     "flow.empty": "No tasks yet. Describe what you want in “Projects & Chat”, or use Telegram / <code>va round</code>.",
     "flow.pick": "Click a node on the left",
-    "review.keys": "Shortcuts: <kbd>1</kbd>–<kbd>9</kbd> highlight · <kbd>Enter</kbd> approve (locks with the chosen role) · <kbd>F</kbd> tweak with note · <kbd>R</kbd> redo round · <kbd>X</kbd> reject + note · <kbd>J</kbd>/<kbd>K</kbd> switch item. Notes wake the LLM; replies appear in “Projects & Chat”.",
+    "review.keys": "Shortcuts: <kbd>1</kbd>–<kbd>9</kbd> highlight · <kbd>Enter</kbd> approve (locks with the chosen role) · <kbd>F</kbd> tweak with note · <kbd>R</kbd> redo round · <kbd>X</kbd> reject + note · <kbd>J</kbd>/<kbd>K</kbd> switch item · <kbd>V</kbd> view full screen (or double-click / ⤢; <kbd>←</kbd>/<kbd>→</kbd> browse, wheel to zoom). Notes wake the LLM; replies appear in “Projects & Chat”.",
     "review.empty": "Nothing to review. New candidates appear here (and are pushed to Telegram).",
     approve: "✅ Approve", redo: "🎲 Redo", "redo.round": "🎲 Redo round", reject: "↩️ Reject", "reject.note": "↩️ Reject + note",
     refine: "🔧 Tweak w/ note", send: "Send", "no.lock": "Don't lock", "goto.review": "Go to review →",
@@ -398,6 +423,7 @@ const I18N = {
 
   },
   zh: {
+    "lb.open": "放大查看（双击 · 审阅页按 V）", "lb.fit": "原始尺寸 / 适应窗口", "lb.full": "浏览器全屏", "lb.close": "关闭（Esc）", "lb.prev": "上一个（←）", "lb.next": "下一个（→）",
     title: "aco_lw 控制台", memory: "内存", project: "项目", detail: "详情", projects: "项目",
     "tab.flow": "任务流", "tab.review": "审阅", "tab.projects": "项目与对话", "tab.gallery": "产物",
     "tab.progress": "项目进度", "tab.runbook": "手册", "tab.architecture": "架构", "tab.productions": "制片", productions: "制片",
@@ -425,7 +451,7 @@ const I18N = {
     "flow.hint": "一个节点 = 一轮候选（或一个独立任务）；箭头 = 由上一轮决定派生（微调 / 重做 / 打回）或引用其产物。绿框 = 选中的候选。",
     "flow.empty": "还没有任务。在“项目与对话”里描述需求，或用 Telegram / <code>va round</code>。",
     "flow.pick": "点选左侧节点",
-    "review.keys": "快捷键：<kbd>1</kbd>–<kbd>9</kbd> 高亮候选 · <kbd>Enter</kbd> 通过（按所选锁定角色）· <kbd>F</kbd> 微调 · <kbd>R</kbd> 整轮重做 · <kbd>X</kbd> 打回+批注 · <kbd>J</kbd>/<kbd>K</kbd> 切换审阅项。批注会唤醒 LLM，回复见“项目与对话”。",
+    "review.keys": "快捷键：<kbd>1</kbd>–<kbd>9</kbd> 高亮候选 · <kbd>Enter</kbd> 通过（按所选锁定角色）· <kbd>F</kbd> 微调 · <kbd>R</kbd> 整轮重做 · <kbd>X</kbd> 打回+批注 · <kbd>J</kbd>/<kbd>K</kbd> 切换审阅项 · <kbd>V</kbd> 全屏查看（或双击 / ⤢；<kbd>←</kbd>/<kbd>→</kbd> 切换，滚轮缩放）。批注会唤醒 LLM，回复见“项目与对话”。",
     "review.empty": "没有待审阅的内容。新一轮候选出来后会出现在这里（也会推送到 Telegram）。",
     approve: "✅ 通过", redo: "🎲 重做", "redo.round": "🎲 整轮重做", reject: "↩️ 打回", "reject.note": "↩️ 打回+批注",
     refine: "🔧 微调", send: "发送", "no.lock": "不锁定", "goto.review": "去审阅 →",
@@ -540,6 +566,105 @@ function modal(html){ $("#modal-box").innerHTML = html; $("#modal").classList.ad
 function closeModal(){ $("#modal").classList.remove("on"); }
 $("#modal").addEventListener("click", e => { if (e.target.id === "modal") closeModal(); });
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
+
+/* ================= lightbox ================= */
+// 任何 ≥80px 的图片 / 视频：悬停右上角出现 ⤢，或双击 → 全屏看；←/→ 在同组里切换，滚轮缩放、拖动平移。
+const LB = {list: [], i: 0, z: 1, x: 0, y: 0, hover: null};
+const LB_GROUP = ".review-item, .grid, #gallery, .media-row, .chips, section.view";
+const lbMediaOk = el => el && (el.tagName === "IMG" || el.tagName === "VIDEO") && !el.closest("#lb")
+  && el.getBoundingClientRect().width >= 80;
+const lbSrc = el => (el.currentSrc || el.src || "").replace(/#t=[\d.]+$/, "");
+function lbOpen(el){
+  const group = el.closest(LB_GROUP) || document.body;
+  LB.list = [...group.querySelectorAll("img, video")].filter(m => m.getBoundingClientRect().width >= 80 || m === el);
+  LB.i = Math.max(0, LB.list.indexOf(el));
+  if (!el.paused && el.tagName === "VIDEO") el.pause();
+  $("#lb").classList.add("on"); $("#lb-open").classList.remove("on");
+  for (const [c, k] of [["lb-fit","lb.fit"],["lb-full","lb.full"],["lb-close","lb.close"],["lb-prev","lb.prev"],["lb-next","lb.next"]])
+    $(`#lb .${c}`).title = t(k);
+  lbShow(el.tagName === "VIDEO" ? el.currentTime : 0);
+}
+function lbShow(t0 = 0){
+  const el = LB.list[LB.i], src = lbSrc(el), stage = $("#lb .lb-stage");
+  LB.z = 1; LB.x = 0; LB.y = 0;
+  stage.innerHTML = el.tagName === "VIDEO"
+    ? `<video src="${src}" controls autoplay loop playsinline></video>`
+    : `<img src="${src}" alt="" draggable="false">`;
+  const v = stage.querySelector("video");
+  if (v && t0) v.addEventListener("loadedmetadata", () => { v.currentTime = t0; }, {once: true});
+  const name = decodeURIComponent(src.split("/").pop().split("?")[0]);
+  $("#lb .lb-cap").textContent = `${LB.i + 1} / ${LB.list.length} · ${name}`;
+  $("#lb .lb-fit").style.display = v ? "none" : "";
+  $("#lb .lb-prev").style.display = $("#lb .lb-next").style.display = LB.list.length > 1 ? "" : "none";
+}
+function lbClose(){
+  $("#lb .lb-stage").innerHTML = ""; $("#lb").classList.remove("on");
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+}
+const lbStep = d => { LB.i = (LB.i + d + LB.list.length) % LB.list.length; lbShow(); };
+function lbApply(){
+  const img = $("#lb .lb-stage img");
+  if (img) img.style.transform = `translate(${LB.x}px,${LB.y}px) scale(${LB.z})`;
+}
+function lbZoom(f, cx, cy){
+  const img = $("#lb .lb-stage img"); if (!img) return;
+  const r = img.getBoundingClientRect(), z = Math.min(12, Math.max(1, LB.z * f));
+  // 以光标为中心缩放：保持光标下的像素不动
+  const ox = (cx - r.left) / LB.z, oy = (cy - r.top) / LB.z;
+  LB.x += (LB.z - z) * ox; LB.y += (LB.z - z) * oy; LB.z = z;
+  if (z === 1) { LB.x = 0; LB.y = 0; }
+  lbApply();
+}
+$("#lb-open").onclick = () => LB.hover && lbOpen(LB.hover);
+document.addEventListener("mouseover", e => {
+  const el = e.target;
+  if (el.id === "lb-open") return;
+  if (!lbMediaOk(el)) { if (!e.target.closest?.("#lb-open")) $("#lb-open").classList.remove("on"); return; }
+  LB.hover = el;
+  const r = el.getBoundingClientRect(), b = $("#lb-open");
+  b.style.left = `${r.right - 36}px`; b.style.top = `${r.top + 6}px`; b.title = t("lb.open"); b.classList.add("on");
+});
+document.addEventListener("scroll", () => $("#lb-open").classList.remove("on"), true);
+document.addEventListener("dblclick", e => {
+  if (!lbMediaOk(e.target)) return;
+  e.preventDefault(); e.stopPropagation(); lbOpen(e.target);
+}, true);
+$("#lb .lb-close").onclick = lbClose;
+$("#lb .lb-prev").onclick = () => lbStep(-1);
+$("#lb .lb-next").onclick = () => lbStep(1);
+$("#lb .lb-full").onclick = () => document.fullscreenElement
+  ? document.exitFullscreen().catch(() => {}) : $("#lb").requestFullscreen?.().catch(() => {});
+$("#lb .lb-fit").onclick = () => {
+  const img = $("#lb .lb-stage img"); if (!img) return;
+  if (LB.z !== 1) { LB.z = 1; LB.x = 0; LB.y = 0; lbApply(); return; }
+  const shown = Math.min(innerWidth / img.naturalWidth, innerHeight / img.naturalHeight);  // contain 后的缩放
+  lbZoom(Math.max(1.01, 1 / shown), innerWidth / 2, innerHeight / 2);
+};
+$("#lb .lb-stage").addEventListener("click", e => { if (e.target.classList.contains("lb-stage")) lbClose(); });
+$("#lb").addEventListener("wheel", e => {
+  if (!$("#lb .lb-stage img")) return;
+  e.preventDefault(); lbZoom(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.clientX, e.clientY);
+}, {passive: false});
+$("#lb .lb-stage").addEventListener("dblclick", e => {
+  if (e.target.tagName === "IMG") { e.stopPropagation(); LB.z === 1 ? lbZoom(2.5, e.clientX, e.clientY) : (LB.z = 1, LB.x = LB.y = 0, lbApply()); }
+});
+$("#lb .lb-stage").addEventListener("pointerdown", e => {
+  const img = e.target; if (img.tagName !== "IMG" || LB.z === 1) return;
+  const sx = e.clientX - LB.x, sy = e.clientY - LB.y; img.classList.add("drag"); img.setPointerCapture(e.pointerId);
+  img.onpointermove = m => { LB.x = m.clientX - sx; LB.y = m.clientY - sy; lbApply(); };
+  img.onpointerup = () => { img.onpointermove = null; img.classList.remove("drag"); };
+});
+document.addEventListener("keydown", e => {
+  if (!$("#lb").classList.contains("on")) return;
+  e.stopImmediatePropagation();  // 打开时不触发审阅快捷键（R 重做、Enter 选中等）
+  if (e.key === "Escape") lbClose();
+  else if (e.key === "ArrowLeft") lbStep(-1);
+  else if (e.key === "ArrowRight") lbStep(1);
+  else if (e.key === "+" || e.key === "=") lbZoom(1.25, innerWidth / 2, innerHeight / 2);
+  else if (e.key === "-") lbZoom(1 / 1.25, innerWidth / 2, innerHeight / 2);
+  else return;
+  e.preventDefault();
+}, true);
 
 /* ================= nav ================= */
 document.querySelectorAll("header .tab").forEach(b => b.onclick = () => show(b.dataset.view));
@@ -924,6 +1049,10 @@ document.addEventListener("keydown", e => {
   else if (e.key === "Enter"){ const b = document.querySelector(`.review-item.active .cand[data-idx="${hlIdx}"] .btn.primary`); if (b) b.click(); }
   else if ((e.key === "f" || e.key === "F") && it.type === "round"){ e.preventDefault(); openNote(reviewActive, "f", hlIdx); }
   else if (e.key === "x" || e.key === "X"){ e.preventDefault(); if (it.type === "round") openNote(reviewActive, "x"); }
+  else if (e.key === "v" || e.key === "V"){
+    const m = document.querySelector(`.review-item.active .cand[data-idx="${hlIdx}"] video, .review-item.active .cand[data-idx="${hlIdx}"] img`);
+    if (m) { e.preventDefault(); lbOpen(m); }
+  }
   else if (e.key === "r" || e.key === "R"){ act(it.type === "round" ? `/api/rounds/${it.id}/redo` : `/api/tasks/${it.id}/redo`, {}); }
 });
 
