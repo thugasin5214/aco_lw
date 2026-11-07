@@ -375,3 +375,26 @@ def test_cancelled_round_releases_waiting_run(env):
     run_all(a)
     assert last_run(studio)["status"] == "done"
     assert json.loads(script.seen[-1][-1]["content"])["decision"]["action"] == "cancel"
+
+
+def test_parked_message_tells_you_once_and_resumes_when_film_ends(env):
+    """Telegram 来一句话时正在拍片：告诉你在排队（只说一次），拍完自动接着处理。"""
+    studio, make, said = env
+    a, script = make({"text": "answer"})
+    rm = studio.orch.resources
+    rm.film_started("f1")
+    a.inbound("web", "进度如何", lambda t, b=None: None)
+    run_all(a)
+    assert last_run(studio)["status"] == "waiting_resources" and script.seen == []
+    parked = [t for t, _ in said if "FreeVideo" in t]
+    assert len(parked) == 1
+    a.runtime.on_resources_freed()  # 别的渲染结束也会唤醒：仍在拍片 → 继续排队，不重复通知
+    run_all(a)
+    assert len([t for t, _ in said if "FreeVideo" in t]) == 1 and script.seen == []
+    status = a.status_text()
+    assert "1" in status.split("Agent")[1] and "Film shooting: 1" in status
+    rm.films_shooting(set())  # 拍完 → 唤醒等待者
+    run_all(a)
+    assert last_run(studio)["status"] == "done" and len(script.seen) == 1
+    texts = [t for t, _ in said]
+    assert texts[-2].startswith("Memory is free") and texts[-1] == "answer"

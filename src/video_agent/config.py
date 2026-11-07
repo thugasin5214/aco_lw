@@ -20,7 +20,11 @@ class Settings:
     llm_session_ttl_s: int = 1200  # 会话活跃时延长驻留，保住前缀缓存
     session_summary_tokens: int = 16000  # 上一次调用超过此 prompt 长度即压缩较早消息
     session_keep_messages: int = 8  # 压缩时保留的最近原话条数
-    agent_max_steps: int = 16  # 一次请求里 agent 最多调用 LLM 的次数
+    agent_max_steps: int = 40  # 一次请求里 agent 最多调用 LLM 的次数（通用任务步骤多）
+    agent_skill_dirs: list[str] = field(default_factory=lambda: ["~/.claude/skills"])
+    tool_workers: int = 2  # 后台工具队列（命令、读网页、MCP 调用）并发数
+    # agent 可用的 MCP 服务（格式同 Claude Code / Codex 的 mcpServers；见 mcp_hub.py）
+    mcp_servers: dict = field(default_factory=dict)
     planner_fast: bool = False  # 末尾加 /no_think：实测 14.4 s → 9.3 s，思考约减半
     planner_backend: str = "lmstudio"  # lmstudio | openai_compatible | openrouter | anthropic
     # 本地 LLM 资源不够（如视频渲染占着内存）或不可用时，按顺序尝试：

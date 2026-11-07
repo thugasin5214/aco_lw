@@ -3,7 +3,7 @@
 本地视频 Agent。计划与进度见 `PLAN.md`，设计依据见 `docs/design.html`。
 
 ## 硬约束
-- 所有 ComfyUI 副作用只在编排器（`src/video_agent/`）里发生；LLM / Telegram 不直接调 ComfyUI 或 shell。
+- 编排器是中转：agent（LLM）只提出 tool call，编排器（`src/video_agent/`）执行并择机交回结果（LLM 被卸载时结果暂存）。所有 ComfyUI / FreeVideo 副作用只经编排器的生成工具；通用工具（读网页、执行命令、读写文件、skill、agent 记忆、MCP 服务，见 `toolbox.py` / `mcp_hub.py`）也由编排器执行——命令每条经用户批准（`policies.yaml` 的 `run_command.auto_allow` 可放行单条命令前缀），并拒绝直连 :8188、读 FreeVideo token、结束进程、加载/卸载 LLM（用户 2026-11-07 决定）。
 - 不取消、不释放非本系统提交的任务/模型；队列非空拒绝 `/free`。
 - 不改 ComfyUI 启动参数、全局 OpenClaw / LM Studio 配置。
 - agent 可以探索 ComfyUI（模型、节点、workflow）、搭建 / 修改 workflow、按最低档试跑（都经编排器）；**下载模型、安装自定义节点必须先经用户批准**（用户 2026-10-27 决定）。

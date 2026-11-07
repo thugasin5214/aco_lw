@@ -11,6 +11,20 @@ _LANG = "en"
 M: dict[str, tuple[str, str]] = {
     # 通用
     "ack": ("Got it — thinking…", "收到，正在理解……"),
+    "agent_parked": (
+        "Queued: {why}. I'll pick this up automatically as soon as memory frees up; /status works meanwhile (no LLM needed).",
+        "已排队：{why}。内存一空出来就自动接着处理；期间 /status 随时可查（不需要 LLM）。",
+    ),
+    "agent_resumed": (
+        "Memory is free — working on your message now…",
+        "内存空出来了，开始处理你的消息……",
+    ),
+    "park_film": (
+        "a FreeVideo film is shooting and needs the memory",
+        "FreeVideo 正在拍片，占着内存",
+    ),
+    "park_render": ("a video render is holding the memory", "视频正在生成，占着内存"),
+    "park_pressure": ("memory pressure is critical", "内存压力过高"),
     "llm_queued_video": (
         "A video is rendering and holding memory; the LLM will reply right after it finishes.",
         "视频生成占着内存，LLM 先排队，生成结束后马上处理。",
@@ -80,6 +94,14 @@ M: dict[str, tuple[str, str]] = {
     "agent_already_decided": ("That was already decided.", "这个已经决定过了。"),
     "agent_declined": ("OK — not doing that.", "好的，不做。"),
     "agent_approved": ("Approved.", "已同意。"),
+    "agent_mcp_approval": (
+        "The agent wants to call MCP tool {tool} with:\n```\n{args}\n```{why}",
+        "agent 想调用 MCP 工具 {tool}，参数：\n```\n{args}\n```{why}",
+    ),
+    "agent_cmd_approval": (
+        "The agent wants to run a command:\n```\n{cmd}\n```{why}",
+        "agent 想执行命令：\n```\n{cmd}\n```{why}",
+    ),
     "style_set": ("Planner style: {s}", "规划方式：{s}"),
     "locked_as": ("Locked as “{r}”", "已锁定为「{r}」"),
     "ask_lock": ("Lock it into the baseline pack?", "要锁进基准包吗？"),
@@ -178,6 +200,14 @@ M: dict[str, tuple[str, str]] = {
         "Project: {p}\nRendering: {r}{paused}, queued {q}\nMemory: {m} GiB free, pressure {pr}\nLLM: {llm}",
         "项目：{p}\n出图：{r}{paused}，排队 {q}\n内存：可用 {m} GiB，压力 {pr}\nLLM：{llm}",
     ),
+    "status_agent": (
+        "\nAgent: {a} working, {w} queued for the LLM",
+        "\nAgent：处理中 {a}，等 LLM 排队 {w}",
+    ),
+    "status_llm_loaded": (" (loaded)", "（已加载）"),
+    "status_llm_unloaded": (" (unloaded)", "（未加载）"),
+    "status_films": ("\nFilm shooting: {n} (LLM held back)", "\n正在拍片：{n} 部（LLM 暂不加载）"),
+    "status_prod": ("\nProduction “{t}”: {stage} — {c}", "\n制片《{t}》：{stage} — {c}"),
     "status_running": ("running {t}", "正在跑 {t}"),
     "status_idle": ("idle", "空闲"),
     "status_paused": (" (paused)", "（已暂停）"),
