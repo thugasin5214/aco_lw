@@ -2,6 +2,10 @@
 
 它们只拿到 aco_lw 的 MCP 工具：Claude Code 用 `--tools ""` 关掉全部内置工具（shell、读写文件、联网），
 Codex 用只读沙箱。所有工具调用经 daemon 执行，执行策略、审批、资源调度不变。
+
+`freevideo`：交给 FreeVideo 的 agent——即 Claude Code 再加上 FreeVideo 自己的 MCP 服务（配置取自
+FreeVideo 的 /freevideo/agent/connect，只写进本次运行的 --mcp-config，不改你的全局 Claude Code 配置；
+token 由 FreeVideo 的 MCP 服务自己读取）。它提交的生成在 FreeVideo 队列里，aco 的资源闸门照样看得见。
 """
 
 from __future__ import annotations
@@ -19,10 +23,11 @@ class AgentCLIError(RuntimeError):
 
 
 class AgentCLI:
-    def __init__(self, name: str, cfg):
-        if name not in ("claude_code", "codex"):
+    def __init__(self, name: str, cfg, extra_mcp: dict | None = None):
+        if name not in ("claude_code", "codex", "freevideo"):
             raise ValueError(f"unknown agent CLI {name}")
         self.name, self.cfg = name, cfg
+        self.extra_mcp = extra_mcp or {}  # 额外的 MCP 服务 {名字: 启动配置}
 
     def mcp_server(self, run_id: str, url: str) -> dict:
         return {
@@ -41,9 +46,10 @@ class AgentCLI:
 
     def command(self, run_id: str, url: str, workdir: Path) -> list[str]:
         spec = self.mcp_server(run_id, url)
-        if self.name == "claude_code":
+        if self.name in ("claude_code", "freevideo"):
             cfg_file = workdir / f"{run_id}.mcp.json"
-            cfg_file.write_text(json.dumps({"mcpServers": {"aco_lw": spec}}))
+            cfg_file.write_text(json.dumps({"mcpServers": {"aco_lw": spec, **self.extra_mcp}}))
+            allowed = " ".join(["mcp__aco_lw", *(f"mcp__{k}" for k in self.extra_mcp)])
             cmd = [
                 self.cfg.claude_cmd,
                 "-p",
@@ -55,7 +61,7 @@ class AgentCLI:
                 "--mcp-config",
                 str(cfg_file),
                 "--allowedTools",
-                "mcp__aco_lw",  # 只自动批准 aco_lw 的工具
+                allowed,  # 只自动批准这些 MCP 服务的工具
                 "--no-session-persistence",  # 不写进你的 Claude Code 会话历史
             ]
             if self.cfg.claude_model:
@@ -98,7 +104,7 @@ class AgentCLI:
             timeout=self.cfg.agent_cli_timeout_s,
         )
         stats = {"seconds": round(time.monotonic() - t, 1), "via": self.name}
-        if self.name == "claude_code":
+        if self.name in ("claude_code", "freevideo"):
             try:
                 obj = json.loads(proc.stdout)
             except json.JSONDecodeError:

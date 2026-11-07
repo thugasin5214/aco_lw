@@ -61,6 +61,7 @@ execution:
     send_file: {allow: true}
     mcp_list: {allow: true}
     mcp_call: {allow: true}
+    delegate_freevideo: {allow: true}  # 交给 FreeVideo agent：每次经你批准；需 freevideo_agent_online
 
 # MCP tools (servers configured in config.toml [mcp_servers.*]).
 # approval: unless_read_only (tools annotated readOnlyHint run directly) | always | never | deny

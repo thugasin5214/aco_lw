@@ -94,6 +94,18 @@ M: dict[str, tuple[str, str]] = {
     "agent_already_decided": ("That was already decided.", "这个已经决定过了。"),
     "agent_declined": ("OK — not doing that.", "好的，不做。"),
     "agent_approved": ("Approved.", "已同意。"),
+    "fv_offline": (
+        "Handing over to the FreeVideo agent uses Claude Code (online); turn on freevideo_agent_online (or allow_online) in config.toml first.",
+        "交给 FreeVideo agent 要用 Claude Code（在线）；先在 config.toml 打开 freevideo_agent_online（或 allow_online）。",
+    ),
+    "fv_delegate_approval": (
+        "Hand this task to the FreeVideo agent (Claude Code + FreeVideo tools)?\n{task}",
+        "把这个任务交给 FreeVideo agent（Claude Code + FreeVideo 工具）？\n{task}",
+    ),
+    "fv_started": (
+        "Handed to the FreeVideo agent (Claude Code). It reports back here; its videos are in FreeVideo's library.",
+        "已交给 FreeVideo agent（Claude Code）。它做完会在这里汇报；视频在 FreeVideo 的资料库里。",
+    ),
     "agent_mcp_approval": (
         "The agent wants to call MCP tool {tool} with:\n```\n{args}\n```{why}",
         "agent 想调用 MCP 工具 {tool}，参数：\n```\n{args}\n```{why}",
@@ -269,6 +281,7 @@ M: dict[str, tuple[str, str]] = {
 HELP = (
     """aco_lw commands (no LLM needed):
 /status system and queue status
+/fv <task> hand a video task to the FreeVideo agent (Claude Code + FreeVideo tools)
 /rounds recent rounds
 /round TEMPLATE [COUNT] [prompt]  queue a round directly
 /review re-send rounds waiting for review
@@ -285,6 +298,7 @@ HELP = (
 Anything else: a request or note — wakes the LLM.""",
     """aco_lw 命令（不唤醒 LLM）：
 /status 系统与队列状态
+/fv <任务> 把视频任务交给 FreeVideo agent（Claude Code + FreeVideo 工具）
 /rounds 最近几轮
 /round 模板 [数量] [prompt]  直接出一轮候选
 /review 重新推送待审阅的候选

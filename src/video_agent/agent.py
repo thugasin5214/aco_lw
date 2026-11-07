@@ -39,6 +39,14 @@ log = logging.getLogger("aco_lw.agent")
 RULES_FILE = ROOT / "prompts" / "agent_rules.md"
 TERMINAL_RUN = {"done", "failed", "cancelled"}
 MAX_RESULT_CHARS = 4000
+FREEVIDEO_ENV = (
+    "## FreeVideo agent\nYou are the FreeVideo agent for this request: make the video with the "
+    "`freevideo` MCP tools (read its guide / schema first; plan before generating; prefer drafts "
+    "before long or high-quality renders). FreeVideo queues and runs generation itself. Use the "
+    "aco_lw tools to talk to the user: `send_file` for results to look at, `ask_user` for "
+    "decisions, `run_command` / `load_skill` / `mcp_call` for downloads and research. Finish with "
+    "a short report: what you made, where it is (FreeVideo library / project) and what to decide next."
+)
 
 
 # ---------------- 工具定义 ----------------
@@ -348,6 +356,15 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
 
     def ask_user(ctx, a):
         return Pending("user", f"ask:{ctx['run_id']}", a["question"])
+
+    def delegate_freevideo_approved(ctx, a):
+        parent = rt.store.get_run(ctx["run_id"])
+        child = rt.delegate_freevideo(
+            a["task"], ctx["channel"], ctx["project_id"], parent["session_id"], start=False
+        )
+        return Pending(
+            "event", f"run:{child['id']}", start=lambda: rt._delegate(child, "freevideo")
+        )
 
     def mcp_call_approved(ctx, a):
         tb = rt.toolbox
@@ -792,6 +809,7 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
     hidden = [
         Tool("run_command_approved", "", _obj({}), "act", run_command_approved),
         Tool("mcp_call_approved", "", _obj({}), "act", mcp_call_approved),
+        Tool("delegate_freevideo_approved", "", _obj({}), "act", delegate_freevideo_approved),
         Tool("queue_round_approved", "", _obj({}), "act", queue_round_approved),
         Tool("select_approved", "", _obj({}), "act", select_approved),
         Tool("comfy_approved", "", _obj({}), "act", comfy_approved),
@@ -878,6 +896,16 @@ def general_tools(rt: AgentRuntime) -> list[Tool]:
             "",
             tr("agent_mcp_approval", tool=f"{server}.{name}", args=shown, why=reason),
             on_approve={"tool": "mcp_call_approved", "args": a},
+        )
+
+    def delegate_freevideo(ctx, a):
+        if not rt.freevideo_online_ok():
+            return Done({"error": tr("fv_offline")})
+        return Pending(
+            "approval",
+            "",
+            tr("fv_delegate_approval", task=a["task"][:1500]),
+            on_approve={"tool": "delegate_freevideo_approved", "args": a},
         )
 
     def send_file(ctx, a):
@@ -979,6 +1007,15 @@ def general_tools(rt: AgentRuntime) -> list[Tool]:
             ),
             "approval",
             mcp_call,
+        ),
+        Tool(
+            "delegate_freevideo",
+            "Hand a whole video task to the FreeVideo agent (Claude Code with FreeVideo's own MCP "
+            "tools: films, cast cards, timeline editing, references). Use it when the task needs "
+            "FreeVideo features our templates don't cover. The user approves; you get its report.",
+            _obj({"task": S}, ["task"]),
+            "approval",
+            delegate_freevideo,
         ),
         Tool(
             "send_file",
@@ -1254,6 +1291,8 @@ class AgentRuntime:
                 c = self._compact(r)
                 parts.append(f"{c[0]['content']}\n## Your earlier answer\n{c[1]['content']}")
         parts.append(self.store.agent_msgs(run["id"])[0]["content"])
+        if run["waiting"].get("agent") == "freevideo":
+            parts.append(FREEVIDEO_ENV)
         parts.append(
             "## Environment\nYou run inside aco_lw. Use only the aco_lw tools (commands, "
             "files, web pages and skills go through run_command / read_file / web_fetch / "
@@ -1279,11 +1318,41 @@ class AgentRuntime:
         )
         self.store.update_run(run_id, status="running")  # 离开 delegated 后再结束
         self._finish(self.store.get_run(run_id), None, status, say_text=text)
+        self.resolve(f"run:{run_id}", {"status": status, "reply": text})  # 唤醒在等它的运行
 
     def cli_runner(self, name: str):
         from .agent_cli import AgentCLI
 
+        if name == "freevideo":
+            return AgentCLI(name, self.cfg, self.freevideo_mcp())
         return AgentCLI(name, self.cfg)
+
+    def freevideo_mcp(self) -> dict:
+        """FreeVideo 自己给出的 MCP 启动配置（/freevideo/agent/connect）；token 不经过这里。"""
+        from .freevideo import FreeVideo
+
+        fv = FreeVideo(self.cfg.comfy_url)
+        r = fv.http.get(
+            self.cfg.comfy_url.rstrip("/") + "/freevideo/agent/connect", headers=fv._headers()
+        )
+        r.raise_for_status()
+        return r.json()["mcp_json"]["mcpServers"]
+
+    # ---- 交给 FreeVideo 的 agent（Claude Code + FreeVideo MCP） ----
+    def freevideo_online_ok(self) -> bool:
+        return bool(self.cfg.allow_online or getattr(self.cfg, "freevideo_agent_online", False))
+
+    def delegate_freevideo(
+        self, text: str, channel: str, project_id: str, session_id: str | None, start: bool = True
+    ) -> dict:
+        """新开一个运行，整个交给 FreeVideo agent；结束时以 `run:<id>` 唤醒在等它的运行。"""
+        if not self.freevideo_online_ok():
+            raise ValueError(tr("fv_offline"))
+        run = self.store.create_run(project_id, session_id, channel, text)
+        self.store.add_agent_msg(run["id"], "user", f"## User\n{text}")
+        if start:
+            self._delegate(run, "freevideo")
+        return run
 
     def external_tool(self, run_id: str, name: str, args: dict, timeout: float = 1800) -> dict:
         """CLI agent 经 MCP 发来的工具调用：同样的执行策略、审批与等待，只是同步返回结果。"""

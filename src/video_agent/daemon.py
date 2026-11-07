@@ -467,6 +467,18 @@ class Actions:
             say(i18n.help_text())
         elif cmd == "/status":
             say(self.status_text())
+        elif cmd == "/fv":
+            task = text.split(None, 1)[1].strip() if len(text.split(None, 1)) > 1 else ""
+            if not task:
+                say("/fv <task>")
+                return
+            pid, sid = self._ctx()
+            try:
+                self.runtime.delegate_freevideo(task, channel, pid, sid)
+            except ValueError as e:
+                say(str(e))
+                return
+            say(tr("fv_started"))
         elif cmd == "/pause":
             store.set_kv("paused", True)
             cur = self.worker.stop_current() if self.worker and args[:1] == ["now"] else None

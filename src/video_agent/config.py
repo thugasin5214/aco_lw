@@ -32,6 +32,8 @@ class Settings:
     #   "claude_code" / "codex"（本机的 agent CLI + 它们的在线模型，经 aco_lw MCP 工具工作，只接新请求）
     llm_fallback: list[str] = field(default_factory=list)
     allow_online: bool = False  # 隐私开关：允许把对话发给在线模型 / 在线 agent（默认关）
+    # 只为“交给 FreeVideo agent”（/fv、delegate_freevideo）放行在线（Claude Code）；其他仍按 allow_online
+    freevideo_agent_online: bool = False
     anthropic_model: str = "claude-opus-5-5"
     anthropic_effort: str = "medium"  # low | medium | high | xhigh | max
     anthropic_api_key: str = ""  # 留空：由 SDK 按环境变量 / `ant auth login` 解析

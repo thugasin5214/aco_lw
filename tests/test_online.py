@@ -357,3 +357,71 @@ def test_codex_error_is_read_from_event_stream():
     out = '{"type":"thread.started"}\n{"type":"turn.failed","error":{"message":"{\\"error\\":{\\"message\\":\\"model not supported\\"}}"}}'
     assert AgentCLI._codex_error(out) == "model not supported"
     assert AgentCLI._codex_error('{"type":"turn.completed"}') is None
+
+
+# ---------------- 交给 FreeVideo agent ----------------
+def test_freevideo_agent_cli_gets_both_mcp_servers(env, tmp_path):  # noqa: F811
+    from video_agent.agent_cli import AgentCLI
+
+    studio, _, _ = env
+    fv = {"freevideo": {"command": "/py", "args": ["-m", "freevideo_engine.agent.mcp"]}}
+    cmd = AgentCLI("freevideo", studio.orch.cfg, fv).command("r1", "http://x", tmp_path)
+    assert cmd[cmd.index("--tools") + 1] == ""
+    assert cmd[cmd.index("--allowedTools") + 1] == "mcp__aco_lw mcp__freevideo"
+    servers = json.loads((tmp_path / "r1.mcp.json").read_text())["mcpServers"]
+    assert set(servers) == {"aco_lw", "freevideo"}
+
+
+def test_fv_command_needs_its_online_switch_then_hands_over(env, monkeypatch):  # noqa: F811
+    studio, make, said = env
+    a, script = make()
+    seen = {}
+
+    class FakeCLI:
+        def run(self, run_id, prompt, url):
+            seen["prompt"] = prompt
+            return "made it in FreeVideo", {"via": "freevideo"}
+
+    a.runtime.cli_runner = lambda name: seen.setdefault("name", name) and FakeCLI()
+    monkeypatch.setattr("threading.Thread.start", lambda self: self.run())
+    replies = []
+    a.inbound("web", "/fv dance video", lambda t, b=None: replies.append(t))
+    assert "freevideo_agent_online" in replies[-1] and "name" not in seen  # 没打开：不发出去
+    studio.orch.cfg.freevideo_agent_online = True  # 只为这条路线放行在线
+    assert studio.orch.cfg.allow_online is False
+    a.inbound("web", "/fv dance video", lambda t, b=None: None)
+    assert seen["name"] == "freevideo" and "FreeVideo agent" in seen["prompt"]
+    assert "dance video" in seen["prompt"] and script.seen == []
+    assert said[-1][0] == "made it in FreeVideo" and last_run(studio)["status"] == "done"
+
+
+def test_local_agent_hands_over_after_approval_and_gets_the_report(env, monkeypatch):  # noqa: F811
+    studio, make, said = env
+    studio.orch.cfg.freevideo_agent_online = True
+    a, _script = make(
+        {"tool_calls": [call("delegate_freevideo", {"task": "make a cast card film"})]},
+        lambda msgs: {"text": "FreeVideo says: " + json.loads(msgs[-1]["content"])["reply"]},
+    )
+
+    class FakeCLI:
+        def run(self, run_id, prompt, url):
+            return "film ready", {"via": "freevideo"}
+
+    a.runtime.cli_runner = lambda name: FakeCLI()
+    monkeypatch.setattr("threading.Thread.start", lambda self: self.run())
+    a.inbound("web", "make a film with cast cards", lambda t, b=None: None)
+    run_all(a)
+    parent = studio.store.runs(None)[0]
+    assert parent["status"] == "waiting_user"  # 先问你同不同意交出去
+    m = next(
+        x
+        for x in studio.store.agent_msgs(parent["id"])
+        if x["role"] == "tool" and x["status"] != "done"
+    )
+    a.runtime.on_approval(m["id"], True)
+    run_all(a)
+    runs = {r["id"]: r for r in studio.store.runs(None)}
+    child = next(r for r in runs.values() if r["id"] != parent["id"])
+    assert child["status"] == "done" and child["origin_text"] == "make a cast card film"
+    assert runs[parent["id"]]["status"] == "done"
+    assert said[-1][0] == "FreeVideo says: film ready"
