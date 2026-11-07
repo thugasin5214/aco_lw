@@ -24,6 +24,7 @@ from .render import params_hash, resolve
 from .resources import ResourceManager
 from .store import Store
 
+HARD_LIMIT_S = 24 * 3600  # 有心跳也最多盯这么久
 LOST_POLLS = 5  # 连续几次在队列与历史里都找不到，才认定任务丢失
 
 
@@ -274,7 +275,9 @@ class Orchestrator:
                 task = self.store.get(task_id)
                 if task["state"] == "submitted" and poll.state == "running":
                     self.store.transition(task_id, "running")
-                if time.monotonic() - start > limit:
+                elapsed = time.monotonic() - start
+                # 执行端还报心跳（预计耗时常常不准）就继续盯，直到硬上限
+                if elapsed > limit and not (poll.alive and elapsed < HARD_LIMIT_S):
                     poll = None
                     break
                 self.sleep(self.cfg.poll_interval_s)

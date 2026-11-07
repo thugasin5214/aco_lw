@@ -23,7 +23,9 @@ CARD_LABELS = ("front", "three_quarter", "side", "back", "face", "sheet", "other
 
 class FreeVideoError(RuntimeError):
     def __init__(self, status: int, body: Any):
+        self.status = status
         err = body.get("error", {}) if isinstance(body, dict) else {}
+        err = err if isinstance(err, dict) else {"code": str(err)}
         self.code = err.get("code", str(status))
         self.body = body
         msg = err.get("message") or str(body)[:300]

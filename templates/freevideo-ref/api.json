@@ -1,0 +1,1 @@
+{"1": {"class_type": "FreeVideoAgentJob", "inputs": {"prompt": "", "ref_video": "", "early_steps": 0, "ref_image": "", "ref_image2": "", "seed": 0, "quality": "light", "width": 960, "height": 544, "seconds": 5}}}
