@@ -31,6 +31,23 @@ RETRY_S = 60.0  # 等你在 FreeVideo 页面批准时，多久重发一次开拍
 _FIX = re.compile(r"Use /screenplay/shots/(\d+)/seconds ([\d.]+)")
 
 
+FILM_DONE = ("cancelled", "done", "finished", "completed", "failed", "wrapped")
+TAKE_ACTIVE = ("queued", "running", "waiting")
+
+
+def film_active(film: dict) -> bool:
+    """还在拍（占内存）：没结束，且有 take 在排 / 在拍，或还有镜头一条 take 都没有。"""
+    if film.get("status") in FILM_DONE:
+        return False
+    shots = film.get("shots") or []
+    if film.get("status") == "needs_choice":  # 在等你选 take / 处理中断：FreeVideo 空闲
+        return any(t.get("state") in TAKE_ACTIVE for sh in shots for t in sh.get("takes") or [])
+    return any(
+        not sh.get("takes") or any(t.get("state") in TAKE_ACTIVE for t in sh["takes"])
+        for sh in shots
+    )
+
+
 def _script_hash(sp: dict) -> str:
     return hashlib.sha256(json.dumps(sp, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
 
@@ -43,6 +60,16 @@ class FilmDriver:
         # daemon 注入：给你发一条提醒（例如去 FreeVideo 批准）
         self.notify_text = lambda prod, key: None
         self._last_retry: dict[str, float] = {}
+        # daemon 注入 ResourceManager：拍片独占内存（开拍前卸载 LLM，拍片期间不让它加载）
+        self.resources = None
+
+    def _make_room(self) -> None:
+        if self.resources is not None:
+            self.resources.prepare_film()
+
+    def _started(self, film_id: str) -> None:
+        if self.resources is not None:
+            self.resources.film_started(film_id)
 
     # ---- 角色卡 ----
     def cards_tool(self, prod: dict, st: Stage, inputs: dict) -> dict:
@@ -215,8 +242,10 @@ class FilmDriver:
             sp["quality"] = overrides["quality"]
         ref = f"aco-{prod['id']}-{st.id}-{int(time.time())}"
         plan, fixed = self._validated_plan(sp, takes)  # 先校验（不提交）：写错的地方在这里就报出来
+        self._make_room()
         try:
             film = self.fv.start_film(sp, takes=takes, ref=ref)
+            self._started(film["id"])
         except FreeVideoError as e:
             if e.code != "needs_confirmation":
                 raise
@@ -287,7 +316,9 @@ class FilmDriver:
 
     def _reshoot(self, prod, st, film_id, key, note, deps) -> dict:
         takes = int(prod["settings"].get("video_candidates") or 1)
+        self._make_room()
         self.fv.reshoot(film_id, key, note=note, takes=takes)
+        self._started(film_id)
         imported = sorted(
             {
                 job
@@ -356,32 +387,63 @@ class FilmDriver:
     # ---- 轮询：拍完的 take 导入为待审阅的一轮 ----
     def tick(self) -> int:
         imported = 0
+        shooting: set[str] = set()
         for prod in self.store.productions():
+            if prod["state"] == "paused":  # 暂停不推进，但 FreeVideo 可能还在拍：照样算占内存
+                shooting |= self._shooting(prod)
+                continue
             if prod["state"] != "active":
                 continue
-            self._retry_pending_start(prod)
-            waiting: dict[str, dict[str, dict]] = {}
-            for a in self.store.artifacts(prod["id"], None, "running"):
-                meta = a["meta"] or {}
-                if meta.get("film") and not a["round_id"]:
-                    waiting.setdefault(meta["film"], {})[meta["shot"]] = a
-            for film_id, arts in waiting.items():
-                try:
-                    film = self.fv.film(film_id)
-                except FreeVideoError as e:
-                    self.engine.log(f"film {film_id}: read failed: {e}")
-                    continue
-                for shot in film.get("shots") or []:
-                    art = arts.get(shot["id"])
-                    if art is not None:
-                        imported += self._import(prod, art, film, shot)
-                if film.get("status") == "cancelled":  # 片被取消：没拍完的镜头不会再有 take，标失败好让你重跑
-                    for art in arts.values():
-                        cur = self.store.get_artifact(art["id"])
-                        if cur["status"] == "running" and not cur["round_id"]:
-                            self.store.update_artifact(
-                                art["id"], status="failed", note=f"film {film_id} was cancelled"
-                            )
+            imported += self._tick_production(prod, shooting)
+        # 只在完整读完一轮后更新；中途出错（FreeVideo 不可达）保留上一轮的结论
+        if self.resources is not None:
+            self.resources.films_shooting(shooting)
+        return imported
+
+    def _shooting(self, prod: dict) -> set[str]:
+        out = set()
+        for film_id in {
+            (a["meta"] or {}).get("film")
+            for a in self.store.artifacts(prod["id"], None, "running")
+            if (a["meta"] or {}).get("film") and not a["round_id"]
+        }:
+            try:
+                film = self.fv.film(film_id)
+            except Exception:  # noqa: BLE001 — 读不到：保守地当作还在拍
+                out.add(film_id)
+                continue
+            if film_active(film):
+                out.add(film_id)
+        return out
+
+    def _tick_production(self, prod: dict, shooting: set[str]) -> int:
+        imported = 0
+        self._retry_pending_start(prod)
+        waiting: dict[str, dict[str, dict]] = {}
+        for a in self.store.artifacts(prod["id"], None, "running"):
+            meta = a["meta"] or {}
+            if meta.get("film") and not a["round_id"]:
+                waiting.setdefault(meta["film"], {})[meta["shot"]] = a
+        for film_id, arts in waiting.items():
+            try:
+                film = self.fv.film(film_id)
+            except FreeVideoError as e:
+                self.engine.log(f"film {film_id}: read failed: {e}")
+                shooting.add(film_id)  # 读不到：保守地当作还在拍
+                continue
+            if film_active(film):
+                shooting.add(film_id)
+            for shot in film.get("shots") or []:
+                art = arts.get(shot["id"])
+                if art is not None:
+                    imported += self._import(prod, art, film, shot)
+            if film.get("status") == "cancelled":  # 片被取消：没拍完的镜头不会再有 take，标失败好让你重跑
+                for art in arts.values():
+                    cur = self.store.get_artifact(art["id"])
+                    if cur["status"] == "running" and not cur["round_id"]:
+                        self.store.update_artifact(
+                            art["id"], status="failed", note=f"film {film_id} was cancelled"
+                        )
         return imported
 
     def _retry_pending_start(self, prod: dict) -> None:
@@ -400,7 +462,9 @@ class FilmDriver:
             return  # 别每轮都重发（每次都会在 FreeVideo 对话里记一条“需要确认”）
         self._last_retry[req["ref"]] = now
         try:
+            self._make_room()
             film = self.fv.start_film(req["screenplay"], takes=req["takes"], ref=req["ref"])
+            self._started(film["id"])
         except FreeVideoError as e:
             if e.code != "needs_confirmation":  # 包括你点了拒绝（declined_by_user）：不再重发
                 self.engine.log(f"film start for {prod['id']} failed: {e}")
@@ -426,6 +490,11 @@ class FilmDriver:
         if any(t.get("state") in ("queued", "running", "waiting") for t in takes):
             return 0  # 这一镜还有 take 在拍：等齐了一起审（不必逐条查询）
         for t in takes:
+            if not t.get("task") and t.get("state") == "failed":
+                # 没生成任务就失败了（例如 continuation_unavailable）：没有 job 可查，错误在 take 里
+                err = t.get("error") or {}
+                jobs[t["take"]] = {"status": "failed", "error": err.get("error_zh") or err.get("message")}
+                continue
             # take 的 job 是幂等键；真正的任务 ID 在 task 字段
             job = self.fv.call("GET", f"/jobs/{t.get('task') or t['job']}").get("job") or {}
             if job.get("status") not in TERMINAL_JOB:
@@ -452,6 +521,8 @@ class FilmDriver:
                 "prompt": ((art["meta"] or {}).get("prompt") or "")[:4000],
             }
             outputs, state, note = [], "failed", f"FreeVideo take {t['take']}: {job.get('status')}"
+            if job.get("error"):
+                note += f" ({job['error']})"
             video = ((job.get("result") or {}).get("video") or {}).get("url")
             if job.get("status") == "succeeded" and video:
                 state, note = "review", f"FreeVideo take {t['take']} (job {t['job']})"

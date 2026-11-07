@@ -135,6 +135,10 @@ class LLMWorkload:
         llm.load(self.cfg.llm_model, self.cfg.llm_context, ttl)
 
 
+class ResourceBusy(RuntimeError):
+    pass
+
+
 @dataclass
 class RenderGate:
     ok: bool
@@ -163,6 +167,8 @@ class ResourceManager:
         self.listeners: list[Callable[[], None]] = []  # 渲染结束 → 唤醒被暂存的 LLM 作业
         self.history: collections.deque = collections.deque(maxlen=720)  # 约 1 小时（5 s 一次）
         self.executors: dict | None = None  # 由编排器注入：跨进程把关时直接问执行端
+        # 正在拍的 FreeVideo 电影（制片 film 阶段）：不经 prepare_render，但同样独占内存
+        self.films: set[str] = set()
 
         self._lock = threading.RLock()
 
@@ -220,12 +226,46 @@ class ResourceManager:
             ra = self.render_active
             if ra and ra["exclusive"]:
                 return False, f"{ra['kind']} render running ({ra['family']}) — needs the memory"
+            if self.films:
+                return False, "FreeVideo film shooting — needs the memory"
         ext = self.external_exclusive()
         if ext and not self.llm.loaded():
             return False, ext  # 已加载的 LLM 不在此卸载；只阻止在独占渲染期间重新加载
         if self.snap()["pressure"] >= 4:
             return False, "memory pressure critical"
         return True, ""
+
+    # ---- FreeVideo 电影把关（制片 film 阶段直接调 FreeVideo agent API，不经 prepare_render） ----
+    def prepare_film(self) -> list[str]:
+        """开拍 / 重拍前：等 LLM 写完当前回答再卸载。2026-11-05 实测：拍片时 27B LLM（25.5 GiB）
+        仍常驻，与 FreeVideo（51 GiB）共存触发 Jetsam，整机卡死重启。"""
+        actions: list[str] = []
+        if self.llm.loaded():
+            if not self.llm.wait_idle(ANSWER_WAIT_S):  # 不打断正在写的回答
+                raise ResourceBusy("LLM is still answering; start the film again in a moment")
+            self.llm.unload()
+            actions.append(f"unloaded LLM {self.cfg.llm_model} (FreeVideo film)")
+            self.log(actions[-1])
+        return actions
+
+    def film_started(self, film_id: str) -> None:
+        with self._lock:
+            self.films.add(film_id)
+
+    def films_shooting(self, film_ids: set[str]) -> None:
+        """film 轮询每轮上报还在拍的电影。有片在拍：LLM 不得加载，已常驻的空闲后卸载
+        （覆盖 daemon 重启后接着拍、或拍片途中别处又加载了 LLM 的情况）；全部拍完：唤醒等待者。"""
+        with self._lock:
+            was, self.films = self.films, set(film_ids)
+        if self.films and self.llm.loaded() and self.llm.wait_idle(0):
+            self.llm.unload()
+            self.log(f"unloaded LLM {self.cfg.llm_model} (FreeVideo film shooting)")
+        if was and not self.films:
+            for cb in list(self.listeners):
+                try:
+                    cb()
+                except Exception as e:  # noqa: BLE001
+                    self.log(f"resource listener failed: {e}")
 
     # ---- 渲染把关（替代 memgate.ensure） ----
     def prepare_render(self, template: Template, tier: str, executor, task_id: str) -> RenderGate:

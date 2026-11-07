@@ -293,3 +293,80 @@ def test_overrides_shoot_a_reviewed_shot_again_in_its_own_film(film_prod):
     assert [s["id"] for s in sp["shots"]] == ["sh01"]
     assert p._prod(pr["id"])["settings"].get("film_quality", "medium") == "medium"  # 制片设置不变
     assert any(r["template"] == "freevideo-take" for r in p.store.rounds(None, "review"))  # 旧的一轮还在
+
+
+class FakeRM:
+    """记录 film 对资源管理器的调用（真实把关逻辑见 test_resources）。"""
+
+    def __init__(self):
+        self.calls, self.films = [], set()
+
+    def prepare_film(self):
+        self.calls.append("prepare")
+        return []
+
+    def film_started(self, film_id):
+        self.calls.append(("started", film_id))
+        self.films.add(film_id)
+
+    def films_shooting(self, ids):
+        self.calls.append(("shooting", frozenset(ids)))
+        self.films = set(ids)
+
+
+def test_film_start_and_reshoot_make_room_and_report_shooting(film_prod):
+    """2026-11-05：拍片绕过了 prepare_render，LLM 常驻 + FreeVideo 撑爆内存。开拍 / 重拍前必须先腾内存。"""
+    p = film_prod
+    rm = p.film.resources = FakeRM()
+    pr = to_film(p)
+    p.run_stage(pr["id"], "clips")
+    assert rm.calls[:2] == ["prepare", ("started", "d000000000001")]  # 先腾内存再开拍
+    p.film.tick()
+    assert rm.films == {"d000000000001"}  # 还有镜头没 take：在拍
+    p.fv.finish_takes("sh01")
+    p.fv.finish_takes("sh02")
+    p.film.tick()
+    assert rm.films == set()  # 全部拍完：不再占内存
+    rm.calls.clear()
+    p.film._reshoot(p._prod(pr["id"]), p._wf(p._prod(pr["id"])).stage("clips"), "d000000000001", "sh01", "again", [])
+    assert rm.calls == ["prepare", ("started", "d000000000001")]
+
+
+def test_paused_production_film_still_counts_as_shooting(film_prod):
+    p = film_prod
+    rm = p.film.resources = FakeRM()
+    pr = to_film(p)
+    p.run_stage(pr["id"], "clips")
+    p.pause(pr["id"])
+    p.film.tick()
+    assert rm.films == {"d000000000001"}  # 暂停不推进，但 FreeVideo 还在拍
+    p.fv.film_state["status"] = "cancelled"
+    p.film.tick()
+    assert rm.films == set()
+
+
+def test_film_active():
+    from video_agent.film import film_active
+
+    assert film_active({"status": "shooting", "shots": [{"id": "a", "takes": []}]})
+    assert film_active({"shots": [{"id": "a", "takes": [{"state": "running"}]}]})
+    assert not film_active({"shots": [{"id": "a", "takes": [{"state": "done"}]}]})
+    assert not film_active({"status": "cancelled", "shots": [{"id": "a", "takes": []}]})
+    idle = {"status": "needs_choice", "shots": [{"id": "a", "takes": [{"state": "failed"}]}, {"id": "b", "takes": []}]}
+    assert not film_active(idle)  # 等你选 / 中断后：不占内存
+
+
+def test_take_failed_before_a_task_is_imported_without_job_lookup(film_prod):
+    """Mac 上 FreeVideo 不支持续拍：take 直接 failed、没有 task，按 job 键去查会 not_found 让整轮轮询失败。"""
+    p = film_prod
+    pr = to_film(p)
+    p.run_stage(pr["id"], "clips")
+    sh = p.fv.film_state["shots"][0]
+    sh["takes"].append({"take": 1, "job": "d1:sh01:t1", "task": None, "state": "failed",
+                        "error": {"code": "continuation_unavailable", "error_zh": "当前生成方式不支持接续视频"}})
+    assert p.film.tick() == 1  # 不查 /jobs（FakeFV.call 对未知 id 会断言失败）
+    items = {i["key"]: i["state"] for i in stage(p.plan(pr["id"]), "clips")["items"]}
+    assert items["sh01"] == "failed"  # 全部 take 失败：条目失败，可重跑
+    (task,) = [t for t in p.store.by_state("failed") if t["template"] == "freevideo-take"]
+    notes = [r[0] for r in p.store.db.execute("SELECT note FROM events WHERE task_id=?", (task["id"],))]
+    assert task["state"] == "failed" and any("接续" in (n or "") for n in notes)

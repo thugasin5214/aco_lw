@@ -61,7 +61,9 @@ class ComfyExecutor:
         """agent 搭建的任意 workflow：校验后原样提交，只把保存节点的前缀改成本任务（方便收集与追踪）。"""
         graph = json.loads(task["params"]["graph"])
         for node in graph.values():
-            if node.get("class_type", "").startswith("Save") and "filename_prefix" in node.get("inputs", {}):
+            if node.get("class_type", "").startswith("Save") and "filename_prefix" in node.get(
+                "inputs", {}
+            ):
                 node["inputs"]["filename_prefix"] = f"aco_lw/{task['id']}"
         problems = check_graph(graph, self.object_info())
         if problems:
