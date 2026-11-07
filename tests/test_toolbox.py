@@ -2,6 +2,7 @@
 
 import json
 import time
+from pathlib import Path
 
 import pytest
 from test_agent import call, env, last_run, run_all  # noqa: F401 — env 是 fixture
@@ -162,6 +163,9 @@ def test_files_skills_memory_and_media(env, tmp_path):  # noqa: F811
     (tb.workdir("r1") / "clip.mp4").write_bytes(b"v")
     up = tb.add_media("r1", "clip.mp4", None)
     assert up["upload"].startswith("@upload:") and up["kind"] == "video"
+    assert tb.readable("r1", up["upload"]) == Path(up["path"]).resolve()  # @upload:ID 当路径用
+    with pytest.raises(ValueError):
+        tb.readable("r1", "@task:nope")
 
 
 def test_restart_reports_interrupted_jobs(env):  # noqa: F811
@@ -209,6 +213,7 @@ def test_mcp_read_only_runs_directly_others_need_approval(env):  # noqa: F811
         {"text": "posted"},
     )
     a.inbound("web", "go", lambda t, b=None: None)
+
     def pump():  # mcp_list、search 在后台跑，各自交回：一直推进到停下等批准
         run_all(a)
         return last_run(studio)["status"] == "waiting_user"

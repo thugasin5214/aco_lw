@@ -1020,7 +1020,16 @@ def general_tools(rt: AgentRuntime) -> list[Tool]:
         Tool(
             "send_file",
             "Send an image / video / file to the user (e.g. a contact sheet for them to judge).",
-            _obj({"path": S, "caption": S}, ["path"]),
+            _obj(
+                {
+                    "path": {
+                        "type": "string",
+                        "description": "a file path, @task:ID or @upload:ID",
+                    },
+                    "caption": S,
+                },
+                ["path"],
+            ),
             "act",
             send_file,
         ),

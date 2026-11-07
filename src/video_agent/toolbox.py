@@ -103,6 +103,18 @@ class Toolbox:
         return [r for r in roots if r.is_dir()]
 
     def _resolve(self, run_id: str, path: str) -> Path:
+        path = path.strip()
+        store = self.rt.studio.store
+        if path.startswith("@task:"):  # 任务产物：第一个输出文件
+            task = store.get(path[len("@task:") :])
+            if not task or not task["outputs"]:
+                raise ValueError(f"{path}: no such task or it has no output")
+            return (store.task_dir(task["id"]) / task["outputs"][0]["file"]).resolve()
+        if path.startswith("@upload:"):
+            up = store.get_upload(path[len("@upload:") :])
+            if not up:
+                raise ValueError(f"{path}: no such upload")
+            return Path(up["path"]).resolve()
         p = Path(path).expanduser()
         return (p if p.is_absolute() else self.workdir(run_id) / p).resolve()
 
