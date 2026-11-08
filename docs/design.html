@@ -23,7 +23,7 @@ footer{border-top:1px solid var(--line);margin-top:56px;padding-top:20px;color:v
 <p><span class="badge">设计稿 · 评审后修订</span> <span class="muted small">2026-10-26 · Sirius Li</span></p>
 <h1>轻量本地视频 Agent<br>设计文档：评审、架构与人在回路</h1>
 <p class="muted">基于《本地接管试验报告（已核对）》与《轻量本地视频 Agent · 实施计划》。Telegram + 自建服务为主入口，确定性编排器掌握一切副作用，LLM 按需唤醒，OpenClaw 作为可调用的子 agent。</p>
-<nav><a href="#scope">背景</a><a href="#review">计划评审</a><a href="#feasibility">可行性</a><a href="#concerns">Concern</a><a href="#design">设计建议</a><a href="#architecture">目标架构</a><a href="#hitl">人在回路</a><a href="#roadmap">里程碑</a><a href="#open">待决问题</a></nav>
+<nav><a href="#scope">背景</a><a href="#review">计划评审</a><a href="#feasibility">可行性</a><a href="#concerns">Concern</a><a href="#design">设计建议</a><a href="#architecture">目标架构</a><a href="#agent-now">通用 agent 现状</a><a href="#hitl">人在回路</a><a href="#roadmap">里程碑</a><a href="#open">待决问题</a></nav>
 
 <h2 id="scope">1. 背景与范围</h2>
 <p class="lead">结论：用本地 27B 模型做“控制面”、ComfyUI 做“执行面”的方向可行，但目前只证明了最容易的一环（读事实写报告）。真正的风险点——自主改工作流、视频端到端、生成峰值内存——全部未验证。建议先把 LLM 从关键路径上拿掉，做一个确定性的编排器，再把 LLM 作为可选的规划器接入。</p>
@@ -178,7 +178,7 @@ footer{border-top:1px solid var(--line);margin-top:56px;padding-top:20px;color:v
 </tbody></table></div>
 
 <h2 id="architecture">6. 目标架构</h2>
-<p class="lead">两个入口汇入同一个编排器；LLM 规划器是可选件；Telegram 和 LLM 都碰不到 ComfyUI 或 shell，OpenClaw 由编排器按需调用。</p>
+<p class="lead">（2026-11-07：本节的 OpenClaw 子 agent 设计已被 <a href="#agent-now">§6b</a> 取代。）两个入口汇入同一个编排器；LLM 规划器是可选件；Telegram 和 LLM 都碰不到 ComfyUI 或 shell，OpenClaw 由编排器按需调用。</p>
 <figure><svg viewBox="0 0 760 560" role="img" aria-label="只有编排器能接触 ComfyUI；OpenClaw 由它按需调用" font-size="13">
 <defs><marker id="aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="s-m"/></marker></defs>
 <text x="24" y="34" font-size="15" font-weight="600" class="s-t">只有编排器能接触 ComfyUI；OpenClaw 由它按需调用</text>
@@ -203,6 +203,51 @@ footer{border-top:1px solid var(--line);margin-top:56px;padding-top:20px;color:v
 </svg><figcaption>目标架构：入口、可选规划器、编排器、执行端</figcaption></figure>
 <p>一个任务的生命周期：草稿 → 已校验 → 等待内存 → 已提交 → 生成中 → 待审阅 → 完成 / 打回 / 失败 / 超时。每次状态变化都写回 manifest，进程重启后按 prompt_id 去 /history 对账，避免重复提交。</p>
 <p>编排器对外只暴露四条命令：<code>plan</code>（可选，调 LLM 出参数）、<code>submit</code>（校验并提交）、<code>status</code>（查任务）、<code>release</code>（空闲时释放）。Telegram 监听器只能调用这四条命令；OpenClaw 由编排器调用，自己不能调用它们。</p>
+
+<h2 id="agent-now">6b. 现状：通用 agent 架构（2026-11-07）</h2>
+<p class="lead">上面 §6 的“OpenClaw 子 agent 提供搜索 / Skills / MCP”已被取代：这些能力改由编排器自己执行（用户 2026-11-07 决定）。LLM 是大脑，只提出 tool call；编排器是中转，执行全部工具，并按内存情况择机把结果交回 LLM。</p>
+<figure><svg viewBox="0 0 760 560" role="img" aria-label="入口进入编排器；本地 LLM 只提出 tool call；编排器执行生成工具、通用工具、命令和 MCP，并可经批准把整件事委托给外部 agent" font-size="13">
+<defs><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="s-m"/></marker></defs>
+<text x="24" y="34" font-size="15" font-weight="600" class="s-t">LLM 只提出 tool call；编排器执行一切，并决定何时把结果交回</text>
+<rect x="24" y="60" width="216" height="56" rx="8" class="s-b"/><text x="132" y="84" text-anchor="middle" font-weight="600" class="s-t">Telegram</text><text x="132" y="102" text-anchor="middle" font-size="11.5" class="s-q">对话、按钮审批、收图 / 视频</text>
+<rect x="272" y="60" width="216" height="56" rx="8" class="s-b"/><text x="380" y="84" text-anchor="middle" font-weight="600" class="s-t">Web 控制台 :8790</text><text x="380" y="102" text-anchor="middle" font-size="11.5" class="s-q">同一套会话、审阅台、进度</text>
+<rect x="520" y="60" width="216" height="56" rx="8" class="s-b"/><text x="628" y="84" text-anchor="middle" font-weight="600" class="s-t">CLI（va）</text><text x="628" y="102" text-anchor="middle" font-size="11.5" class="s-q">不经 LLM 也能提交 / 批量</text>
+<rect x="24" y="148" width="340" height="58" rx="8" class="s-b"/><text x="194" y="172" text-anchor="middle" font-weight="600" class="s-t">Agent 大脑：本地 LLM（LM Studio）</text><text x="194" y="190" text-anchor="middle" font-size="11.5" class="s-q">会话历史 + 自己的记忆 + skill 索引；只出 tool call</text>
+<rect x="396" y="148" width="340" height="58" rx="8" class="s-b s-d"/><text x="566" y="172" text-anchor="middle" font-weight="600" class="s-t">外部 agent（每次经你批准）</text><text x="566" y="190" text-anchor="middle" font-size="11.5" class="s-q">Claude Code + FreeVideo MCP（/fv、delegate_freevideo）</text>
+<g class="s-l"><path d="M380 116V238" marker-end="url(#ab)"/><path d="M194 208V238" marker-start="url(#ab)" marker-end="url(#ab)"/><path d="M566 238V208" marker-end="url(#ab)"/><path d="M107 440V470" marker-end="url(#ab)"/><path d="M289 440V470" marker-end="url(#ab)"/><path d="M471 440V470" marker-end="url(#ab)"/><path d="M653 440V470" marker-end="url(#ab)"/></g>
+<rect x="24" y="240" width="712" height="200" rx="8" class="s-a"/><text x="40" y="264" font-weight="600" class="s-t">编排器（Python）：执行全部 tool call，结果落库，LLM 被卸载时暂存</text>
+<rect x="40" y="280" width="216" height="64" rx="8" class="s-b"/><text x="148" y="304" text-anchor="middle" font-weight="600" class="s-t">生成工具</text><text x="148" y="322" text-anchor="middle" font-size="11.5" class="s-q">轮次、审阅、制片、ComfyUI 探索</text>
+<rect x="272" y="280" width="216" height="64" rx="8" class="s-b"/><text x="380" y="304" text-anchor="middle" font-weight="600" class="s-t">通用工具</text><text x="380" y="322" text-anchor="middle" font-size="11.5" class="s-q">读网页、读写文件、skill、记忆、发文件</text>
+<rect x="504" y="280" width="216" height="64" rx="8" class="s-b"/><text x="612" y="304" text-anchor="middle" font-weight="600" class="s-t">run_command</text><text x="612" y="322" text-anchor="middle" font-size="11.5" class="s-q">每条经你批准；危险操作直接拒绝</text>
+<rect x="40" y="360" width="216" height="64" rx="8" class="s-b"/><text x="148" y="384" text-anchor="middle" font-weight="600" class="s-t">MCP hub</text><text x="148" y="402" text-anchor="middle" font-size="11.5" class="s-q">只读工具直跑，其余经批准</text>
+<rect x="272" y="360" width="216" height="64" rx="8" class="s-b"/><text x="380" y="384" text-anchor="middle" font-weight="600" class="s-t">后台工具队列</text><text x="380" y="402" text-anchor="middle" font-size="11.5" class="s-q">慢工具不阻塞对话；重启后如实报中断</text>
+<rect x="504" y="360" width="216" height="64" rx="8" class="s-b"/><text x="612" y="384" text-anchor="middle" font-weight="600" class="s-t">资源调度</text><text x="612" y="402" text-anchor="middle" font-size="11.5" class="s-q">内存闸门；拍片时卸载 LLM，空了再唤醒</text>
+<rect x="24" y="472" width="166" height="56" rx="8" class="s-b"/><text x="107" y="496" text-anchor="middle" font-weight="600" class="s-t">ComfyUI</text><text x="107" y="514" text-anchor="middle" font-size="11.5" class="s-q">Z-Image、FLUX.2 Klein</text>
+<rect x="206" y="472" width="166" height="56" rx="8" class="s-b"/><text x="289" y="496" text-anchor="middle" font-weight="600" class="s-t">FreeVideo</text><text x="289" y="514" text-anchor="middle" font-size="11.5" class="s-q">MiniMax H3 视频</text>
+<rect x="388" y="472" width="166" height="56" rx="8" class="s-b"/><text x="471" y="496" text-anchor="middle" font-weight="600" class="s-t">FFmpeg</text><text x="471" y="514" text-anchor="middle" font-size="11.5" class="s-q">剪辑、合成、字幕</text>
+<rect x="570" y="472" width="166" height="56" rx="8" class="s-b"/><text x="653" y="496" text-anchor="middle" font-weight="600" class="s-t">Shell / 网络 / MCP 服务</text><text x="653" y="514" text-anchor="middle" font-size="11.5" class="s-q">agent-reach、Exa 等</text>
+</svg><figcaption>现状架构：三个入口共用会话；虚线框为每次经批准才启用的外部 agent</figcaption></figure>
+
+<h3>和 Claude Code / OpenClaw 比：使用感受（不谈资源调度）</h3>
+<p>结论：<strong>形态上是通用 agent，日常任务已经能像它们一样对话着做完；但“大脑”和“眼睛”明显弱，审批也更频繁</strong>。这次定妆就是例子：aco 自己写提示词、排轮次、等结果、发图、改记忆；但看图挑毛病、找参考截图、接入 Z-Image 模板是在它外面做的。</p>
+<div class="table"><table>
+<tr><th>能力</th><th>aco 现状</th><th>与 Claude Code / OpenClaw 的差距</th></tr>
+<tr><td>多轮对话</td><td>Telegram 与控制台同一会话，历史压缩后带入；可中途用 ask_user 反问</td><td>基本相当</td></tr>
+<tr><td>自己选工具 / skill</td><td>读网页、命令、文件、skill（含 <code>~/.claude/skills</code>）、MCP（如 Exa）、生成工具，全部由 LLM 自选</td><td>相当；工具更少，写文件只限 <code>data/agent-work</code></td></tr>
+<tr><td>长期记忆</td><td>自己的记忆目录 + 索引进系统提示词，可读可写</td><td>相当</td></tr>
+<tr><td>执行命令</td><td>每条命令都要你在按钮上批准（可配单条前缀免批）</td><td><span class="sev-h">摩擦明显大</span>：多步任务要点很多次“同意”</td></tr>
+<tr><td>推理与长任务</td><td>本地 27B 模型，单次运行最多 40 步</td><td><span class="sev-h">明显弱</span>：复杂调研、多步排错、长计划容易走偏或早停；可经批准委托给 Claude Code</td></tr>
+<tr><td>看图 / 看视频</td><td>LLM 只收文字，看不到自己生成的图</td><td><span class="sev-h">缺失</span>：不能自审产物，挑图要靠你</td></tr>
+<tr><td>扩展自己</td><td>能在 ComfyUI 里探索、搭建 / 试跑工作流变体</td><td>不能改项目代码 / 模板：新模型接入（如这次的 Z-Image）仍需开发者</td></tr>
+<tr><td>响应速度</td><td>LLM 按需加载；拍视频时被卸载，对话要等</td><td>比云端 agent 慢；这是本地资源的取舍</td></tr>
+</table></div>
+<h3>要达到“用起来一样”的下一步（按收益排序）</h3>
+<ol>
+<li><strong>给它眼睛</strong>：换 / 加一个视觉模型（同尺寸的 VL 模型），新增“看图”工具，让 agent 能自审候选、对照参考图。</li>
+<li><strong>降低审批摩擦</strong>：按会话 / 按任务一次性授权一类只读命令（如 <code>agent-reach</code>、<code>ffprobe</code>、<code>find</code>），危险操作仍逐条批准。</li>
+<li><strong>难题升级</strong>：本地模型判断任务超出能力时，主动提议交给 Claude Code（已有 delegate 机制，经批准、可走在线开关）。</li>
+<li><strong>受控自扩展</strong>：允许 agent 提出新模板（如从 ComfyUI 工作流生成），由编排器校验、最低档试跑、你批准后登记。</li>
+</ol>
 
 <h2 id="hitl">7. Human-in-the-loop 迭代流程</h2>
 <p class="lead">agent 负责“多出候选、快出候选”，人负责“挑、批注、定稿”。每一步选定的结果都锁定进导演基准包，后面的生成只在基准上叠加，不再从头抽卡。</p>

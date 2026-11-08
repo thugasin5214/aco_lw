@@ -67,7 +67,7 @@
 | **1 调度器 + 图片闭环 + Web 进度台** | 见 §6 | **G1**：CLI 跑通图片闭环；中断重启后无重复提交；Web 上能看到任务 DAG 与产物 | ✅ **已通过 2026-10-26**（出图 21 s；kill -9 后 recover 只对账，ComfyUI 中仅 1 次提交） |
 | 2 Telegram + 审阅 + 项目历史 | 通知与按钮选版、控制台审阅、导演基准包、LLM 规划（schema 校验）、项目与对话历史 | G2：手机上能完成选版；等待期间无 LLM 推理 | **进行中**：代码完成，等 Telegram token 做 G2 实机验收 |
 | **3 制片流水线（改版，2026-10-27）** | 小说 → 改编 → 设定与定妆 → 分镜 → 关键帧 → 镜头视频 → 剪辑 → 成片，每段审核通过才进下一段；重点是**基础架构与扩展性**：声明式工作流、带版本与过期传播的产物库、权威计划、Skill 执行端、FFmpeg 执行端、按资源族批量调度（见 §6c-6） | G3：一段 ≤ 1 分钟短篇（6–10 镜，smoke 档）从文字跑到成片；改一个角色只让下游相关产物过期；重启不丢进度；换一套工作流 YAML 不改代码 | **规划中**（等用户确认 §6c-6 的待决项） |
-| 4 扩展能力 | OpenClaw 子 agent：搜索、Skills、MCP | G4：按需启动、能退出、无孤儿进程 | 后续 |
+| 4 扩展能力 | ~~OpenClaw 子 agent~~ → 编排器自带通用工具 + MCP（§6c-7） | G4：按需启动、能退出、无孤儿进程 | 已完成（2026-11-07） |
 | **2.8 Agent 运行时 + Executor + 资源调度** | LLM tool call 由编排器执行并择机交回；Executor 接口；动态资源调度（见 §6c-3b） | G2.8：一句话需求跑完“查状态 → 出图 → 等待 → 决定 → 出视频”，视频期间续跑暂存、结束自动继续；重启可恢复 | **下一步** |
 | **5 可安装包 + 配置向导** | 一键安装、Web 配置向导 + 设置页、安装文档、launchd 常驻、升级 / 卸载（见 §6d） | G5：干净 Mac 上仅按安装文档 30 min 内出第一张图（不含模型下载）；重启自动恢复 | **推后**（用户 2026-10-26 决定，先做 W2） |
 | 6 在线模型与外部 agent | OpenAI / Anthropic 后端、aco_lw MCP 服务、Codex / Claude Code 接入、预算与隐私开关（见 §6c-4） | G6：本地 / 在线切换不丢会话与记忆；断网回退；agent 不越过 MCP 白名单 | 规划中 |
@@ -358,6 +358,21 @@ G0 结论（详见 `docs/baseline.md`）：LLM 加载仅约 15 s；视频峰值�
 1. skill 来源：内置 + 兼容 Claude Code SKILL.md 格式的外部 skill（`data/skills/`，按阶段映射）；不默认扫描 `~/.claude/skills`。
 2. 改编 / 分镜的 LLM：可配置（阶段级），默认本地 27B；本地被视频占用时按 `llm_fallback` 回退。
 3. 第一版成片无声 + 可选字幕（FFmpeg 烧录台词）；配乐 / 配音放到 3d。
+
+## 6c-7. 通用 agent（用户 2026-11-07 决定；已完成，分支 `agent-general-tools`）
+
+架构见 `docs/design.html` §6b。LLM 是大脑、只提出 tool call；编排器执行全部工具（生成工具 + 通用工具 `toolbox.py` + MCP `mcp_hub.py`），结果按内存情况择机交回。取代原“OpenClaw 子 agent 提供搜索 / Skills / MCP”（阶段 4）。
+
+- [x] 通用工具：web_fetch、run_command（每条经批准，危险操作拒绝）、读写文件、skill（含 `~/.claude/skills`）、agent 记忆、add_media、send_file
+- [x] MCP：stdio + Streamable HTTP；只读工具直跑，其余经批准；当前配置 Exa
+- [x] 委托 FreeVideo agent：`/fv`、`delegate_freevideo`（Claude Code + FreeVideo MCP，每次经批准）
+- [x] Z-Image 模板（`zimage-t2i` / `zimage-i2i`），定妆默认用它（Klein 4B 脸型不受控，实测 4 批）
+
+与 Claude Code / OpenClaw 的使用差距（详见设计文档 §6b）与下一步：
+- [ ] 视觉：VL 模型 + 看图工具，agent 能自审候选、对照参考图
+- [ ] 审批摩擦：按会话 / 任务一次性授权一类只读命令
+- [ ] 难题升级：本地模型主动提议委托 Claude Code
+- [ ] 受控自扩展：agent 提出新模板 → 编排器校验 + 最低档试跑 → 用户批准登记
 
 ## 6d. 阶段 5（草案）：可安装包 + 配置向导（目标：新机器一键跑起来）
 
