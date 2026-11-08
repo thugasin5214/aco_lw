@@ -29,3 +29,7 @@ ltx-2.5-distilled:
   peak_gib: 50      # 估算：21.5 GB int8 主干 + 15.4 GB Gemma 编码 + VAE / 放大器 + 激活；首次实测后改
   exclusive_llm: true
   adaptive: true
+z-image-bf16:
+  kind: image
+  peak_gib: 28      # 估算：DiT bf16 12.3 GB + Qwen3-4B 8 GB + VAE + 激活；实测后更新
+  measured: false
