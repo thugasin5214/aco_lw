@@ -66,6 +66,8 @@ class Pending:
     on_approve: dict | None = None  # 审批通过后要执行的动作 {"tool": ..., "args": ...}
     info: dict = field(default_factory=dict)
     start: Callable[[], None] | None = None  # 等待消息落库之后才开始的后台工作（防结果先到丢失）
+    rule: str | None = None  # 审批可“始终允许”的规则（如 cmd:ffmpeg、mcp:exa.web_search_exa）
+    bypassable: bool = True  # bypass 模式能否跳过（装节点 / 下模型不能：硬约束，每次问）
 
 
 @dataclass
@@ -218,6 +220,7 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
                 "",
                 tr("agent_tier_approval", t=tier, tpl=tpl.name),
                 on_approve={"tool": "queue_round_approved", "args": a},
+                rule=f"round:{tpl.name}",
             )
         return Done(_queue(ctx, a, params, tier, tpl.kind == "image" or unmeasured))
 
@@ -546,7 +549,13 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
                 a=json.dumps(args, ensure_ascii=False)[:600],
                 why=a.get("reason") or "",
             )
-            return Pending("approval", "", txt, on_approve={"tool": "comfy_approved", "args": a})
+            return Pending(
+                "approval",
+                "",
+                txt,
+                on_approve={"tool": "comfy_approved", "args": a},
+                bypassable=False,
+            )
         return Done(
             {
                 "error": f"{tool} {args.get('action') or ''} is not allowed (restart / delete / queue "
@@ -827,6 +836,16 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
     return {t.name: t for t in tools + hidden}
 
 
+def command_rule(cmd: str) -> str | None:
+    """单条命令按程序名记规则（cmd:ffmpeg）；带管道 / 串联 / 重定向的不能“始终允许”。"""
+    import re
+
+    c = cmd.strip()
+    if not c or re.search(r"[;&|`$<>]|\n", c):
+        return None
+    return f"cmd:{c.split()[0]}"
+
+
 def general_tools(rt: AgentRuntime) -> list[Tool]:
     """通用工具（见 toolbox.py）：慢的进后台工具队列，命令先经你批准。"""
     from .toolbox import blocked
@@ -859,6 +878,7 @@ def general_tools(rt: AgentRuntime) -> list[Tool]:
             "",
             tr("agent_cmd_approval", cmd=cmd[:1500], why=reason),
             on_approve={"tool": "run_command_approved", "args": {**a, "command": cmd}},
+            rule=command_rule(cmd),
         )
 
     def read_file(ctx, a):
@@ -906,6 +926,7 @@ def general_tools(rt: AgentRuntime) -> list[Tool]:
             "",
             tr("agent_mcp_approval", tool=f"{server}.{name}", args=shown, why=reason),
             on_approve={"tool": "mcp_call_approved", "args": a},
+            rule=f"mcp:{server}.{name}",
         )
 
     def delegate_freevideo(ctx, a):
@@ -916,6 +937,7 @@ def general_tools(rt: AgentRuntime) -> list[Tool]:
             "",
             tr("fv_delegate_approval", task=a["task"][:1500]),
             on_approve={"tool": "delegate_freevideo_approved", "args": a},
+            rule="delegate:freevideo",
         )
 
     def delegate_agent(ctx, a):
@@ -928,6 +950,7 @@ def general_tools(rt: AgentRuntime) -> list[Tool]:
             "",
             tr("agent_delegate_approval", agent=a["agent"], task=a["task"][:1500]),
             on_approve={"tool": "delegate_agent_approved", "args": a},
+            rule=f"delegate:{a['agent']}",
         )
 
     def look(ctx, a):
@@ -1097,6 +1120,11 @@ def general_tools(rt: AgentRuntime) -> list[Tool]:
             send_file,
         ),
     ]
+
+
+def _first_line(p: Pending) -> str:
+    lines = [x for x in (p.message or "").splitlines() if x.strip()]
+    return " ".join(lines[:2])[:300]
 
 
 def tools_spec(tools: dict[str, Tool]) -> list[dict]:
@@ -1555,6 +1583,11 @@ class AgentRuntime:
             out = Done({"error": str(e)})
         except jsonschema.ValidationError as e:
             out = Done({"error": f"schema: {e.message}"})
+        if isinstance(out, Pending) and out.kind == "approval" and out.on_approve:
+            how = self.auto_approval(out.rule, out.bypassable)
+            if how:  # bypass 模式或你设过“始终允许”：不再问，直接执行批准后的动作
+                say(tr("agent_auto_approved", how=tr(f"perm_how_{how}"), what=_first_line(out)))
+                out = self._run_approved(ctx, out.on_approve, how)
         if isinstance(out, Done):
             return self._tool_done(run, call, args, out.result)
         mid = self.store.add_agent_msg(
@@ -1568,14 +1601,16 @@ class AgentRuntime:
             key=out.key,
             on_approve=out.on_approve,
             info=out.info,
+            rule=out.rule,
         )
         if out.kind == "approval":
             key = f"approval:{mid}"
             self.store.update_agent_msg(mid, meta={"key": key})
-            say(
-                out.message,
-                [[(tr("btn_approve"), f"a:{mid}:yes"), (tr("btn_decline"), f"a:{mid}:no")]],
-            )
+            row = [(tr("btn_approve"), f"a:{mid}:yes")]
+            if out.rule:
+                row.append((tr("btn_always", r=out.rule), f"a:{mid}:always"))
+            row.append((tr("btn_decline"), f"a:{mid}:no"))
+            say(out.message, [row])
         elif out.kind == "user":
             say(out.message)
         if out.start:
@@ -1783,11 +1818,44 @@ class AgentRuntime:
                 )
         self.on_round_ready(rnd)
 
-    def on_approval(self, msg_id: int, approve: bool) -> str:
+    # ---- 权限：default（逐条审批）| bypass（不再审批）；“始终允许”的规则 ----
+    def permission_mode(self) -> str:
+        return self.store.get_kv("permission_mode") or getattr(
+            self.cfg, "permission_mode", "default"
+        )
+
+    def allow_rules(self) -> list[str]:
+        return list(self.store.get_kv("perm_allow") or [])
+
+    def remember_rule(self, rule: str) -> None:
+        rules = self.allow_rules()
+        if rule not in rules:
+            self.store.set_kv("perm_allow", [*rules, rule])
+
+    def auto_approval(self, rule: str | None, bypassable: bool = True) -> str | None:
+        if bypassable and self.permission_mode() == "bypass":
+            return "bypass"
+        if rule and rule in self.allow_rules():
+            return "rule"
+        return None
+
+    def _run_approved(self, ctx: dict, act: dict, how: str):
+        try:
+            out = self.tools[act["tool"]].handler(ctx, act["args"])
+        except (StudioError, ParamError, KeyError, ValueError, OSError, MCPError) as e:
+            return Done({"approved": True, "auto": how, "error": str(e)})
+        if isinstance(out, Done):
+            return Done({"approved": True, "auto": how, **out.result})
+        out.info = {**out.info, "auto": how}  # 后台执行：记在消息里，结果到时照常交回
+        return out
+
+    def on_approval(self, msg_id: int, approve: bool, remember: bool = False) -> str:
         m = self.store.get_agent_msg(msg_id)
         if m is None or m["status"] == "done":
             return tr("agent_already_decided")
         run = self.store.get_run(m["run_id"])
+        if approve and remember and m["meta"].get("rule"):
+            self.remember_rule(m["meta"]["rule"])
         if not approve:
             self.resolve(m["meta"]["key"], {"approved": False, "note": "user declined"})
             return tr("agent_declined")

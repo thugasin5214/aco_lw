@@ -440,7 +440,7 @@ class Actions:
                 return True
             if kind == "a":  # agent 的审批请求
                 mid, yn = rest.split(":")
-                say(self.runtime.on_approval(int(mid), yn == "yes"))
+                say(self.runtime.on_approval(int(mid), yn in ("yes", "always"), yn == "always"))
                 return True
             if kind == "o":
                 self.reopen(rest, channel, say)
@@ -521,6 +521,19 @@ class Actions:
             else:
                 store.set_kv("agent_brain", args[0])
                 say(tr("model_set", m=args[0]))
+        elif cmd in ("/permissions", "/perm"):
+            rt = self.runtime
+            if args and args[0] in ("default", "bypass"):
+                store.set_kv("permission_mode", args[0])
+                say(tr(f"perm_set_{args[0]}"))
+            elif args and args[0] == "forget":
+                rules = rt.allow_rules()
+                drop = rules if args[1:] == ["all"] else [r for r in rules if r in args[1:]]
+                store.set_kv("perm_allow", [r for r in rules if r not in drop])
+                say(tr("perm_forgot", n=len(drop)))
+            else:
+                rules = "\n".join(f"· {r}" for r in rt.allow_rules()) or tr("perm_no_rules")
+                say(tr("perm_now", m=rt.permission_mode(), rules=rules))
         elif cmd == "/projects":
             rows = [f"{i18n.state(p['state'])} · {p['name']}" for p in store.list_projects()]
             say("\n".join(rows) or tr("no_projects"))
@@ -660,7 +673,7 @@ class Actions:
 
     def _status_extra(self) -> str:
         """不需要 LLM 的进度：agent 队列、拍片、进行中的制片。"""
-        out = ""
+        out = tr("status_bypass") if self.runtime.permission_mode() == "bypass" else ""
         active = len(self.store.runs(None, "running"))
         waiting = len(self.store.runs(None, "waiting_resources"))
         if active or waiting:

@@ -93,7 +93,7 @@ footer{border-top:1px solid var(--line);margin-top:56px;padding-top:20px;color:v
 <p class="lead">核心建议：把系统拆成“确定性编排器 + 可选 LLM 规划器”。编排器负责一切有副作用的操作，LLM 只负责把自然语言需求翻译成受约束的方案；没有 LLM 时系统照样能跑。</p>
 <h3>设计原则</h3>
 <ul>
-<li>确定性优先：提交、轮询、释放、重试全部由 Python 代码完成，LLM 不直接接触 ComfyUI API 或 shell。（2026-11-07 修订：agent 可以<em>请求</em>执行命令、读网页、读写文件、用 skill，由编排器执行；命令每条经用户批准，生成相关副作用仍只走生成工具。）</li>
+<li>确定性优先：提交、轮询、释放、重试全部由 Python 代码完成，LLM 不直接接触 ComfyUI API 或 shell。（2026-11-07 修订：agent 可以<em>请求</em>执行命令、读网页、读写文件、用 skill，由编排器执行；命令默认每条经用户批准，可“始终允许”某类或打开 bypass 模式；生成相关副作用仍只走生成工具。）</li>
 <li>受控探索：agent 可以探索不同的模板、模型和工作流，但所有新组合都要先过校验与低档试跑，生产任务只用已晋升的模板。</li>
 <li>内存是一等资源：每次提交前检查可用内存，LLM 与生成模型分时使用，不追求同时常驻。</li>
 <li>每个任务可复现：参数、种子、模板版本、约束配置、耗时、峰值内存写进 manifest，与产物同目录。</li>
@@ -235,7 +235,7 @@ footer{border-top:1px solid var(--line);margin-top:56px;padding-top:20px;color:v
 <tr><td>多轮对话</td><td>Telegram 与控制台同一会话，历史压缩后带入；可中途用 ask_user 反问</td><td>基本相当</td></tr>
 <tr><td>自己选工具 / skill</td><td>读网页、命令、文件、skill（含 <code>~/.claude/skills</code>）、MCP（如 Exa）、生成工具，全部由 LLM 自选</td><td>相当；工具更少，写文件只限 <code>data/agent-work</code></td></tr>
 <tr><td>长期记忆</td><td>自己的记忆目录 + 索引进系统提示词，可读可写</td><td>相当</td></tr>
-<tr><td>执行命令</td><td>每条命令都要你在按钮上批准（可配单条前缀免批）</td><td><span class="sev-h">摩擦明显大</span>：多步任务要点很多次“同意”</td></tr>
+<tr><td>执行命令</td><td>默认逐条批准；“始终允许”记规则；<code>/permissions bypass</code> 不再审批（类似 Claude Code 的 permission mode）</td><td>基本相当</td></tr>
 <tr><td>推理与长任务</td><td>默认本地 27B，单次最多 40 步；<code>/model</code> 可随时换成在线大脑（OpenAI / OpenRouter / Claude API），或整件交给 Claude Code / Codex；agent 也可用 <code>delegate_agent</code> 把难的子任务交出去（每次经你批准）</td><td>本地时明显弱；切到在线大脑后接近（需 <code>allow_online</code>）</td></tr>
 <tr><td>看图 / 看视频</td><td><code>look</code> 工具：图片缩到 1024 交给视觉 LLM；视频抽 6 帧；<code>@round:ID</code> 看整轮（2026-11-07）</td><td>基本相当（本地 27B 是视觉模型）；审美判断仍弱于云端模型</td></tr>
 <tr><td>扩展自己</td><td>能在 ComfyUI 里探索、搭建 / 试跑工作流变体</td><td>不能改项目代码 / 模板：新模型接入（如这次的 Z-Image）仍需开发者</td></tr>
@@ -244,7 +244,7 @@ footer{border-top:1px solid var(--line);margin-top:56px;padding-top:20px;color:v
 <h3>要达到“用起来一样”的下一步（按收益排序）</h3>
 <ol>
 <li><s>给它眼睛</s>：已完成（<code>look</code>，本地 27B 本身支持视觉）。</li>
-<li><strong>降低审批摩擦</strong>：按会话 / 按任务一次性授权一类只读命令（如 <code>agent-reach</code>、<code>ffprobe</code>、<code>find</code>），危险操作仍逐条批准。</li>
+<li><s>降低审批摩擦</s>：已完成——审批按钮加“始终允许”（按程序 / MCP 工具 / 委托对象记规则），<code>/permissions bypass</code> 全部跳过；硬拒绝照旧，装节点 / 下模型仍每次问。</li>
 <li><s>难题升级</s>：已完成——<code>/model</code> 切换在线大脑；<code>delegate_agent</code> 把子任务交给 Claude Code / Codex（经批准，需 <code>allow_online</code>）。</li>
 <li><strong>受控自扩展</strong>：允许 agent 提出新模板（如从 ComfyUI 工作流生成），由编排器校验、最低档试跑、你批准后登记。</li>
 </ol>

@@ -87,6 +87,44 @@ M: dict[str, tuple[str, str]] = {
     ),
     "btn_approve": ("✅ Approve", "✅ 同意"),
     "btn_decline": ("✕ No", "✕ 不要"),
+    "btn_always": ("✅ Always ({r})", "✅ 始终允许（{r}）"),
+    "agent_auto_approved": ("⚡ Auto-approved ({how}): {what}", "⚡ 已自动批准（{how}）：{what}"),
+    "perm_how_bypass": ("bypass mode", "bypass 模式"),
+    "perm_how_rule": ("always-allow rule", "始终允许规则"),
+    "perm_now": (
+        (
+            "Permission mode: {m}\nAlways-allowed:\n{rules}\n"
+            "/permissions bypass — stop asking · /permissions default — ask each time · "
+            "/permissions forget <rule|all>"
+        ),
+        (
+            "权限模式：{m}\n始终允许：\n{rules}\n"
+            "/permissions bypass 不再审批 · /permissions default 逐条审批 · "
+            "/permissions forget <规则|all> 删除规则"
+        ),
+    ),
+    "perm_no_rules": ("(none)", "（无）"),
+    "status_bypass": (
+        "\n⚡ Permissions: bypass (agent does not ask)",
+        "\n⚡ 权限：bypass（agent 不再请求批准）",
+    ),
+    "perm_set_bypass": (
+        (
+            "Bypass mode on: the agent no longer asks before commands, MCP calls, hand-overs or "
+            "unmeasured video tiers (installing nodes / downloading models still asks). Hard refusals (ComfyUI :8188, FreeVideo token, killing "
+            "processes, LLM load/unload) and the online switch still apply. /permissions default to go back."
+        ),
+        (
+            "已开 bypass：agent 执行命令、MCP 调用、交给外部 agent、未实测的视频档位都不再问你（装节点 / 下模型仍会问）。"
+            "硬拒绝（直连 ComfyUI :8188、读 FreeVideo token、结束进程、加载 / 卸载 LLM）和在线开关照旧。"
+            "/permissions default 恢复逐条审批。"
+        ),
+    ),
+    "perm_set_default": (
+        "Back to asking each time (always-allow rules still apply).",
+        "已恢复逐条审批（“始终允许”的规则仍然生效）。",
+    ),
+    "perm_forgot": ("Removed {n} rule(s).", "已删除 {n} 条规则。"),
     "agent_step_budget": (
         "I've used my step budget ({n} steps) for this request. Tell me how to continue.",
         "这次请求的步数预算（{n} 步）用完了。告诉我接下来怎么做。",
@@ -301,6 +339,7 @@ HELP = (
 /status system and queue status
 /fv <task> hand a video task to the FreeVideo agent (Claude Code + FreeVideo tools)
 /model [local|openai|openrouter|anthropic|claude_code|codex] show / switch the agent's brain
+/permissions [default|bypass|forget <rule|all>] approval mode and always-allow rules
 /rounds recent rounds
 /round TEMPLATE [COUNT] [prompt]  queue a round directly
 /review re-send rounds waiting for review
@@ -319,6 +358,7 @@ Anything else: a request or note — wakes the LLM.""",
 /status 系统与队列状态
 /fv <任务> 把视频任务交给 FreeVideo agent（Claude Code + FreeVideo 工具）
 /model [local|openai|openrouter|anthropic|claude_code|codex] 查看 / 切换 agent 的大脑
+/permissions [default|bypass|forget <规则|all>] 审批模式与“始终允许”规则
 /rounds 最近几轮
 /round 模板 [数量] [prompt]  直接出一轮候选
 /review 重新推送待审阅的候选

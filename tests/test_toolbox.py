@@ -283,3 +283,78 @@ def test_claude_backend_converts_image_parts():
         "type": "image",
         "source": {"type": "base64", "media_type": "image/jpeg", "data": "QUJD"},
     }
+
+
+def test_always_allow_rule_skips_the_next_approval(env):  # noqa: F811
+    studio, make, said = env
+    a, _ = make(
+        {"tool_calls": [call("run_command", {"command": "echo one", "reason": "x"})]},
+        {"tool_calls": [call("run_command", {"command": "echo two", "reason": "x"}, "c2")]},
+        {"tool_calls": [call("run_command", {"command": "echo a | cat", "reason": "x"}, "c3")]},
+        {"text": "done"},
+    )
+    a.inbound("web", "go", lambda t, b=None: None)
+    run_all(a)
+    run = last_run(studio)
+    buttons = next(b for t, b in said if b)
+    assert (
+        "✅ Always (cmd:echo)",
+        f"a:{pending_approval(studio, run['id'])['id']}:always",
+    ) in buttons[0]
+    a.runtime.on_approval(pending_approval(studio, run["id"])["id"], True, remember=True)
+    assert a.runtime.allow_rules() == ["cmd:echo"]
+
+    def pump():
+        run_all(a)
+        return last_run(studio)["status"] == "waiting_user"
+
+    assert wait_until(pump)  # echo two 自动放行；带管道的 echo | cat 仍然要问
+    texts = [
+        json.loads(m["content"])
+        for m in studio.store.agent_msgs(run["id"])
+        if m["role"] == "tool" and m["status"] == "done"
+    ]
+    assert "two" in texts[-1]["stdout"]
+    done = [m for m in studio.store.agent_msgs(run["id"]) if m["role"] == "tool"]
+    assert done[1]["meta"]["info"]["auto"] == "rule"
+    assert (
+        "echo a | cat"
+        in pending_approval(studio, run["id"])["meta"]["on_approve"]["args"]["command"]
+    )
+
+
+def test_bypass_mode_runs_without_asking_but_hard_refusals_stay(env):  # noqa: F811
+    studio, make, said = env
+    studio.store.set_kv("permission_mode", "bypass")
+    a, _ = make(
+        {"tool_calls": [call("run_command", {"command": "echo hi > f.txt", "reason": "x"})]},
+        {"tool_calls": [call("run_command", {"command": "pkill -f ComfyUI", "reason": "x"}, "c2")]},
+        {"text": "done"},
+    )
+    a.inbound("web", "go", lambda t, b=None: None)
+    assert wait_until(lambda: run_all(a) or last_run(studio)["status"] == "done")
+    run = last_run(studio)
+    res = [
+        json.loads(m["content"]) for m in studio.store.agent_msgs(run["id"]) if m["role"] == "tool"
+    ]
+    assert res[0]["exit_code"] == 0
+    first = next(m for m in studio.store.agent_msgs(run["id"]) if m["role"] == "tool")
+    assert first["meta"]["info"]["auto"] == "bypass"
+    assert "refused" in res[1]["error"]
+    assert not any(b for _, b in said)  # 没有任何审批按钮
+    assert any("Auto-approved" in t for t, _ in said)
+
+
+def test_permissions_command(env):  # noqa: F811
+    _studio, make, _ = env
+    a, _ = make()
+    out = []
+    say = lambda t, b=None: out.append(t)
+    a.inbound("web", "/permissions bypass", say)
+    assert a.runtime.permission_mode() == "bypass"
+    a.runtime.remember_rule("cmd:ffmpeg")
+    a.inbound("web", "/permissions", say)
+    assert "bypass" in out[-1] and "cmd:ffmpeg" in out[-1]
+    a.inbound("web", "/permissions forget all", say)
+    a.inbound("web", "/permissions default", say)
+    assert a.runtime.allow_rules() == [] and a.runtime.permission_mode() == "default"

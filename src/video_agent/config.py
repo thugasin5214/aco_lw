@@ -32,6 +32,9 @@ class Settings:
     #   "anthropic" / "openrouter" / "openai_compatible"（在线 API，接着同一次运行继续）
     #   "claude_code" / "codex"（本机的 agent CLI + 它们的在线模型，经 aco_lw MCP 工具工作，只接新请求）
     llm_fallback: list[str] = field(default_factory=list)
+    # agent 审批：default 逐条批准（可“始终允许”某类）；bypass 不再审批（硬拒绝与在线开关照旧）。
+    # 运行中用 /permissions 切换（存库，优先于这里）
+    permission_mode: str = "default"
     allow_online: bool = False  # 隐私开关：允许把对话发给在线模型 / 在线 agent（默认关）
     # 只为“交给 FreeVideo agent”（/fv、delegate_freevideo）放行在线（Claude Code）；其他仍按 allow_online
     freevideo_agent_online: bool = False
