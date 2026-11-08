@@ -369,9 +369,9 @@ G0 结论（详见 `docs/baseline.md`）：LLM 加载仅约 15 s；视频峰值�
 - [x] Z-Image 模板（`zimage-t2i` / `zimage-i2i`），定妆默认用它（Klein 4B 脸型不受控，实测 4 批）
 
 与 Claude Code / OpenClaw 的使用差距（详见设计文档 §6b）与下一步：
-- [ ] 视觉：VL 模型 + 看图工具，agent 能自审候选、对照参考图
+- [x] 视觉：`look` 工具（本地 27B 是视觉模型）；图紧跟工具结果交给 LLM，Claude 后端自动转换
 - [ ] 审批摩擦：按会话 / 任务一次性授权一类只读命令
-- [ ] 难题升级：本地模型主动提议委托 Claude Code
+- [x] 在线大脑：`/model local|openai|openrouter|anthropic|claude_code|codex`（需 `allow_online`，关掉自动退回本地）；`delegate_agent` 把子任务交给 Claude Code / Codex（每次经批准）
 - [ ] 受控自扩展：agent 提出新模板 → 编排器校验 + 最低档试跑 → 用户批准登记
 
 ## 6d. 阶段 5（草案）：可安装包 + 配置向导（目标：新机器一键跑起来）

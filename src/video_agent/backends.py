@@ -100,6 +100,9 @@ class OpenAICompatBackend:
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        if self.name == "openai":  # OpenAI 官方 API：推理模型只认 max_completion_tokens、默认温度
+            body.pop("temperature")
+            body["max_completion_tokens"] = body.pop("max_tokens")
         if tools:
             body["tools"] = tools
         if schema:

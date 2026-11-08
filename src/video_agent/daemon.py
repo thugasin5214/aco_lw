@@ -506,6 +506,21 @@ class Actions:
             else:
                 self.planner.set_mode(args[0])
                 say(tr("mode_set", m=i18n.mode(args[0])))
+        elif cmd == "/model":
+            from .planner import BRAINS
+
+            opts = ", ".join(BRAINS)
+            if not args:
+                m = self.runtime.brain()
+                off = m != "local" and not self.runtime.cfg.allow_online
+                say(tr("model_now", m=m, opts=opts, note=tr("model_local_note") if off else ""))
+            elif args[0] not in BRAINS:
+                say(tr("model_unknown", m=args[0], opts=opts))
+            elif args[0] != "local" and not self.runtime.cfg.allow_online:
+                say(tr("agent_online_off"))
+            else:
+                store.set_kv("agent_brain", args[0])
+                say(tr("model_set", m=args[0]))
         elif cmd == "/projects":
             rows = [f"{i18n.state(p['state'])} · {p['name']}" for p in store.list_projects()]
             say("\n".join(rows) or tr("no_projects"))
@@ -752,7 +767,9 @@ class Daemon:
         from .planner import make_named_backend
 
         cfg, rm = self.cfg, self.orch.resources
-        online = ("anthropic", "openrouter", "openai_compatible", "claude_code", "codex")
+        from .planner import AGENT_CLIS, ONLINE_APIS
+
+        online = (*ONLINE_APIS, *AGENT_CLIS)
 
         def run(name: str) -> tuple[str, dict]:
             if name in ("claude_code", "codex"):

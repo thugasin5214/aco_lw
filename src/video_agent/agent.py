@@ -31,6 +31,7 @@ from .config import ROOT
 from .freevideo import FreeVideoError
 from .i18n import tr
 from .mcp_client import MCPError
+from .planner import AGENT_CLIS, ONLINE_APIS
 from .policy import Policies, classify_round
 from .production import ProductionError
 from .render import ParamError
@@ -366,6 +367,13 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
         return Pending(
             "event", f"run:{child['id']}", start=lambda: rt._delegate(child, "freevideo")
         )
+
+    def delegate_agent_approved(ctx, a):
+        parent = rt.store.get_run(ctx["run_id"])
+        child = rt.delegate_to(
+            a["agent"], a["task"], ctx["channel"], ctx["project_id"], parent["session_id"], False
+        )
+        return Pending("event", f"run:{child['id']}", start=lambda: rt._delegate(child, a["agent"]))
 
     def mcp_call_approved(ctx, a):
         tb = rt.toolbox
@@ -811,6 +819,7 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
         Tool("run_command_approved", "", _obj({}), "act", run_command_approved),
         Tool("mcp_call_approved", "", _obj({}), "act", mcp_call_approved),
         Tool("delegate_freevideo_approved", "", _obj({}), "act", delegate_freevideo_approved),
+        Tool("delegate_agent_approved", "", _obj({}), "act", delegate_agent_approved),
         Tool("queue_round_approved", "", _obj({}), "act", queue_round_approved),
         Tool("select_approved", "", _obj({}), "act", select_approved),
         Tool("comfy_approved", "", _obj({}), "act", comfy_approved),
@@ -907,6 +916,18 @@ def general_tools(rt: AgentRuntime) -> list[Tool]:
             "",
             tr("fv_delegate_approval", task=a["task"][:1500]),
             on_approve={"tool": "delegate_freevideo_approved", "args": a},
+        )
+
+    def delegate_agent(ctx, a):
+        if a.get("agent") not in AGENT_CLIS:
+            return Done({"error": f"agent must be one of {', '.join(AGENT_CLIS)}"})
+        if not rt.cfg.allow_online:
+            return Done({"error": tr("agent_online_off")})
+        return Pending(
+            "approval",
+            "",
+            tr("agent_delegate_approval", agent=a["agent"], task=a["task"][:1500]),
+            on_approve={"tool": "delegate_agent_approved", "args": a},
         )
 
     def look(ctx, a):
@@ -1025,6 +1046,20 @@ def general_tools(rt: AgentRuntime) -> list[Tool]:
             _obj({"task": S}, ["task"]),
             "approval",
             delegate_freevideo,
+        ),
+        Tool(
+            "delegate_agent",
+            "Hand a sub-task to a stronger online agent and wait for its report: claude_code "
+            "(Claude Code) or codex (Codex, the user's ChatGPT account). Use it for hard "
+            "reasoning, long research, debugging or writing code. It works through the same "
+            "aco_lw tools (commands still need the user's approval). The user approves each "
+            "hand-over; needs allow_online.",
+            _obj(
+                {"agent": {"type": "string", "enum": list(AGENT_CLIS)}, "task": S},
+                ["agent", "task"],
+            ),
+            "act",
+            delegate_agent,
         ),
         Tool(
             "look",
@@ -1236,13 +1271,33 @@ class AgentRuntime:
             return "park", f"{why}; online fallback is configured but allow_online is off"
         fresh = len(self.store.agent_msgs(run["id"])) == 1  # 还没开始：可以整个交给 CLI
         for name in chain:
-            if name in ("anthropic", "openrouter", "openai_compatible"):
+            if name in ONLINE_APIS:
                 return "backend", self._api_backend(name)
             if name in ("claude_code", "codex") and fresh:
                 return "delegate", name
         return "park", why
 
+    def brain(self) -> str:
+        """/model 选的大脑：local（= 配置里的主后端）| 在线 API | agent CLI。"""
+        return self.store.get_kv("agent_brain", "local") or "local"
+
+    def _chosen_brain(self, run: dict):
+        name = self.brain()
+        if name == "local":
+            return None
+        if not self.cfg.allow_online:  # 隐私开关关了：退回本地
+            return None
+        if name in AGENT_CLIS:  # 整个请求交给 CLI；已经在本地开始的运行继续用本地
+            return ("delegate", name) if len(self.store.agent_msgs(run["id"])) == 1 else None
+        try:
+            return "backend", self._api_backend(name)
+        except Exception as e:  # noqa: BLE001 — 没配 key / 模型：停下说明原因
+            return "park", f"{name}: {e}"
+
     def _choose(self, run: dict):
+        picked = self._chosen_brain(run)
+        if picked:
+            return picked
         primary = self.planner.backend
         if not getattr(primary, "local", False):
             return "backend", primary  # 主后端本身就在线：不占本地内存，不需要把关
@@ -1415,10 +1470,22 @@ class AgentRuntime:
         """新开一个运行，整个交给 FreeVideo agent；结束时以 `run:<id>` 唤醒在等它的运行。"""
         if not self.freevideo_online_ok():
             raise ValueError(tr("fv_offline"))
+        return self.delegate_to("freevideo", text, channel, project_id, session_id, start)
+
+    def delegate_to(
+        self,
+        name: str,
+        text: str,
+        channel: str,
+        project_id: str,
+        session_id: str | None,
+        start: bool = True,
+    ) -> dict:
+        """新开一个运行交给 agent CLI（claude_code / codex / freevideo）；结束时唤醒 `run:<id>`。"""
         run = self.store.create_run(project_id, session_id, channel, text)
         self.store.add_agent_msg(run["id"], "user", f"## User\n{text}")
         if start:
-            self._delegate(run, "freevideo")
+            self._delegate(run, name)
         return run
 
     def external_tool(self, run_id: str, name: str, args: dict, timeout: float = 1800) -> dict:

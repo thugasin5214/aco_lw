@@ -425,3 +425,99 @@ def test_local_agent_hands_over_after_approval_and_gets_the_report(env, monkeypa
     assert child["status"] == "done" and child["origin_text"] == "make a cast card film"
     assert runs[parent["id"]]["status"] == "done"
     assert said[-1][0] == "FreeVideo says: film ready"
+
+
+# ---------------- 在线大脑：/model 切换、OpenAI 官方 API、交给 Claude Code / Codex ----------------
+def test_openai_backend_uses_reasoning_model_params(env, monkeypatch):  # noqa: F811
+    from video_agent.planner import PlannerUnavailable, make_named_backend
+
+    studio, _, _ = env
+    cfg = studio.orch.cfg
+    cfg.openai_model = "gpt-test"
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with pytest.raises(PlannerUnavailable, match="API key"):
+        make_named_backend(cfg, studio.store, "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    b = make_named_backend(cfg, studio.store, "openai")
+    assert b.base_url == "https://api.openai.com" and b.name == "openai"
+    body = b._body([{"role": "user", "content": "x"}], None, 100)
+    assert body["max_completion_tokens"] == 100 and "temperature" not in body
+    assert "max_tokens" not in body
+
+
+def test_model_command_switches_brain_only_when_online_is_allowed(env):  # noqa: F811
+    studio, make, said = env
+    a, script = make()
+    online = FakeOnline({"text": "from openrouter"})
+    a.runtime._api_backends = {"openrouter": online}
+    replies = []
+    reply = lambda t, b=None: replies.append(t)
+    a.inbound("web", "/model openrouter", reply)
+    assert "allow_online" in replies[-1] and a.runtime.brain() == "local"
+    studio.orch.cfg.allow_online = True
+    a.inbound("web", "/model nope", reply)
+    assert "nope" in replies[-1]
+    a.inbound("web", "/model openrouter", reply)
+    assert a.runtime.brain() == "openrouter"
+    a.inbound("web", "hi", lambda t, b=None: None)
+    run_all(a)
+    assert said[-1][0] == "from openrouter" and script.seen == []  # 本地没被调用
+    studio.orch.cfg.allow_online = False  # 之后关掉在线：自动退回本地，不往外发
+    script.steps.append({"text": "local again"})
+    a.inbound("web", "hi", lambda t, b=None: None)
+    run_all(a)
+    assert said[-1][0] == "local again"
+
+
+def test_model_codex_hands_whole_request_to_the_cli(env, monkeypatch):  # noqa: F811
+    studio, make, said = env
+    studio.orch.cfg.allow_online = True
+    a, script = make()
+    seen = {}
+
+    class FakeCLI:
+        def run(self, run_id, prompt, url):
+            return "codex did it", {"via": "codex"}
+
+    a.runtime.cli_runner = lambda name: seen.setdefault("name", name) and FakeCLI()
+    monkeypatch.setattr("threading.Thread.start", lambda self: self.run())
+    a.inbound("web", "/model codex", lambda t, b=None: None)
+    a.inbound("web", "research this", lambda t, b=None: None)
+    run_all(a)
+    assert seen["name"] == "codex" and script.seen == [] and said[-1][0] == "codex did it"
+
+
+def test_local_agent_delegates_subtask_to_claude_code_after_approval(env, monkeypatch):  # noqa: F811
+    studio, make, said = env
+    a, _script = make(
+        {"tool_calls": [call("delegate_agent", {"agent": "claude_code", "task": "debug it"})]},
+        lambda msgs: {"text": "noted: " + json.loads(msgs[-1]["content"])["error"]},
+    )
+    a.inbound("web", "hard bug", lambda t, b=None: None)
+    run_all(a)
+    assert said[-1][0].startswith("noted: Online")  # 在线没开：不弹审批，直接告诉 agent
+    studio.orch.cfg.allow_online = True
+    a2, _ = make(
+        {"tool_calls": [call("delegate_agent", {"agent": "claude_code", "task": "debug it"})]},
+        lambda msgs: {"text": "CC says: " + json.loads(msgs[-1]["content"])["reply"]},
+    )
+
+    class FakeCLI:
+        def run(self, run_id, prompt, url):
+            return "fixed", {"via": "claude_code"}
+
+    names = []
+    a2.runtime.cli_runner = lambda name: names.append(name) or FakeCLI()
+    monkeypatch.setattr("threading.Thread.start", lambda self: self.run())
+    a2.inbound("web", "hard bug", lambda t, b=None: None)
+    run_all(a2)
+    parent = last_run(studio)
+    assert parent["status"] == "waiting_user" and any("claude_code" in t for t, b in said if b)
+    m = next(
+        x
+        for x in studio.store.agent_msgs(parent["id"])
+        if x["role"] == "tool" and x["status"] != "done"
+    )
+    a2.runtime.on_approval(m["id"], True)
+    run_all(a2)
+    assert names == ["claude_code"] and said[-1][0] == "CC says: fixed"

@@ -98,6 +98,24 @@ M: dict[str, tuple[str, str]] = {
         "Handing over to the FreeVideo agent uses Claude Code (online); turn on freevideo_agent_online (or allow_online) in config.toml first.",
         "交给 FreeVideo agent 要用 Claude Code（在线）；先在 config.toml 打开 freevideo_agent_online（或 allow_online）。",
     ),
+    "agent_delegate_approval": (
+        "Hand this sub-task to {agent} (online)? It reports back here.\n{task}",
+        "把这个子任务交给 {agent}（在线）？它做完会在这里汇报。\n{task}",
+    ),
+    "agent_online_off": (
+        "Online models / agents are off: set allow_online = true in config.toml first.",
+        "在线模型 / agent 没开：先在 config.toml 设 allow_online = true。",
+    ),
+    "model_now": (
+        "Agent brain: {m}{note}\nOptions: {opts}\nSwitch with /model <name>.",
+        "当前 agent 大脑：{m}{note}\n可选：{opts}\n用 /model <名字> 切换。",
+    ),
+    "model_set": ("Agent brain switched to {m}.", "agent 大脑已切换为 {m}。"),
+    "model_unknown": ("Unknown brain {m}. Options: {opts}", "没有 {m} 这个选项。可选：{opts}"),
+    "model_local_note": (
+        " (online is off, so local is used)",
+        "（在线没开，实际用本地）",
+    ),
     "fv_delegate_approval": (
         "Hand this task to the FreeVideo agent (Claude Code + FreeVideo tools)?\n{task}",
         "把这个任务交给 FreeVideo agent（Claude Code + FreeVideo 工具）？\n{task}",
@@ -282,6 +300,7 @@ HELP = (
     """aco_lw commands (no LLM needed):
 /status system and queue status
 /fv <task> hand a video task to the FreeVideo agent (Claude Code + FreeVideo tools)
+/model [local|openai|openrouter|anthropic|claude_code|codex] show / switch the agent's brain
 /rounds recent rounds
 /round TEMPLATE [COUNT] [prompt]  queue a round directly
 /review re-send rounds waiting for review
@@ -299,6 +318,7 @@ Anything else: a request or note — wakes the LLM.""",
     """aco_lw 命令（不唤醒 LLM）：
 /status 系统与队列状态
 /fv <任务> 把视频任务交给 FreeVideo agent（Claude Code + FreeVideo 工具）
+/model [local|openai|openrouter|anthropic|claude_code|codex] 查看 / 切换 agent 的大脑
 /rounds 最近几轮
 /round 模板 [数量] [prompt]  直接出一轮候选
 /review 重新推送待审阅的候选
