@@ -23,6 +23,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import jsonschema
 
@@ -908,6 +909,14 @@ def general_tools(rt: AgentRuntime) -> list[Tool]:
             on_approve={"tool": "delegate_freevideo_approved", "args": a},
         )
 
+    def look(ctx, a):
+        refs = a.get("paths") or []
+        if isinstance(refs, str):
+            refs = [refs]
+        if not refs:
+            return Done({"error": "give paths: file paths, @task:ID, @round:ID or @upload:ID"})
+        return job(ctx, lambda: tb().look(ctx["run_id"], refs))
+
     def send_file(ctx, a):
         p = tb().readable(ctx["run_id"], a["path"])
         if not p.is_file():
@@ -1016,6 +1025,25 @@ def general_tools(rt: AgentRuntime) -> list[Tool]:
             _obj({"task": S}, ["task"]),
             "approval",
             delegate_freevideo,
+        ),
+        Tool(
+            "look",
+            "See images or videos yourself (you are a vision model): candidates you generated, "
+            "reference pictures, downloaded videos (6 frames each). Use it to judge your own "
+            "results against the brief / references before showing the user. Up to 8 images "
+            "per call; they arrive right after this tool result.",
+            _obj(
+                {
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "file paths, @task:ID, @round:ID (all outputs) or @upload:ID",
+                    },
+                },
+                ["paths"],
+            ),
+            "wait",
+            look,
         ),
         Tool(
             "send_file",
@@ -1137,8 +1165,38 @@ class AgentRuntime:
             if r["created"] <= upto:
                 continue
             msgs += self._compact(r)
-        msgs += [self._wire(m) for m in self.store.agent_msgs(run["id"])]
+        pics: list[dict] = []
+        for m in self.store.agent_msgs(run["id"]):
+            if m["role"] != "tool" and pics:  # 图片紧跟在这一组工具结果之后
+                msgs.append({"role": "user", "content": pics})
+                pics = []
+            msgs.append(self._wire(m))
+            if m["role"] == "tool" and m["name"] == "look" and m["status"] == "done":
+                pics += self._look_parts(m["content"])
+        if pics:
+            msgs.append({"role": "user", "content": pics})
         return msgs
+
+    @staticmethod
+    def _look_parts(content: str) -> list[dict]:
+        """look 的结果 → 视觉消息（OpenAI 格式的 image_url data URL；Claude 后端会转换）。"""
+        import base64
+
+        try:
+            images = json.loads(content).get("images") or []
+        except (ValueError, AttributeError):
+            return []
+        parts: list[dict] = []
+        for im in images:
+            try:
+                data = base64.b64encode(Path(im["file"]).read_bytes()).decode()
+            except OSError:
+                continue
+            parts.append({"type": "text", "text": f"[look] {im['ref']}"})
+            parts.append(
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{data}"}}
+            )
+        return parts
 
     # ---- 启动 ----
     def start(

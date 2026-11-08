@@ -326,6 +326,102 @@ class Toolbox:
         return {"name": slug, action: True}
 
     # ---- 媒体 ----
+    # ---- 看图：编排器把图 / 视频帧缩小后交给视觉 LLM ----
+    LOOK_MAX = 8
+    IMAGE_EXT = frozenset({".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"})
+    VIDEO_EXT = frozenset({".mp4", ".mov", ".webm", ".mkv", ".m4v"})
+
+    def _expand_look(self, refs: list[str]) -> list[str]:
+        store = self.rt.studio.store
+        out: list[str] = []
+        for r in refs:
+            r = r.strip()
+            if r.startswith("@round:"):  # 整轮：每个成功任务的第一个产物
+                rid = r[len("@round:") :]
+                if store.get_round(rid) is None:
+                    raise ValueError(f"{r}: no such round")
+                out += [f"@task:{t['id']}" for t in store.round_tasks(rid) if t["outputs"]]
+            else:
+                out.append(r)
+        return out
+
+    def look(self, run_id: str, refs: list[str], max_side: int = 1024) -> dict:
+        """准备给 LLM 看的图：图片缩到长边 max_side；视频抽 6 帧拼成一张。"""
+        refs = self._expand_look(refs)
+        dest = self.workdir(run_id) / "look"
+        dest.mkdir(parents=True, exist_ok=True)
+        images, errors = [], []
+        for i, ref in enumerate(refs):
+            if len(images) >= self.LOOK_MAX:
+                errors.append({"ref": ref, "error": f"more than {self.LOOK_MAX} images; skipped"})
+                continue
+            try:
+                p = self.readable(run_id, ref)
+                if not p.is_file():
+                    raise ValueError(f"not a file: {p}")
+                out = dest / f"{int(time.time() * 1000)}_{i}.jpg"
+                ext = p.suffix.lower()
+                fit = (
+                    f"scale='min({max_side},iw)':'min({max_side},ih)'"
+                    ":force_original_aspect_ratio=decrease"
+                )
+                if ext in self.IMAGE_EXT:
+                    vf = fit
+                elif ext in self.VIDEO_EXT:
+                    dur = float(
+                        subprocess.run(
+                            [
+                                "ffprobe",
+                                "-v",
+                                "error",
+                                "-show_entries",
+                                "format=duration",
+                                "-of",
+                                "csv=p=0",
+                                str(p),
+                            ],
+                            capture_output=True,
+                            text=True,
+                            timeout=30,
+                            check=True,
+                        ).stdout.strip()
+                        or 0
+                    )
+                    side = max_side // 3 * 2
+                    vf = (
+                        f"fps={6 / max(dur, 0.1):.4f},scale='min({side},iw)':'min({side},ih)'"
+                        ":force_original_aspect_ratio=decrease,tile=3x2"
+                    )
+                else:
+                    raise ValueError(f"not an image or video: {p.name}")
+                subprocess.run(
+                    [
+                        "ffmpeg",
+                        "-v",
+                        "error",
+                        "-y",
+                        "-i",
+                        str(p),
+                        "-vf",
+                        vf,
+                        "-frames:v",
+                        "1",
+                        "-q:v",
+                        "3",
+                        str(out),
+                    ],
+                    capture_output=True,
+                    timeout=120,
+                    check=True,
+                )
+                label = ref if ref == str(p) else f"{ref} ({p.name})"
+                if ext in self.VIDEO_EXT:
+                    label += " — 6 frames, left→right, top→bottom"
+                images.append({"ref": label, "file": str(out)})
+            except (ValueError, OSError, subprocess.SubprocessError) as e:
+                errors.append({"ref": ref, "error": str(e)[:300]})
+        return {"images": images, "errors": errors}
+
     def add_media(self, run_id: str, path: str, project_id: str | None) -> dict:
         p = self.readable(run_id, path)
         if not p.is_file():

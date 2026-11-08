@@ -232,3 +232,54 @@ def test_mcp_read_only_runs_directly_others_need_approval(env):  # noqa: F811
     ]
     assert texts == ['search:{"q": "x"}', 'post:{"m": 1}']
     a.runtime.toolbox.mcp.close()
+
+
+def test_look_sends_images_to_the_vision_llm(env):  # noqa: F811
+    """look：编排器把图缩小、视频抽帧，紧跟在工具结果后作为图片交给 LLM。"""
+    import subprocess
+
+    studio, make, _ = env
+    a, script = make(
+        {"tool_calls": [call("look", {"paths": ["a.png", "clip.mp4", "nope.png"]})]},
+        {"text": "the face is round"},
+    )
+    a.inbound("web", "check it", lambda t, b=None: None)
+    run = last_run(studio)
+    wd = a.runtime.toolbox.workdir(run["id"])
+    for cmd in (
+        ["-f", "lavfi", "-i", "color=red:s=2000x1000", "-frames:v", "1", str(wd / "a.png")],
+        ["-f", "lavfi", "-i", "testsrc=s=320x240:d=2", str(wd / "clip.mp4")],
+    ):
+        subprocess.run(["ffmpeg", "-v", "error", "-y", *cmd], check=True)
+    assert wait_until(lambda: run_all(a) or last_run(studio)["status"] == "done", 30)
+    res = tool_result(studio, run["id"], "look")
+    assert len(res["images"]) == 2 and res["errors"][0]["ref"] == "nope.png"
+    msgs = script.seen[-1]
+    i = next(k for k, m in enumerate(msgs) if m["role"] == "tool")
+    pics = msgs[i + 1]
+    assert pics["role"] == "user"
+    urls = [p["image_url"]["url"] for p in pics["content"] if p["type"] == "image_url"]
+    assert len(urls) == 2 and all(u.startswith("data:image/jpeg;base64,") for u in urls)
+    assert any("6 frames" in p.get("text", "") for p in pics["content"])
+
+
+def test_claude_backend_converts_image_parts():
+    from video_agent.backends import AnthropicBackend
+
+    _, out, _ = AnthropicBackend.convert(
+        [
+            {"role": "system", "content": "s"},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "[look] x"},
+                    {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,QUJD"}},
+                ],
+            },
+        ],
+        None,
+    )
+    assert out[0]["content"][1] == {
+        "type": "image",
+        "source": {"type": "base64", "media_type": "image/jpeg", "data": "QUJD"},
+    }

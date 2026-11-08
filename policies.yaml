@@ -48,6 +48,7 @@ execution:
     run_comfy_workflow: {allow: true}  # 经编排器排队（可追踪、受暂停与资源闸门）
     # 通用工具（toolbox.py）：编排器执行，agent 只提出请求
     web_fetch: {allow: true}
+    look: {allow: true}
     run_command:                       # 每条命令都要你批准；auto_allow 里的前缀（单条命令、无管道）免批准
       allow: true
       auto_allow: []                   # 例：["ffprobe", "agent-reach doctor"]
