@@ -23,12 +23,15 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import jsonschema
 
 from .config import ROOT
 from .freevideo import FreeVideoError
 from .i18n import tr
+from .mcp_client import MCPError
+from .planner import AGENT_CLIS, ONLINE_APIS
 from .policy import Policies, classify_round
 from .production import ProductionError
 from .render import ParamError
@@ -38,6 +41,14 @@ log = logging.getLogger("aco_lw.agent")
 RULES_FILE = ROOT / "prompts" / "agent_rules.md"
 TERMINAL_RUN = {"done", "failed", "cancelled"}
 MAX_RESULT_CHARS = 4000
+FREEVIDEO_ENV = (
+    "## FreeVideo agent\nYou are the FreeVideo agent for this request: make the video with the "
+    "`freevideo` MCP tools (read its guide / schema first; plan before generating; prefer drafts "
+    "before long or high-quality renders). FreeVideo queues and runs generation itself. Use the "
+    "aco_lw tools to talk to the user: `send_file` for results to look at, `ask_user` for "
+    "decisions, `run_command` / `load_skill` / `mcp_call` for downloads and research. Finish with "
+    "a short report: what you made, where it is (FreeVideo library / project) and what to decide next."
+)
 
 
 # ---------------- 工具定义 ----------------
@@ -54,6 +65,9 @@ class Pending:
     buttons: list | None = None
     on_approve: dict | None = None  # 审批通过后要执行的动作 {"tool": ..., "args": ...}
     info: dict = field(default_factory=dict)
+    start: Callable[[], None] | None = None  # 等待消息落库之后才开始的后台工作（防结果先到丢失）
+    rule: str | None = None  # 审批可“始终允许”的规则（如 cmd:ffmpeg、mcp:exa.web_search_exa）
+    bypassable: bool = True  # bypass 模式能否跳过（装节点 / 下模型不能：硬约束，每次问）
 
 
 @dataclass
@@ -96,6 +110,17 @@ def _round_view(store, rnd: dict) -> dict:
             for t in tasks
         ],
     }
+
+
+def park_reason(why: str) -> str:
+    """llm_admit 的内部原因 → 给人看的一句话。"""
+    if "film" in why:
+        return tr("park_film")
+    if "render" in why:
+        return tr("park_render")
+    if "pressure" in why:
+        return tr("park_pressure")
+    return why
 
 
 def explicit_pick(text: str, idx: int) -> bool:
@@ -176,6 +201,7 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
             params["image"] = a["image"]
         if a.get("seed"):
             params["seed"] = a["seed"]
+        params.update(a.get("params") or {})
         tier = a.get("tier") or None
         if tier and tier not in tpl.tiers:
             return Done({"error": f"unknown tier {tier}; options: {list(tpl.tiers)}"})
@@ -194,6 +220,7 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
                 "",
                 tr("agent_tier_approval", t=tier, tpl=tpl.name),
                 on_approve={"tool": "queue_round_approved", "args": a},
+                rule=f"round:{tpl.name}",
             )
         return Done(_queue(ctx, a, params, tier, tpl.kind == "image" or unmeasured))
 
@@ -224,6 +251,9 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
         params = {"prompt": a["prompt"]} if a.get("prompt") else {}
         if a.get("image"):
             params["image"] = a["image"]
+        if a.get("seed"):
+            params["seed"] = a["seed"]
+        params.update(a.get("params") or {})
         return Done(_queue(ctx, a, params, a.get("tier"), True))
 
     def wait_for_round(ctx, a):
@@ -331,6 +361,45 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
 
     def ask_user(ctx, a):
         return Pending("user", f"ask:{ctx['run_id']}", a["question"])
+
+    def delegate_freevideo_approved(ctx, a):
+        parent = rt.store.get_run(ctx["run_id"])
+        child = rt.delegate_freevideo(
+            a["task"], ctx["channel"], ctx["project_id"], parent["session_id"], start=False
+        )
+        return Pending(
+            "event", f"run:{child['id']}", start=lambda: rt._delegate(child, "freevideo")
+        )
+
+    def delegate_agent_approved(ctx, a):
+        parent = rt.store.get_run(ctx["run_id"])
+        child = rt.delegate_to(
+            a["agent"], a["task"], ctx["channel"], ctx["project_id"], parent["session_id"], False
+        )
+        return Pending("event", f"run:{child['id']}", start=lambda: rt._delegate(child, a["agent"]))
+
+    def mcp_call_approved(ctx, a):
+        tb = rt.toolbox
+        key = f"job:{ctx['run_id']}:{ctx['call_id']}"
+        return Pending(
+            "event",
+            key,
+            start=lambda: tb.jobs.start(
+                key, lambda: tb.mcp.call(a["server"], a["tool"], a.get("args") or {})
+            ),
+        )
+
+    def run_command_approved(ctx, a):
+        tb = rt.toolbox
+        key = f"job:{ctx['run_id']}:{ctx['call_id']}"
+        timeout = int(a.get("timeout_s") or 600)
+        return Pending(
+            "event",
+            key,
+            start=lambda: tb.jobs.start(
+                key, lambda: tb.run_command(ctx["run_id"], a["command"], timeout)
+            ),
+        )
 
     # ---- 制片流水线（阶段 3）：agent 只读计划、按计划开跑或转达你的审核，不自建状态机 ----
     def _prod():
@@ -480,7 +549,13 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
                 a=json.dumps(args, ensure_ascii=False)[:600],
                 why=a.get("reason") or "",
             )
-            return Pending("approval", "", txt, on_approve={"tool": "comfy_approved", "args": a})
+            return Pending(
+                "approval",
+                "",
+                txt,
+                on_approve={"tool": "comfy_approved", "args": a},
+                bypassable=False,
+            )
         return Done(
             {
                 "error": f"{tool} {args.get('action') or ''} is not allowed (restart / delete / queue "
@@ -545,6 +620,11 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
                     "seed": I,
                     "title": S,
                     "parent_round": S,
+                    "params": {
+                        "type": "object",
+                        "description": "other template slots by name, e.g. for freevideo-ref "
+                        '{"ref_video": "@upload:ID", "ref_image": "@upload:ID"}',
+                    },
                 },
                 ["template", "prompt"],
             ),
@@ -743,12 +823,308 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
             ask_user,
         ),
     ]
+    tools += general_tools(rt)
     hidden = [
+        Tool("run_command_approved", "", _obj({}), "act", run_command_approved),
+        Tool("mcp_call_approved", "", _obj({}), "act", mcp_call_approved),
+        Tool("delegate_freevideo_approved", "", _obj({}), "act", delegate_freevideo_approved),
+        Tool("delegate_agent_approved", "", _obj({}), "act", delegate_agent_approved),
         Tool("queue_round_approved", "", _obj({}), "act", queue_round_approved),
         Tool("select_approved", "", _obj({}), "act", select_approved),
         Tool("comfy_approved", "", _obj({}), "act", comfy_approved),
     ]
     return {t.name: t for t in tools + hidden}
+
+
+def command_rule(cmd: str) -> str | None:
+    """单条命令按程序名记规则（cmd:ffmpeg）；带管道 / 串联 / 重定向的不能“始终允许”。"""
+    import re
+
+    c = cmd.strip()
+    if not c or re.search(r"[;&|`$<>]|\n", c):
+        return None
+    return f"cmd:{c.split()[0]}"
+
+
+def general_tools(rt: AgentRuntime) -> list[Tool]:
+    """通用工具（见 toolbox.py）：慢的进后台工具队列，命令先经你批准。"""
+    from .toolbox import blocked
+
+    S, I = {"type": "string"}, {"type": "integer"}
+
+    def tb():
+        return rt.toolbox
+
+    def job(ctx, fn) -> Pending:
+        key = f"job:{ctx['run_id']}:{ctx['call_id']}"
+        return Pending("event", key, start=lambda: tb().jobs.start(key, fn))
+
+    def web_fetch(ctx, a):
+        return job(ctx, lambda: tb().web_fetch(ctx["run_id"], a["url"], a.get("max_chars") or 0))
+
+    def run_command(ctx, a):
+        cmd = a["command"].strip()
+        why = blocked(cmd)
+        if why:
+            return Done({"error": f"refused: {why}"})
+        if tb().auto_allowed(cmd):
+            return job(
+                ctx,
+                lambda: tb().run_command(ctx["run_id"], cmd, int(a.get("timeout_s") or 600)),
+            )
+        reason = f"\n{a['reason']}" if a.get("reason") else ""
+        return Pending(
+            "approval",
+            "",
+            tr("agent_cmd_approval", cmd=cmd[:1500], why=reason),
+            on_approve={"tool": "run_command_approved", "args": {**a, "command": cmd}},
+            rule=command_rule(cmd),
+        )
+
+    def read_file(ctx, a):
+        return Done(
+            tb().read_file(ctx["run_id"], a["path"], a.get("offset") or 0, a.get("limit") or 400)
+        )
+
+    def write_file(ctx, a):
+        return Done(tb().write_file(ctx["run_id"], a["path"], a["content"]))
+
+    def list_skills(ctx, a):
+        return Done({"skills": tb().library().list()})
+
+    def load_skill(ctx, a):
+        return Done(tb().load_skill(a["name"]))
+
+    def memory_read(ctx, a):
+        return Done(tb().memory_read(a.get("name")))
+
+    def memory_write(ctx, a):
+        return Done(tb().memory_write(a["name"], a.get("description", ""), a.get("content", "")))
+
+    def add_media(ctx, a):
+        return Done(tb().add_media(ctx["run_id"], a["path"], ctx["project_id"]))
+
+    def mcp_list(ctx, a):
+        return job(ctx, lambda: tb().mcp.catalog(a.get("server")))
+
+    def mcp_call(ctx, a):
+        server, name, args = a["server"], a["tool"], a.get("args") or {}
+        rule = (rt.policies.data.get("mcp") or {}).get("servers", {}).get(server) or (
+            rt.policies.data.get("mcp") or {}
+        ).get("approval", "unless_read_only")
+        if rule == "deny":
+            return Done({"error": f"MCP server {server} is denied by policy"})
+        need = rule == "always" or (
+            rule == "unless_read_only" and not tb().mcp.read_only(server, name)
+        )
+        if not need:
+            return job(ctx, lambda: tb().mcp.call(server, name, args))
+        shown = json.dumps(args, ensure_ascii=False)[:1200]
+        reason = f"\n{a['reason']}" if a.get("reason") else ""
+        return Pending(
+            "approval",
+            "",
+            tr("agent_mcp_approval", tool=f"{server}.{name}", args=shown, why=reason),
+            on_approve={"tool": "mcp_call_approved", "args": a},
+            rule=f"mcp:{server}.{name}",
+        )
+
+    def delegate_freevideo(ctx, a):
+        if not rt.freevideo_online_ok():
+            return Done({"error": tr("fv_offline")})
+        return Pending(
+            "approval",
+            "",
+            tr("fv_delegate_approval", task=a["task"][:1500]),
+            on_approve={"tool": "delegate_freevideo_approved", "args": a},
+            rule="delegate:freevideo",
+        )
+
+    def delegate_agent(ctx, a):
+        if a.get("agent") not in AGENT_CLIS:
+            return Done({"error": f"agent must be one of {', '.join(AGENT_CLIS)}"})
+        if not rt.cfg.allow_online:
+            return Done({"error": tr("agent_online_off")})
+        return Pending(
+            "approval",
+            "",
+            tr("agent_delegate_approval", agent=a["agent"], task=a["task"][:1500]),
+            on_approve={"tool": "delegate_agent_approved", "args": a},
+            rule=f"delegate:{a['agent']}",
+        )
+
+    def look(ctx, a):
+        refs = a.get("paths") or []
+        if isinstance(refs, str):
+            refs = [refs]
+        if not refs:
+            return Done({"error": "give paths: file paths, @task:ID, @round:ID or @upload:ID"})
+        return job(ctx, lambda: tb().look(ctx["run_id"], refs))
+
+    def send_file(ctx, a):
+        p = tb().readable(ctx["run_id"], a["path"])
+        if not p.is_file():
+            return Done({"error": f"not a file: {p}"})
+        rt.send_files(ctx["channel"], [(p, a.get("caption") or p.name)])
+        return Done({"sent": str(p)})
+
+    return [
+        Tool(
+            "web_fetch",
+            "Read a web page as text (no login, no JavaScript). Runs in the background; you get "
+            "the text when it is done. For logged-in sites (Xiaohongshu, X, ...) or downloads, "
+            "use a skill (e.g. agent-reach) with run_command.",
+            _obj({"url": S, "max_chars": I}, ["url"]),
+            "wait",
+            web_fetch,
+        ),
+        Tool(
+            "run_command",
+            "Run a shell command (zsh) in this run's own working directory. The user approves "
+            "every command (shown verbatim with your reason) unless policy pre-approves it; then "
+            "it runs in the background and you get exit code, output tail and new files. Never "
+            "use it to reach ComfyUI/FreeVideo (use the generation tools) or to manage the LLM.",
+            _obj({"command": S, "reason": S, "timeout_s": I}, ["command", "reason"]),
+            "approval",
+            run_command,
+        ),
+        Tool(
+            "read_file",
+            "Read a text file or list a directory (under data/ or a skill directory; relative "
+            "paths are in this run's working directory). offset/limit are line numbers.",
+            _obj({"path": S, "offset": I, "limit": I}, ["path"]),
+            "read",
+            read_file,
+        ),
+        Tool(
+            "write_file",
+            "Write a text file (script, prompt, notes) in this run's working directory.",
+            _obj({"path": S, "content": S}, ["path", "content"]),
+            "act",
+            write_file,
+        ),
+        Tool(
+            "list_skills",
+            "Skills you can load (name + when to use).",
+            _obj({}),
+            "read",
+            list_skills,
+        ),
+        Tool(
+            "load_skill",
+            "Load a skill's full instructions before doing a task it covers; follow them with "
+            "your tools.",
+            _obj({"name": S}, ["name"]),
+            "read",
+            load_skill,
+        ),
+        Tool(
+            "memory_read",
+            "Your own long-term memory: without name, the index; with name, one memory.",
+            _obj({"name": S}),
+            "read",
+            memory_read,
+        ),
+        Tool(
+            "memory_write",
+            "Save (or with empty content, delete) one memory: a durable lesson, user preference "
+            "or how-to you will need again. One fact per memory; update instead of duplicating.",
+            _obj({"name": S, "description": S, "content": S}, ["name", "description", "content"]),
+            "act",
+            memory_write,
+        ),
+        Tool(
+            "add_media",
+            "Register a downloaded / produced image or video so generation tools can use it; "
+            "returns an @upload:ID reference.",
+            _obj({"path": S}, ["path"]),
+            "act",
+            add_media,
+        ),
+        Tool(
+            "mcp_list",
+            "MCP servers the orchestrator can use for you. Without server: each server's tools "
+            "in one line; with server: that server's tools with full argument schemas (read it "
+            "before the first mcp_call).",
+            _obj({"server": S}),
+            "wait",
+            mcp_list,
+        ),
+        Tool(
+            "mcp_call",
+            "Call a tool of a configured MCP server. Read-only tools run directly; others ask "
+            "the user first (per policy). Runs in the background; you get its result.",
+            _obj(
+                {"server": S, "tool": S, "args": {"type": "object"}, "reason": S},
+                ["server", "tool"],
+            ),
+            "approval",
+            mcp_call,
+        ),
+        Tool(
+            "delegate_freevideo",
+            "Hand a whole video task to the FreeVideo agent (Claude Code with FreeVideo's own MCP "
+            "tools: films, cast cards, timeline editing, references). Use it when the task needs "
+            "FreeVideo features our templates don't cover. The user approves; you get its report.",
+            _obj({"task": S}, ["task"]),
+            "approval",
+            delegate_freevideo,
+        ),
+        Tool(
+            "delegate_agent",
+            "Hand a sub-task to a stronger online agent and wait for its report: claude_code "
+            "(Claude Code) or codex (Codex, the user's ChatGPT account). Use it for hard "
+            "reasoning, long research, debugging or writing code. It works through the same "
+            "aco_lw tools (commands still need the user's approval). The user approves each "
+            "hand-over; needs allow_online.",
+            _obj(
+                {"agent": {"type": "string", "enum": list(AGENT_CLIS)}, "task": S},
+                ["agent", "task"],
+            ),
+            "act",
+            delegate_agent,
+        ),
+        Tool(
+            "look",
+            "See images or videos yourself (you are a vision model): candidates you generated, "
+            "reference pictures, downloaded videos (6 frames each). Use it to judge your own "
+            "results against the brief / references before showing the user. Up to 8 images "
+            "per call; they arrive right after this tool result.",
+            _obj(
+                {
+                    "paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "file paths, @task:ID, @round:ID (all outputs) or @upload:ID",
+                    },
+                },
+                ["paths"],
+            ),
+            "wait",
+            look,
+        ),
+        Tool(
+            "send_file",
+            "Send an image / video / file to the user (e.g. a contact sheet for them to judge).",
+            _obj(
+                {
+                    "path": {
+                        "type": "string",
+                        "description": "a file path, @task:ID or @upload:ID",
+                    },
+                    "caption": S,
+                },
+                ["path"],
+            ),
+            "act",
+            send_file,
+        ),
+    ]
+
+
+def _first_line(p: Pending) -> str:
+    lines = [x for x in (p.message or "").splitlines() if x.strip()]
+    return " ".join(lines[:2])[:300]
 
 
 def tools_spec(tools: dict[str, Tool]) -> list[dict]:
@@ -777,6 +1153,13 @@ class AgentRuntime:
         self.enqueue, self.say_for, self.max_steps = enqueue, say_for, max_steps
         self.cfg = studio.orch.cfg
         self.policies = Policies.load(studio.orch.cfg.data_dir)
+        from .toolbox import Toolbox
+
+        self.toolbox = Toolbox(self.cfg, self)
+        # 给你发文件（由 daemon 按渠道注入；默认只发一条带路径的消息）
+        self.send_files: Callable[[str, list], None] = lambda ch, items: self.say_for(ch)(
+            "\n".join(f"📎 {cap}: {p}" for p, cap in items)
+        )
         self.tools = build_tools(self)
         self.spec = tools_spec(self.tools)
         self._lock = threading.RLock()
@@ -785,7 +1168,14 @@ class AgentRuntime:
     # ---- 上下文（稳定前缀 + 逐字复现） ----
     def system_prompt(self, project_id: str, session: dict | None) -> str:
         # agent 规则 + 与规划器相同的模板说明、项目记忆、会话摘要（稳定前缀）
-        return self.planner.system_prompt(project_id, session, RULES_FILE.read_text().strip())
+        rules = RULES_FILE.read_text().strip()
+        skills = self.toolbox.skills_index()
+        if skills:
+            rules += "\n\n## Skills (load_skill before a task one covers)\n" + skills
+        mem = self.toolbox.memory_index()
+        if mem:
+            rules += "\n\n## Your memory index (memory_read for details)\n" + mem
+        return self.planner.system_prompt(project_id, session, rules)
 
     @staticmethod
     def _wire(m: dict) -> dict:
@@ -838,8 +1228,38 @@ class AgentRuntime:
             if r["created"] <= upto:
                 continue
             msgs += self._compact(r)
-        msgs += [self._wire(m) for m in self.store.agent_msgs(run["id"])]
+        pics: list[dict] = []
+        for m in self.store.agent_msgs(run["id"]):
+            if m["role"] != "tool" and pics:  # 图片紧跟在这一组工具结果之后
+                msgs.append({"role": "user", "content": pics})
+                pics = []
+            msgs.append(self._wire(m))
+            if m["role"] == "tool" and m["name"] == "look" and m["status"] == "done":
+                pics += self._look_parts(m["content"])
+        if pics:
+            msgs.append({"role": "user", "content": pics})
         return msgs
+
+    @staticmethod
+    def _look_parts(content: str) -> list[dict]:
+        """look 的结果 → 视觉消息（OpenAI 格式的 image_url data URL；Claude 后端会转换）。"""
+        import base64
+
+        try:
+            images = json.loads(content).get("images") or []
+        except (ValueError, AttributeError):
+            return []
+        parts: list[dict] = []
+        for im in images:
+            try:
+                data = base64.b64encode(Path(im["file"]).read_bytes()).decode()
+            except OSError:
+                continue
+            parts.append({"type": "text", "text": f"[look] {im['ref']}"})
+            parts.append(
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{data}"}}
+            )
+        return parts
 
     # ---- 启动 ----
     def start(
@@ -879,13 +1299,33 @@ class AgentRuntime:
             return "park", f"{why}; online fallback is configured but allow_online is off"
         fresh = len(self.store.agent_msgs(run["id"])) == 1  # 还没开始：可以整个交给 CLI
         for name in chain:
-            if name in ("anthropic", "openrouter", "openai_compatible"):
+            if name in ONLINE_APIS:
                 return "backend", self._api_backend(name)
             if name in ("claude_code", "codex") and fresh:
                 return "delegate", name
         return "park", why
 
+    def brain(self) -> str:
+        """/model 选的大脑：local（= 配置里的主后端）| 在线 API | agent CLI。"""
+        return self.store.get_kv("agent_brain", "local") or "local"
+
+    def _chosen_brain(self, run: dict):
+        name = self.brain()
+        if name == "local":
+            return None
+        if not self.cfg.allow_online:  # 隐私开关关了：退回本地
+            return None
+        if name in AGENT_CLIS:  # 整个请求交给 CLI；已经在本地开始的运行继续用本地
+            return ("delegate", name) if len(self.store.agent_msgs(run["id"])) == 1 else None
+        try:
+            return "backend", self._api_backend(name)
+        except Exception as e:  # noqa: BLE001 — 没配 key / 模型：停下说明原因
+            return "park", f"{name}: {e}"
+
     def _choose(self, run: dict):
+        picked = self._chosen_brain(run)
+        if picked:
+            return picked
         primary = self.planner.backend
         if not getattr(primary, "local", False):
             return "backend", primary  # 主后端本身就在线：不占本地内存，不需要把关
@@ -905,8 +1345,11 @@ class AgentRuntime:
                 self._finish(run, tr("agent_step_budget", n=self.max_steps), "done")
                 return
             kind, what = self._choose(run)
+            parked = run["status"] == "waiting_resources"
             if kind == "park":  # 结果先暂存，资源允许了再交回 LLM
                 self.store.update_run(run_id, status="waiting_resources", waiting={"reason": what})
+                if not parked:  # 只在刚开始排队时告诉你一次：在等什么、谁会叫醒它
+                    self.say_for(run["channel"])(tr("agent_parked", why=park_reason(what)))
                 return
             if kind == "delegate":
                 self._delegate(run, what)
@@ -914,6 +1357,8 @@ class AgentRuntime:
             self.store.update_run(run_id, status="running", waiting={})
         backend = what
         say = self.say_for(run["channel"])
+        if parked:
+            say(tr("agent_resumed"))
         rm = self.studio.orch.resources
         try:
             res = self._call(backend, run, rm)
@@ -996,10 +1441,14 @@ class AgentRuntime:
                 c = self._compact(r)
                 parts.append(f"{c[0]['content']}\n## Your earlier answer\n{c[1]['content']}")
         parts.append(self.store.agent_msgs(run["id"])[0]["content"])
+        if run["waiting"].get("agent") == "freevideo":
+            parts.append(FREEVIDEO_ENV)
         parts.append(
-            "## Environment\nYou run inside aco_lw. Use only the aco_lw tools; you have "
-            "no shell or file access. When finished, reply with the final message for the "
-            "user (it is shown to them as-is)."
+            "## Environment\nYou run inside aco_lw. Use only the aco_lw tools (commands, "
+            "files, web pages and skills go through run_command / read_file / web_fetch / "
+            "load_skill, which the orchestrator executes); do not use your own shell or file "
+            "tools. When finished, reply with the final message for the user (it is shown to "
+            "them as-is)."
         )
         return "\n\n".join(parts)
 
@@ -1019,11 +1468,53 @@ class AgentRuntime:
         )
         self.store.update_run(run_id, status="running")  # 离开 delegated 后再结束
         self._finish(self.store.get_run(run_id), None, status, say_text=text)
+        self.resolve(f"run:{run_id}", {"status": status, "reply": text})  # 唤醒在等它的运行
 
     def cli_runner(self, name: str):
         from .agent_cli import AgentCLI
 
+        if name == "freevideo":
+            return AgentCLI(name, self.cfg, self.freevideo_mcp())
         return AgentCLI(name, self.cfg)
+
+    def freevideo_mcp(self) -> dict:
+        """FreeVideo 自己给出的 MCP 启动配置（/freevideo/agent/connect）；token 不经过这里。"""
+        from .freevideo import FreeVideo
+
+        fv = FreeVideo(self.cfg.comfy_url)
+        r = fv.http.get(
+            self.cfg.comfy_url.rstrip("/") + "/freevideo/agent/connect", headers=fv._headers()
+        )
+        r.raise_for_status()
+        return r.json()["mcp_json"]["mcpServers"]
+
+    # ---- 交给 FreeVideo 的 agent（Claude Code + FreeVideo MCP） ----
+    def freevideo_online_ok(self) -> bool:
+        return bool(self.cfg.allow_online or getattr(self.cfg, "freevideo_agent_online", False))
+
+    def delegate_freevideo(
+        self, text: str, channel: str, project_id: str, session_id: str | None, start: bool = True
+    ) -> dict:
+        """新开一个运行，整个交给 FreeVideo agent；结束时以 `run:<id>` 唤醒在等它的运行。"""
+        if not self.freevideo_online_ok():
+            raise ValueError(tr("fv_offline"))
+        return self.delegate_to("freevideo", text, channel, project_id, session_id, start)
+
+    def delegate_to(
+        self,
+        name: str,
+        text: str,
+        channel: str,
+        project_id: str,
+        session_id: str | None,
+        start: bool = True,
+    ) -> dict:
+        """新开一个运行交给 agent CLI（claude_code / codex / freevideo）；结束时唤醒 `run:<id>`。"""
+        run = self.store.create_run(project_id, session_id, channel, text)
+        self.store.add_agent_msg(run["id"], "user", f"## User\n{text}")
+        if start:
+            self._delegate(run, name)
+        return run
 
     def external_tool(self, run_id: str, name: str, args: dict, timeout: float = 1800) -> dict:
         """CLI agent 经 MCP 发来的工具调用：同样的执行策略、审批与等待，只是同步返回结果。"""
@@ -1079,10 +1570,24 @@ class AgentRuntime:
             return self._tool_done(run, call, args, {"error": denied})
         try:
             out = tool.handler(ctx, args)
-        except (StudioError, ParamError, KeyError, ValueError, ProductionError, FreeVideoError) as e:
+        except (
+            StudioError,
+            ParamError,
+            KeyError,
+            ValueError,
+            ProductionError,
+            FreeVideoError,
+            OSError,
+            MCPError,
+        ) as e:
             out = Done({"error": str(e)})
         except jsonschema.ValidationError as e:
             out = Done({"error": f"schema: {e.message}"})
+        if isinstance(out, Pending) and out.kind == "approval" and out.on_approve:
+            how = self.auto_approval(out.rule, out.bypassable)
+            if how:  # bypass 模式或你设过“始终允许”：不再问，直接执行批准后的动作
+                say(tr("agent_auto_approved", how=tr(f"perm_how_{how}"), what=_first_line(out)))
+                out = self._run_approved(ctx, out.on_approve, how)
         if isinstance(out, Done):
             return self._tool_done(run, call, args, out.result)
         mid = self.store.add_agent_msg(
@@ -1096,16 +1601,20 @@ class AgentRuntime:
             key=out.key,
             on_approve=out.on_approve,
             info=out.info,
+            rule=out.rule,
         )
         if out.kind == "approval":
             key = f"approval:{mid}"
             self.store.update_agent_msg(mid, meta={"key": key})
-            say(
-                out.message,
-                [[(tr("btn_approve"), f"a:{mid}:yes"), (tr("btn_decline"), f"a:{mid}:no")]],
-            )
+            row = [(tr("btn_approve"), f"a:{mid}:yes")]
+            if out.rule:
+                row.append((tr("btn_always", r=out.rule), f"a:{mid}:always"))
+            row.append((tr("btn_decline"), f"a:{mid}:no"))
+            say(out.message, [row])
         elif out.kind == "user":
             say(out.message)
+        if out.start:
+            out.start()
         self._log_step(run, call, args, "…")
 
     def _tool_done(self, run: dict, call: dict, args: dict, result: dict) -> None:
@@ -1309,11 +1818,44 @@ class AgentRuntime:
                 )
         self.on_round_ready(rnd)
 
-    def on_approval(self, msg_id: int, approve: bool) -> str:
+    # ---- 权限：default（逐条审批）| bypass（不再审批）；“始终允许”的规则 ----
+    def permission_mode(self) -> str:
+        return self.store.get_kv("permission_mode") or getattr(
+            self.cfg, "permission_mode", "default"
+        )
+
+    def allow_rules(self) -> list[str]:
+        return list(self.store.get_kv("perm_allow") or [])
+
+    def remember_rule(self, rule: str) -> None:
+        rules = self.allow_rules()
+        if rule not in rules:
+            self.store.set_kv("perm_allow", [*rules, rule])
+
+    def auto_approval(self, rule: str | None, bypassable: bool = True) -> str | None:
+        if bypassable and self.permission_mode() == "bypass":
+            return "bypass"
+        if rule and rule in self.allow_rules():
+            return "rule"
+        return None
+
+    def _run_approved(self, ctx: dict, act: dict, how: str):
+        try:
+            out = self.tools[act["tool"]].handler(ctx, act["args"])
+        except (StudioError, ParamError, KeyError, ValueError, OSError, MCPError) as e:
+            return Done({"approved": True, "auto": how, "error": str(e)})
+        if isinstance(out, Done):
+            return Done({"approved": True, "auto": how, **out.result})
+        out.info = {**out.info, "auto": how}  # 后台执行：记在消息里，结果到时照常交回
+        return out
+
+    def on_approval(self, msg_id: int, approve: bool, remember: bool = False) -> str:
         m = self.store.get_agent_msg(msg_id)
         if m is None or m["status"] == "done":
             return tr("agent_already_decided")
         run = self.store.get_run(m["run_id"])
+        if approve and remember and m["meta"].get("rule"):
+            self.remember_rule(m["meta"]["rule"])
         if not approve:
             self.resolve(m["meta"]["key"], {"approved": False, "note": "user declined"})
             return tr("agent_declined")
@@ -1328,6 +1870,14 @@ class AgentRuntime:
         }
         try:
             out = self.tools[act["tool"]].handler(ctx, act["args"])
+            if isinstance(out, Pending):  # 批准后在后台执行：先改成等它的结果，再开始
+                self.store.update_agent_msg(
+                    msg_id, meta={"key": out.key, "kind": out.kind, "approved": True}
+                )
+                self._advance(run["id"])
+                if out.start:
+                    out.start()
+                return tr("agent_approved")
             result = {"approved": True, **out.result}
         except (StudioError, ParamError, KeyError, ValueError) as e:
             result = {"approved": True, "error": str(e)}
@@ -1350,6 +1900,10 @@ class AgentRuntime:
         """daemon 重启：能继续的运行继续；在等的轮若已完成，直接补上结果。"""
         for m in self.store.pending_tool_msgs():
             key = m["meta"].get("key") or ""
+            if key.startswith("job:") and not self.toolbox.jobs.busy(key):
+                # 后台工具随 daemon 重启中断了：如实交回，由 agent 决定要不要重来（不自动重跑命令）
+                self.resolve_msg(m, {"error": "interrupted by a daemon restart; not rerun"})
+                continue
             if key.startswith("round:"):
                 rnd = self.store.get_round(key.split(":", 1)[1])
                 if rnd and rnd["state"] != "generating":

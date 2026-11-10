@@ -197,3 +197,28 @@ def test_peak_is_per_tier_and_adaptive_uses_registry(rm):
     rm.registry.models["freevideo-h3"].adaptive = False
     assert rm.estimator.estimate(t, "smoke").peak_gib == 54.9  # 非自适应：按本档位实测
     assert _j
+
+
+def test_film_shooting_unloads_llm_and_blocks_it(rm):
+    """FreeVideo 电影不经 prepare_render：开拍前卸载 LLM，拍片期间不准加载，拍完唤醒等待者。"""
+    acts = rm.prepare_film()
+    assert rm.state["unloads"] == 1 and acts
+    rm.film_started("f1")
+    ok, why = rm.llm_admit()
+    assert not ok and "film" in why
+    rm.state["loaded"] = True  # 拍片途中别处又加载了 LLM（或 daemon 重启后接着拍）
+    rm.films_shooting({"f1"})
+    assert rm.state["unloads"] == 2 and not rm.llm_admit()[0]
+    called = []
+    rm.listeners.append(lambda: called.append(1))
+    rm.films_shooting(set())
+    assert rm.llm_admit()[0] and called == [1]
+
+
+def test_prepare_film_does_not_interrupt_an_answer(rm, monkeypatch):
+    from video_agent import resources
+
+    monkeypatch.setattr(resources, "ANSWER_WAIT_S", 0.01)
+    with rm.llm.inference(), pytest.raises(resources.ResourceBusy):
+        rm.prepare_film()
+    assert rm.state["unloads"] == 0

@@ -118,6 +118,14 @@ class TelegramBot:
             except Exception as e:  # noqa: BLE001 — 通知失败不影响出图
                 log.warning("Telegram send failed: %s", e)
 
+    def send_files(self, items: list[tuple[Path, str]]) -> None:
+        """agent 的 send_file：把文件（联系表、视频…）发给你。"""
+        for chat in self.allowed:
+            try:
+                self.api.send_documents(chat, items)
+            except Exception as e:  # noqa: BLE001 — 发不出去只记日志
+                log.warning("Telegram send_files failed: %s", e)
+
     def send_round(self, rnd: dict, tasks: list[dict], task_dir: Callable[[str], Path]) -> None:
         items = []
         for t in tasks:
@@ -190,12 +198,17 @@ class TelegramBot:
                 self.api.clear_buttons(chat, msg["message_id"])
 
     def _attachments(self, msg: dict) -> list[dict]:
-        """照片（取最大尺寸）或以文件发送的图片 → 保存为上传，供 @upload 引用。"""
+        """照片（取最大尺寸）、视频、以文件发送的图片 / 视频 → 保存为上传，供 @upload 引用。
+        Telegram 机器人只能下载 ≤ 20 MB 的文件；更大的请发链接。"""
         file_id, name = None, None
+        doc = msg.get("document") or {}
         if msg.get("photo"):
             file_id = msg["photo"][-1]["file_id"]
-        elif (msg.get("document") or {}).get("mime_type", "").startswith("image/"):
-            file_id, name = msg["document"]["file_id"], msg["document"].get("file_name")
+        elif msg.get("video"):
+            file_id = msg["video"]["file_id"]
+            name = msg["video"].get("file_name") or f"{msg['video']['file_unique_id']}.mp4"
+        elif doc.get("mime_type", "").startswith(("image/", "video/")):
+            file_id, name = doc["file_id"], doc.get("file_name")
         if not file_id:
             return []
         fname, data = self.api.download(file_id)

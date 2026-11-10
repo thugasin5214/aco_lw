@@ -1,6 +1,6 @@
 # aco_lw Runbook
 
-Updated 2026-10-26 · applies to phase 2.5 + W2 (`va daemon` + console + Telegram + sessions & project memory) · 中文版：[runbook.zh-CN.md](runbook.zh-CN.md)
+Updated 2026-11-07 · applies to `va daemon` + console + Telegram + the general agent (tools, vision, MCP, online brains, permission modes) · 中文版：[runbook.zh-CN.md](runbook.zh-CN.md)
 
 This runbook answers three questions: **how to start / stop**, **how to use it day to day**, and **what to check when something goes wrong**. Design rationale is in `docs/design.html`, plan and progress in `PLAN.md` / `docs/progress.html`, measurements in `docs/baseline.md`, architecture diagrams and flow charts in `docs/architecture.html` (console → Architecture).
 
@@ -16,7 +16,9 @@ This runbook answers three questions: **how to start / stop**, **how to use it d
 | Telegram bot | @luwu_abot | Whitelisted chat_ids live in `config.toml` |
 | Code | `~/workplace/video-agent` (private GitHub repo `aco_lw`) | |
 | Config | `config.toml` (git-ignored, mode 600) | Secrets such as the bot token live only here |
-| Planner rules | `prompts/planner_rules.md` | Editable; changing it invalidates the LLM prefix cache once |
+| Planner rules | `prompts/planner_rules.md` · `prompts/agent_rules.md` | Editable; changing it invalidates the LLM prefix cache once |
+| Execution policy | `policies.yaml` | Per-tool allow / approval / limits; MCP approval rules; `run_command.auto_allow` |
+| Agent workspace and memory | `data/agent-work/<run>/` · `data/agent_memory/` | Commands run in the workspace; memory is the agent's own notes (`MEMORY.md` is the index) |
 | Data | `data/` | `templates/` (promoted templates), `variants/` (imported workflows), `tasks.sqlite` (index), `jobs/<task>/` (manifest + outputs), `packs/<project>/v<N>/` (baseline pack), `uploads/<project>/` (reference images), `daemon.log` |
 
 ## 2. Start and stop
@@ -74,7 +76,7 @@ Ready when you see `Telegram listener started (whitelist [...])` and `Console: h
 |---|---|
 | `/status` | Project, rendering state, queue, memory, LLM mode |
 | `/review` | Re-send rounds waiting for review to Telegram |
-| `/round TEMPLATE [COUNT] [prompt]` | Queue a round without the LLM (`flux2-t2i` `flux2-edit` `h3-t2v` `h3-i2v`) |
+| `/round TEMPLATE [COUNT] [prompt]` | Queue a round without the LLM (see `va templates`, e.g. `zimage-t2i` `flux2-t2i` `flux2-edit` `h3-t2v` `h3-i2v`) |
 | `/redo` | Redo the latest round under review |
 | `/reopen [ROUND_ID]` | Change the decision of the latest (or given) decided round |
 | `/pause` `/resume` | Pause / resume rendering (the running task finishes) |
@@ -84,6 +86,9 @@ Ready when you see `Telegram listener started (whitelist [...])` and `Console: h
 | `/session` · `/session new [TITLE]` · `/session use N` | Sessions (N: 1 = most recent) |
 | `/memory` · `/memory add TEXT` · `/memory del ID` | Project memory |
 | `/pack` | Current baseline pack |
+| `/model [NAME]` | Show / switch the agent's brain (local or online, see §3.10) |
+| `/permissions [default\|bypass\|forget RULE\|all]` | Approval mode and always-allow rules (see §3.10) |
+| `/fv TASK` | Hand a video task to the FreeVideo agent |
 | `/whoami` | Show your chat_id (works for anyone; used to set up the whitelist) |
 
 ### 3.4 Command line (local)
@@ -114,6 +119,8 @@ For changes the parameters can't express — new nodes, different wiring, anothe
 Candidates are never picked by the planner; you can run them manually (`/round <variant-name>`, manual tweak) until promoted.
 
 ### 3.7 Online models and local agents (fallback)
+To switch the brain on purpose use `/model` (see §3.10); this section is the **automatic fallback** when the local LLM can't run.
+
 When the local LLM can't run — most often because a video render holds the memory — requests normally wait. You can let them continue online instead, in `config.toml`:
 
 ```toml
@@ -156,6 +163,45 @@ A production runs a **workflow** stage by stage; every stage waits for your appr
 - **ComfyUI tools (artokun/comfyui-mcp, run by our daemon)**: the agent can list models and nodes, read and build workflows, read model-family guides (`comfy_catalog`, `comfy`). Running a workflow goes through our queue (`run_comfy_workflow`, tracked, pause and memory gates apply). Installing nodes, downloading models or training needs your approval (buttons); restarting ComfyUI, deleting models, touching other jobs in the queue, freeing VRAM, changing ComfyUI settings and cloud/paid nodes are refused.
 - **FreeVideo approvals**: FreeVideo can require you to approve film starts and long reshoots in its own page (ComfyUI → Extensions → FreeVideo → agent chat). The setting is the file `~/Documents/ChatGPT/jev/FreeVideo-local/ComfyUI/output/FreeVideo/.agent/confirm.json` (no UI toggle in this FreeVideo version; defaults `{"start": true, "reshoot_seconds": 300}`). **Set on 2026-10-27 at the user's request to `{"start": false, "reshoot_seconds": null}`** — films start and reshoots run without asking in FreeVideo; our own Start button and review gates still apply. To re-enable, set `start` to `true` and/or `reshoot_seconds` to a number of seconds. FreeVideo re-reads the file on every check.
 
+### 3.10 General agent: tools, vision, online brains, permissions (2026-11-07)
+Free text goes to the agent. The LLM only **proposes** tool calls; the orchestrator runs them and hands results back when the LLM can take them (held while the LLM is unloaded). It picks its own tools and skills:
+
+| Tool | What it does | Approval |
+|---|---|---|
+| Generation tools (`queue_round`, `wait_for_round`, productions, ComfyUI exploration…) | Images, video, review, productions | Unmeasured video tiers |
+| `web_fetch` | Read a page as text (no login, no JS) | No |
+| `run_command` | zsh command in the run's working dir `data/agent-work/<run>/` (e.g. agent-reach, ffmpeg) | **Yes** (see permissions) |
+| `read_file` / `write_file` | Read `data/` and skill dirs; write the working dir only | No |
+| `list_skills` / `load_skill` | `data/skills/` and `~/.claude/skills` (`agent_skill_dirs`) | No |
+| `memory_read` / `memory_write` | The agent's own memory `data/agent_memory/`, indexed in its system prompt | No |
+| `look` | **Vision**: images shrunk to 1024 px for the vision LLM; videos as 6 frames; `@round:ID` for a whole round | No |
+| `add_media` / `send_file` | Turn a file into `@upload:ID` / send it to you (paths may be `@task:ID`) | No |
+| `mcp_list` / `mcp_call` | `[mcp_servers.*]` in `config.toml` (Claude Code format; Exa for now) | Read-only tools no, others yes |
+| `delegate_agent` | Hand a sub-task to Claude Code / Codex and wait for the report | Yes; needs `allow_online` |
+| `delegate_freevideo` (`/fv`) | Hand a whole video task to the FreeVideo agent | Yes; needs `freevideo_agent_online` |
+
+**Hard refusals (in every mode)**: direct ComfyUI `:8188`, reading the FreeVideo token, `kill` / `pkill`, `lms load|unload`. The execution policy is `policies.yaml` (per-tool switches, limits, MCP approval rules).
+
+**Permission modes** (like Claude Code's permission modes):
+- `default`: actions that need approval come with buttons **✅ Approve / ✅ Always (rule) / ✕ No**. *Always* stores a rule so the same kind is not asked again: commands by program (`cmd:ffmpeg`, single commands only — no pipes, chaining or redirection), MCP by tool (`mcp:exa.web_search_exa`), hand-overs by target (`delegate:codex`), unmeasured video tiers by template (`round:h3-t2v`).
+- `bypass`: **no approvals** — actions run directly (like `bypassPermissions`). Each auto-run still posts a one-line “⚡ Auto-approved” note; hard refusals, the execution policy and the online switches still apply; **installing ComfyUI nodes / downloading models still asks every time** (hard rule). `/status` shows ⚡.
+- Switch with `/permissions bypass` · `/permissions default` · `/permissions` (mode and rules) · `/permissions forget <rule|all>`. Start-up default: `permission_mode` in `config.toml` (`/permissions` is stored and wins).
+- Static pre-approval also exists: `run_command.auto_allow` (command prefixes) in `policies.yaml`.
+
+**Online brains** (need `allow_online = true`; when it is off the agent falls back to local and sends nothing out). `/model` shows, `/model <name>` switches:
+
+| Name | What | Needs |
+|---|---|---|
+| `local` | Local 27B (LM Studio, a vision model) | — |
+| `openai` | OpenAI API (ChatGPT's models) | `openai_model` + `OPENAI_API_KEY` / `openai_api_key` |
+| `openrouter` | Any model on OpenRouter | `openrouter_model` + `OPENROUTER_API_KEY` / `openrouter_api_key` |
+| `anthropic` | Claude API | `ANTHROPIC_API_KEY` / `ant auth login` |
+| `openai_compatible` | Any OpenAI-compatible endpoint | `openai_base_url` + `openai_model` |
+| `codex` | Whole request to the Codex CLI | Local Codex login (a **ChatGPT account** works; no API key) |
+| `claude_code` | Whole request to Claude Code | Local Claude Code login |
+
+A ChatGPT subscription is not an API: use it through `codex`; `openai` bills an API key. Codex / Claude Code only get aco_lw's tools (over MCP), and commands still follow the permission mode.
+
 ## 4. Resources and memory policy (automatic)
 
 | Situation | What the system does |
@@ -191,9 +237,10 @@ A production runs a **workflow** stage by stage; every stage waits for your appr
 - **Cleanup**: stop the daemon, then delete `data/jobs/<ID>` folders you no longer need (database rows remain; the console will show missing images).
 
 ## 7. Safety constraints (do not change)
-- Only the orchestrator talks to ComfyUI; the LLM and Telegram only produce data or call fixed commands.
+- Only the orchestrator talks to ComfyUI; the LLM only proposes tool calls and the orchestrator runs them. Commands are approved one by one by default (or by an always-allow rule / the bypass mode you turned on); hard refusals apply in every mode.
 - Never cancel or free other people's jobs; `/free` double-checks that the queue is empty.
-- Don't change ComfyUI launch options or global LM Studio / OpenClaw settings; don't download models or install custom nodes.
+- Don't change ComfyUI launch options or global LM Studio / OpenClaw settings; downloading models or installing custom nodes needs your approval.
+- Online: nothing from the conversation is sent out unless `allow_online` is set (`/fv` only checks `freevideo_agent_online`).
 - Telegram answers whitelisted chats only; the console binds to 127.0.0.1.
 - Project memory written by the LLM needs your confirmation.
 

@@ -100,6 +100,9 @@ class OpenAICompatBackend:
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        if self.name == "openai":  # OpenAI 官方 API：推理模型只认 max_completion_tokens、默认温度
+            body.pop("temperature")
+            body["max_completion_tokens"] = body.pop("max_tokens")
         if tools:
             body["tools"] = tools
         if schema:
@@ -269,6 +272,27 @@ class AnthropicBackend:
     def _id(x: str) -> str:
         return _ID_RE.sub("_", x or "call")
 
+    @staticmethod
+    def _user_content(content):
+        """OpenAI 风格的内容块（text / image_url data URL）→ Claude 内容块。"""
+        if not isinstance(content, list):
+            return content
+        out = []
+        for p in content:
+            if p.get("type") == "image_url":
+                url = p["image_url"]["url"]
+                head, _, data = url.partition(",")
+                media = head.removeprefix("data:").split(";")[0] or "image/jpeg"
+                out.append(
+                    {
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": media, "data": data},
+                    }
+                )
+            else:
+                out.append({"type": "text", "text": p.get("text", "")})
+        return out
+
     @classmethod
     def convert(cls, messages: list[dict], tools: list[dict] | None):
         system_parts, out, results = [], [], []
@@ -315,7 +339,7 @@ class AnthropicBackend:
                     }
                 )
             else:
-                out.append({"role": "user", "content": m["content"]})
+                out.append({"role": "user", "content": cls._user_content(m["content"])})
         flush()
         atools = [
             {

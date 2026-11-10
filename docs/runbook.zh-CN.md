@@ -1,6 +1,6 @@
 # aco_lw 运行手册（Runbook）
 
-更新于 2026-10-26 · 适用于阶段 2.5 + W2（`va daemon` + 控制台 + Telegram + 会话与项目记忆）· English: [runbook.md](runbook.md)
+更新于 2026-11-07 · 适用于 `va daemon` + 控制台 + Telegram + 通用 agent（工具、看图、MCP、在线大脑、权限模式）· English: [runbook.md](runbook.md)
 
 本手册回答三件事：**怎么开 / 关**、**日常怎么用**、**出问题怎么查**。设计取舍见 `docs/design.html`，计划与进度见 `PLAN.md` / `docs/progress.html`，实测数据见 `docs/baseline.md`，架构图与流程图见 `docs/architecture.zh-CN.html`（控制台 →「架构」）。
 
@@ -16,7 +16,9 @@
 | Telegram bot | @luwu_abot | 白名单 chat_id 见 `config.toml` |
 | 代码 | `~/workplace/video-agent`（GitHub 私有仓库 `aco_lw`） | |
 | 配置 | `config.toml`（gitignore，权限 600） | token 等敏感项只在这里 |
-| 规划器规则 | `prompts/planner_rules.md` | 可直接编辑；改动会让 LLM 前缀缓存失效一次 |
+| 规划器规则 | `prompts/planner_rules.md` · `prompts/agent_rules.md` | 可直接编辑；改动会让 LLM 前缀缓存失效一次 |
+| 执行策略 | `policies.yaml` | 每个工具的允许 / 审批 / 上限；MCP 审批规则；`run_command.auto_allow` |
+| agent 工作区与记忆 | `data/agent-work/<运行ID>/` · `data/agent_memory/` | 命令在工作区里跑；记忆是 agent 自己的笔记（`MEMORY.md` 为索引） |
 | 数据 | `data/` | `templates/`（晋升的模板）、`variants/`（导入的 workflow）、`tasks.sqlite`（索引）、`jobs/<任务ID>/`（manifest + 产物）、`packs/<项目ID>/v<N>/`（基准包）、`uploads/<项目ID>/`（参考图）、`daemon.log` |
 
 ## 2. 启动与停止
@@ -74,7 +76,7 @@ uv run va daemon 2>&1 | tee -a data/daemon.log
 |---|---|
 | `/status` | 项目、出图状态、排队数、内存、LLM 模式 |
 | `/review` | 把当前项目待审阅的轮次重新推送到 Telegram |
-| `/round 模板 [数量] [prompt]` | 不经 LLM 直接出一轮（模板：`flux2-t2i` `flux2-edit` `h3-t2v` `h3-i2v`） |
+| `/round 模板 [数量] [prompt]` | 不经 LLM 直接出一轮（模板见 `va templates`，如 `zimage-t2i` `flux2-t2i` `flux2-edit` `h3-t2v` `h3-i2v`） |
 | `/redo` | 最近一轮待审阅的整轮重做 |
 | `/reopen [轮ID]` | 更改最近一轮（或指定轮）的审阅结果 |
 | `/pause` `/resume` | 暂停 / 恢复出图（正在跑的会跑完） |
@@ -84,6 +86,9 @@ uv run va daemon 2>&1 | tee -a data/daemon.log
 | `/session` · `/session new [标题]` · `/session use 序号` | 会话（序号 1 = 最近活跃） |
 | `/memory` · `/memory add 文本` · `/memory del 编号` | 项目记忆 |
 | `/pack` | 当前基准包 |
+| `/model [名字]` | 查看 / 切换 agent 的大脑（本地或在线，见 §3.10） |
+| `/permissions [default\|bypass\|forget 规则\|all]` | 审批模式与“始终允许”规则（见 §3.10） |
+| `/fv 任务` | 把视频任务交给 FreeVideo agent |
 | `/whoami` | 显示 chat_id（任何人可用，用于配置白名单） |
 
 ### 3.4 命令行（本机）
@@ -114,6 +119,8 @@ uv run va release                       # 队列空闲时释放 ComfyUI 模型
 候选变体不会被规划器自动选用；晋升前只能手动使用（`/round <变体名>`、手动微调）。
 
 ### 3.7 在线模型与本机 agent（回退）
+主动切换在线大脑用 `/model`（见 §3.10）；下面是本地跑不了时的**自动回退**。
+
 本地 LLM 跑不了时（最常见是视频渲染占着内存），请求默认会等待。也可以在 `config.toml` 里让它改在线上继续：
 
 ```toml
@@ -156,6 +163,45 @@ llm_fallback = ["anthropic", "claude_code", "codex"]  # 依次尝试
 - **ComfyUI 工具（artokun/comfyui-mcp，由我们的 daemon 启动）**：agent 可以查模型和节点、读与搭建 workflow、读模型族指南（`comfy_catalog`、`comfy`）。运行 workflow 走我们的队列（`run_comfy_workflow`，可追踪，受暂停与内存闸门）。装节点、下模型、训练要你批准（按钮）；重启 ComfyUI、删模型、动队列里别人的任务、释放显存、改 ComfyUI 设置、云端 / 付费节点一律拒绝。
 - **FreeVideo 的批准**：FreeVideo 可以要求开拍电影、长时间重拍前由你在它的页面上批准（ComfyUI → Extensions → FreeVideo → agent 对话）。设置是文件 `~/Documents/ChatGPT/jev/FreeVideo-local/ComfyUI/output/FreeVideo/.agent/confirm.json`（这个 FreeVideo 版本没有页面开关；默认 `{"start": true, "reshoot_seconds": 300}`）。**2026-10-27 按用户要求设为 `{"start": false, "reshoot_seconds": null}`**：开拍与重拍在 FreeVideo 里不再询问；我们自己的「开始」按钮和审核照常。要恢复：把 `start` 改回 `true`，和 / 或把 `reshoot_seconds` 设成秒数。FreeVideo 每次检查都会重读这个文件。
 
+### 3.10 通用 agent：工具、看图、在线大脑、权限（2026-11-07）
+自由文本交给 agent。LLM 只**提出** tool call，编排器执行并择机把结果交回（LLM 被卸载时结果暂存）。它自己选工具和 skill：
+
+| 工具 | 作用 | 审批 |
+|---|---|---|
+| 生成工具（`queue_round`、`wait_for_round`、制片、ComfyUI 探索…） | 出图出视频、审阅、制片 | 未实测的视频档位要批准 |
+| `web_fetch` | 读网页正文（无登录、无 JS） | 不用 |
+| `run_command` | 在本次运行的工作目录 `data/agent-work/<运行ID>/` 里跑 zsh 命令（如 agent-reach、ffmpeg） | **要**（见下面的权限） |
+| `read_file` / `write_file` | 读 `data/` 与 skill 目录；只写工作目录 | 不用 |
+| `list_skills` / `load_skill` | `data/skills/` 与 `~/.claude/skills`（`agent_skill_dirs`） | 不用 |
+| `memory_read` / `memory_write` | agent 自己的记忆 `data/agent_memory/`，索引进系统提示词 | 不用 |
+| `look` | **看图**：图片缩到 1024 交给视觉 LLM；视频抽 6 帧；`@round:ID` 看整轮 | 不用 |
+| `add_media` / `send_file` | 把文件变成 `@upload:ID` / 发给你（路径也可写 `@task:ID`） | 不用 |
+| `mcp_list` / `mcp_call` | `config.toml` 的 `[mcp_servers.*]`（格式同 Claude Code；当前 Exa） | 只读工具不用，其余要 |
+| `delegate_agent` | 把子任务交给 Claude Code / Codex，等它汇报 | 要；需 `allow_online` |
+| `delegate_freevideo`（`/fv`） | 整个视频任务交给 FreeVideo agent | 要；需 `freevideo_agent_online` |
+
+**硬拒绝（任何模式都拒绝）**：直连 ComfyUI `:8188`、读 FreeVideo token、`kill` / `pkill` 结束进程、`lms load|unload`。执行策略在 `policies.yaml`（每个工具的开关、参数上限、MCP 审批规则）。
+
+**权限模式**（类似 Claude Code 的 permission mode）：
+- `default`（默认）：要审批的动作逐条发按钮：**✅ 同意 / ✅ 始终允许（规则）/ ✕ 不要**。“始终允许”记一条规则，以后同类不再问：命令按程序名（`cmd:ffmpeg`，只对不带管道 / 串联 / 重定向的单条命令）、MCP 按工具（`mcp:exa.web_search_exa`）、委托按对象（`delegate:codex`）、未实测视频档位按模板（`round:h3-t2v`）。
+- `bypass`：**不再审批**，直接执行（相当于 `bypassPermissions`）。每次自动执行仍会发一行“⚡ 已自动批准”留痕；硬拒绝、执行策略、在线开关照旧；**装 ComfyUI 节点 / 下载模型仍然每次问你**（硬约束）。`/status` 会显示 ⚡。
+- 切换：`/permissions bypass` · `/permissions default` · `/permissions` 查看模式与规则 · `/permissions forget <规则|all>` 删除规则。启动默认值：`config.toml` 的 `permission_mode`（`/permissions` 存库，优先）。
+- 另有静态放行：`policies.yaml` 的 `run_command.auto_allow`（命令前缀列表）。
+
+**在线大脑**（需 `allow_online = true`；关掉时自动退回本地，不往外发）：`/model` 查看，`/model <名字>` 切换：
+
+| 名字 | 是什么 | 前提 |
+|---|---|---|
+| `local` | 本地 27B（LM Studio，视觉模型） | 无 |
+| `openai` | OpenAI 官方 API（ChatGPT 的模型） | `openai_model` + `OPENAI_API_KEY` / `openai_api_key` |
+| `openrouter` | OpenRouter 上任意模型 | `openrouter_model` + `OPENROUTER_API_KEY` / `openrouter_api_key` |
+| `anthropic` | Claude API | `ANTHROPIC_API_KEY` / `ant auth login` |
+| `openai_compatible` | 任意 OpenAI 兼容服务 | `openai_base_url` + `openai_model` |
+| `codex` | 整个请求交给 Codex CLI | 本机 Codex 登录（可用 **ChatGPT 账号**，不需要 API key） |
+| `claude_code` | 整个请求交给 Claude Code | 本机 Claude Code 登录 |
+
+ChatGPT 订阅本身不是 API：用订阅走 `codex`；`openai` 走按量计费的 API key。Codex / Claude Code 只拿到 aco_lw 的工具（经 MCP），命令照样受权限模式约束。
+
 ## 4. 资源与内存策略（自动执行）
 
 | 情况 | 系统行为 |
@@ -191,9 +237,10 @@ llm_fallback = ["anthropic", "claude_code", "codex"]  # 依次尝试
 - **清理**：先停 daemon，再删不需要的 `data/jobs/<ID>` 目录（数据库记录仍在，控制台会显示缺图）。
 
 ## 7. 安全约束（不要改）
-- 只有编排器能碰 ComfyUI；LLM 与 Telegram 只产生数据或调用固定命令。
+- 只有编排器能碰 ComfyUI；LLM 只提出 tool call，由编排器执行。命令默认逐条经你批准（或“始终允许”规则 / 你打开的 bypass 模式）；硬拒绝在任何模式下都生效。
 - 不取消、不释放别人的任务；`/free` 前二次确认队列为空。
-- 不修改 ComfyUI 启动参数、全局 LM Studio / OpenClaw 配置；不下载模型、不装自定义节点。
+- 不修改 ComfyUI 启动参数、全局 LM Studio / OpenClaw 配置；下载模型、装自定义节点须经你批准。
+- 在线：不设 `allow_online` 就不往外发任何对话（`/fv` 只看 `freevideo_agent_online`）。
 - Telegram 只响应白名单；控制台只绑定 127.0.0.1。
 - LLM 提议的项目记忆需要你确认才生效。
 

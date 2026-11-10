@@ -43,7 +43,9 @@ class Worker(threading.Thread):
         self.store = orch.store
         self.busy_kind: str | None = None
         self.current: dict | None = None
-        self.hold: Callable[[dict], bool] = lambda task: False  # True：先别执行（例如所属制片已暂停）
+        self.hold: Callable[[dict], bool] = lambda task: (
+            False
+        )  # True：先别执行（例如所属制片已暂停）
 
     def run(self) -> None:
         try:
@@ -438,7 +440,7 @@ class Actions:
                 return True
             if kind == "a":  # agent 的审批请求
                 mid, yn = rest.split(":")
-                say(self.runtime.on_approval(int(mid), yn == "yes"))
+                say(self.runtime.on_approval(int(mid), yn in ("yes", "always"), yn == "always"))
                 return True
             if kind == "o":
                 self.reopen(rest, channel, say)
@@ -465,6 +467,18 @@ class Actions:
             say(i18n.help_text())
         elif cmd == "/status":
             say(self.status_text())
+        elif cmd == "/fv":
+            task = text.split(None, 1)[1].strip() if len(text.split(None, 1)) > 1 else ""
+            if not task:
+                say("/fv <task>")
+                return
+            pid, sid = self._ctx()
+            try:
+                self.runtime.delegate_freevideo(task, channel, pid, sid)
+            except ValueError as e:
+                say(str(e))
+                return
+            say(tr("fv_started"))
         elif cmd == "/pause":
             store.set_kv("paused", True)
             cur = self.worker.stop_current() if self.worker and args[:1] == ["now"] else None
@@ -492,6 +506,34 @@ class Actions:
             else:
                 self.planner.set_mode(args[0])
                 say(tr("mode_set", m=i18n.mode(args[0])))
+        elif cmd == "/model":
+            from .planner import BRAINS
+
+            opts = ", ".join(BRAINS)
+            if not args:
+                m = self.runtime.brain()
+                off = m != "local" and not self.runtime.cfg.allow_online
+                say(tr("model_now", m=m, opts=opts, note=tr("model_local_note") if off else ""))
+            elif args[0] not in BRAINS:
+                say(tr("model_unknown", m=args[0], opts=opts))
+            elif args[0] != "local" and not self.runtime.cfg.allow_online:
+                say(tr("agent_online_off"))
+            else:
+                store.set_kv("agent_brain", args[0])
+                say(tr("model_set", m=args[0]))
+        elif cmd in ("/permissions", "/perm"):
+            rt = self.runtime
+            if args and args[0] in ("default", "bypass"):
+                store.set_kv("permission_mode", args[0])
+                say(tr(f"perm_set_{args[0]}"))
+            elif args and args[0] == "forget":
+                rules = rt.allow_rules()
+                drop = rules if args[1:] == ["all"] else [r for r in rules if r in args[1:]]
+                store.set_kv("perm_allow", [r for r in rules if r not in drop])
+                say(tr("perm_forgot", n=len(drop)))
+            else:
+                rules = "\n".join(f"· {r}" for r in rt.allow_rules()) or tr("perm_no_rules")
+                say(tr("perm_now", m=rt.permission_mode(), rules=rules))
         elif cmd == "/projects":
             rows = [f"{i18n.state(p['state'])} · {p['name']}" for p in store.list_projects()]
             say("\n".join(rows) or tr("no_projects"))
@@ -608,16 +650,58 @@ class Actions:
         running = (
             tr("status_running", t=cur["title"] or cur["template"]) if cur else tr("status_idle")
         )
-        return tr(
-            "status",
-            p=p["name"],
-            r=running,
-            paused=tr("status_paused") if self.store.get_kv("paused") else "",
-            q=len(self.store.by_state("draft")),
-            m=m["avail_gib"],
-            pr=m["pressure"],
-            llm=i18n.mode(self.planner.mode),
+        return (
+            tr(
+                "status",
+                p=p["name"],
+                r=running,
+                paused=tr("status_paused") if self.store.get_kv("paused") else "",
+                q=len(self.store.by_state("draft")),
+                m=m["avail_gib"],
+                pr=m["pressure"],
+                llm=i18n.mode(self.planner.mode) + self._llm_state(),
+            )
+            + self._status_extra()
         )
+
+    def _llm_state(self) -> str:
+        try:
+            loaded = self.studio.orch.resources.llm.loaded()
+        except Exception:  # noqa: BLE001 — LM Studio 不在线：不影响 /status
+            return ""
+        return tr("status_llm_loaded") if loaded else tr("status_llm_unloaded")
+
+    def _status_extra(self) -> str:
+        """不需要 LLM 的进度：agent 队列、拍片、进行中的制片。"""
+        out = tr("status_bypass") if self.runtime.permission_mode() == "bypass" else ""
+        active = len(self.store.runs(None, "running"))
+        waiting = len(self.store.runs(None, "waiting_resources"))
+        if active or waiting:
+            out += tr("status_agent", a=active, w=waiting)
+        films = self.studio.orch.resources.films
+        if films:
+            out += tr("status_films", n=len(films))
+        prod = getattr(self, "production", None)
+        for p in self.store.productions() if prod else []:
+            if p["state"] != "active":
+                continue
+            try:
+                stages = prod.plan(p["id"])["stages"]
+            except Exception:  # 计划算不出来时跳过这一部，不影响 /status
+                log.warning("status: plan for %s failed", p["id"], exc_info=True)
+                continue
+            cur = next((s for s in stages if s["state"] not in ("completed",)), None)
+            if cur is None:
+                continue
+            c = ", ".join(f"{k} {v}" for k, v in (cur.get("counts") or {}).items() if v)
+            n = len(cur.get("items") or [])
+            out += tr(
+                "status_prod",
+                t=p["title"],
+                stage=f"{cur['title']} [{cur['state']}]",
+                c=f"{c} / {n}" if n else "-",
+            )
+        return out
 
 
 class Daemon:
@@ -649,6 +733,7 @@ class Daemon:
         if self.production.film is not None:
             self.production.film.notify_round = self.notify_round  # 导入的一轮 take：推送审阅
             self.production.film.notify_text = self.notify_film
+            self.production.film.resources = self.orch.resources  # 拍片独占内存：卸载 / 拦住 LLM
         self.production.listeners.append(self.notify_stage)
         self.orch.resources.listeners.append(self.production.wake)  # 渲染结束 → 排队的 skill 再试
         self.actions.production = self.production
@@ -669,6 +754,10 @@ class Daemon:
                 r, self.orch.store.round_tasks(r["id"]), self.orch.store.task_dir
             )
             self.actions.channel_send["telegram"] = self.bot.broadcast
+            default_send = self.actions.runtime.send_files
+            self.actions.runtime.send_files = lambda ch, items: (
+                self.bot.send_files(items) if ch == "telegram" else default_send(ch, items)
+            )
 
     def notify_round(self, rnd: dict) -> None:
         tasks = self.orch.store.round_tasks(rnd["id"])
@@ -691,13 +780,17 @@ class Daemon:
         from .planner import make_named_backend
 
         cfg, rm = self.cfg, self.orch.resources
-        online = ("anthropic", "openrouter", "openai_compatible", "claude_code", "codex")
+        from .planner import AGENT_CLIS, ONLINE_APIS
+
+        online = (*ONLINE_APIS, *AGENT_CLIS)
 
         def run(name: str) -> tuple[str, dict]:
             if name in ("claude_code", "codex"):
                 prompt = "\n\n".join(m["content"] for m in messages)
                 return AgentCLI(name, cfg).run(
-                    f"skill-{stage.id}-{int(time.time())}", prompt, f"http://127.0.0.1:{cfg.web_port}"
+                    f"skill-{stage.id}-{int(time.time())}",
+                    prompt,
+                    f"http://127.0.0.1:{cfg.web_port}",
                 )
             res = make_named_backend(cfg, self.orch.store, name).chat(messages, schema, 8192)
             return res.text, res.stats()
@@ -746,7 +839,9 @@ class Daemon:
             d = r.get("decision") or {}
             if d.get("action") == "reject" and d.get("note") and d.get("followup") == "pending":
                 ch = d.get("origin") or "web"
-                say = self.actions._say(ch, self.actions.channel_send.get(ch, self.actions.channel_send["web"]))
+                say = self.actions._say(
+                    ch, self.actions.channel_send.get(ch, self.actions.channel_send["web"])
+                )
                 self.actions.followup_note(r, d["note"], ch, say)
                 n += 1
         if n:

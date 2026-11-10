@@ -128,6 +128,25 @@ def test_timeout_scales_with_estimate_and_late_results_are_collected(make_orch):
     assert o2.reconcile_timeouts() == [(t2["id"], "review")]
 
 
+def test_alive_job_is_watched_past_the_limit(make_orch):
+    """执行端还报心跳就不按（常常不准的）预计耗时标超时。"""
+    import dataclasses
+
+    from conftest import FakeComfy
+
+    fake = FakeComfy(history_after=6)
+    o = make_orch(fake)
+    o.cfg.task_timeout_s = 0
+    o.resources.estimator.estimate = lambda tpl, tier: type(
+        "E", (), {"exec_s": 0.0, "peak_gib": 16, "family": "f", "source": "t"}
+    )()
+    ex = o.executors["comfy"]
+    real = ex.poll
+    ex.poll = lambda job_id: dataclasses.replace(real(job_id), alive=True)
+    t = o.execute(o.create("flux2-t2i", {"seed": 33})["id"])
+    assert t["state"] == "review"
+
+
 def test_recover_keeps_queued_drafts(make_orch, fake):
     orch = make_orch(fake)
     t = orch.create("flux2-t2i", {"prompt": "x"})

@@ -21,7 +21,7 @@ continuation:
 # What tools may do. allow: true | false. approval: never | unless_named | always
 #   unless_named = needs your button unless your own message named it (e.g. "use #2", "hd 60s")
 execution:
-  network: false                       # no tool may reach the internet (web_search etc. later)
+  network: true                        # web_fetch; commands reach the internet only after approval
   tools:
     get_status: {allow: true}
     list_templates: {allow: true}
@@ -46,5 +46,27 @@ execution:
     comfy_describe: {allow: true}
     comfy: {allow: true}               # comfy_bridge.py 再按工具 + 动作分类：读放行、安装需批准、危险的拒绝
     run_comfy_workflow: {allow: true}  # 经编排器排队（可追踪、受暂停与资源闸门）
-    shell: {allow: false}              # not implemented; would need a command whitelist + workdir
-    web_search: {allow: false}         # phase 7
+    # 通用工具（toolbox.py）：编排器执行，agent 只提出请求
+    web_fetch: {allow: true}
+    look: {allow: true}
+    run_command:                       # 每条命令都要你批准；auto_allow 里的前缀（单条命令、无管道）免批准
+      allow: true
+      auto_allow: []                   # 例：["ffprobe", "agent-reach doctor"]
+    read_file: {allow: true}
+    write_file: {allow: true}
+    list_skills: {allow: true}
+    load_skill: {allow: true}
+    memory_read: {allow: true}
+    memory_write: {allow: true}
+    add_media: {allow: true}
+    send_file: {allow: true}
+    mcp_list: {allow: true}
+    mcp_call: {allow: true}
+    delegate_freevideo: {allow: true}  # 交给 FreeVideo agent：每次经你批准；需 freevideo_agent_online
+    delegate_agent: {allow: true}      # 交给 Claude Code / Codex：每次经你批准；需 allow_online
+
+# MCP tools (servers configured in config.toml [mcp_servers.*]).
+# approval: unless_read_only (tools annotated readOnlyHint run directly) | always | never | deny
+mcp:
+  approval: unless_read_only
+  servers: {}                          # per-server override, e.g. {exa: never}

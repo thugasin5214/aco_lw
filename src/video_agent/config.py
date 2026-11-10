@@ -20,14 +20,24 @@ class Settings:
     llm_session_ttl_s: int = 1200  # 会话活跃时延长驻留，保住前缀缓存
     session_summary_tokens: int = 16000  # 上一次调用超过此 prompt 长度即压缩较早消息
     session_keep_messages: int = 8  # 压缩时保留的最近原话条数
-    agent_max_steps: int = 16  # 一次请求里 agent 最多调用 LLM 的次数
+    agent_max_steps: int = 40  # 一次请求里 agent 最多调用 LLM 的次数（通用任务步骤多）
+    agent_skill_dirs: list[str] = field(default_factory=lambda: ["~/.claude/skills"])
+    tool_workers: int = 2  # 后台工具队列（命令、读网页、MCP 调用）并发数
+    # agent 可用的 MCP 服务（格式同 Claude Code / Codex 的 mcpServers；见 mcp_hub.py）
+    mcp_servers: dict = field(default_factory=dict)
     planner_fast: bool = False  # 末尾加 /no_think：实测 14.4 s → 9.3 s，思考约减半
-    planner_backend: str = "lmstudio"  # lmstudio | openai_compatible | openrouter | anthropic
+    # lmstudio | openai | openrouter | anthropic | openai_compatible；运行中可用 /model 切换（含 claude_code / codex）
+    planner_backend: str = "lmstudio"
     # 本地 LLM 资源不够（如视频渲染占着内存）或不可用时，按顺序尝试：
     #   "anthropic" / "openrouter" / "openai_compatible"（在线 API，接着同一次运行继续）
     #   "claude_code" / "codex"（本机的 agent CLI + 它们的在线模型，经 aco_lw MCP 工具工作，只接新请求）
     llm_fallback: list[str] = field(default_factory=list)
+    # agent 审批：default 逐条批准（可“始终允许”某类）；bypass 不再审批（硬拒绝与在线开关照旧）。
+    # 运行中用 /permissions 切换（存库，优先于这里）
+    permission_mode: str = "default"
     allow_online: bool = False  # 隐私开关：允许把对话发给在线模型 / 在线 agent（默认关）
+    # 只为“交给 FreeVideo agent”（/fv、delegate_freevideo）放行在线（Claude Code）；其他仍按 allow_online
+    freevideo_agent_online: bool = False
     anthropic_model: str = "claude-opus-5-5"
     anthropic_effort: str = "medium"  # low | medium | high | xhigh | max
     anthropic_api_key: str = ""  # 留空：由 SDK 按环境变量 / `ant auth login` 解析
@@ -40,9 +50,9 @@ class Settings:
     codex_cmd: str = "codex"
     codex_model: str = ""
     agent_cli_timeout_s: int = 3600
-    openai_base_url: str = ""
-    openai_model: str = ""
-    openai_api_key: str = ""
+    openai_base_url: str = ""  # openai_compatible：任意 OpenAI 兼容服务
+    openai_model: str = ""  # openai（官方 API，ChatGPT 的模型）与 openai_compatible 共用
+    openai_api_key: str = ""  # 留空：openai 读环境变量 OPENAI_API_KEY
     memory_margin_gib: float = 8.0
     memory_wait_s: float = 600.0
     poll_interval_s: float = 2.0

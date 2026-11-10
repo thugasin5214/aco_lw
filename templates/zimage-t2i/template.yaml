@@ -1,0 +1,20 @@
+title: 文生图 · Z-Image（精致肤质 / 写实人像定妆）
+kind: image
+model: z-image-bf16
+source: 标准实验室/07-ZImage-精致肤质-文生图.json（UI → API）
+release_after: keep
+output_prefix: {node: "16", field: filename_prefix}
+# Z-Image Base：真 CFG（有负面提示词），30 步 res_multistep。比 Klein 慢，但人像脸型 / 肤质更可控。
+slots:
+  prompt:   {node: "5", field: text, type: str}
+  negative: {node: "6", field: text, type: str}
+  seed:     {node: "8", field: seed, type: int, min: 0}
+  steps:    {node: "8", field: steps, type: int, min: 8, max: 50}
+  cfg:      {node: "8", field: cfg, type: float, min: 1.0, max: 8.0}
+  width:    {node: "7", field: width, type: int, min: 256, max: 2048, multiple_of: 16}
+  height:   {node: "7", field: height, type: int, min: 256, max: 2048, multiple_of: 16}
+tiers:
+  preview:  {width: 576, height: 768, steps: 20, verified: false}
+  portrait: {width: 864, height: 1152, verified: false}   # 3:4 定妆
+  standard: {width: 1280, height: 720, verified: false}
+default_tier: portrait

@@ -11,6 +11,20 @@ _LANG = "en"
 M: dict[str, tuple[str, str]] = {
     # 通用
     "ack": ("Got it — thinking…", "收到，正在理解……"),
+    "agent_parked": (
+        "Queued: {why}. I'll pick this up automatically as soon as memory frees up; /status works meanwhile (no LLM needed).",
+        "已排队：{why}。内存一空出来就自动接着处理；期间 /status 随时可查（不需要 LLM）。",
+    ),
+    "agent_resumed": (
+        "Memory is free — working on your message now…",
+        "内存空出来了，开始处理你的消息……",
+    ),
+    "park_film": (
+        "a FreeVideo film is shooting and needs the memory",
+        "FreeVideo 正在拍片，占着内存",
+    ),
+    "park_render": ("a video render is holding the memory", "视频正在生成，占着内存"),
+    "park_pressure": ("memory pressure is critical", "内存压力过高"),
     "llm_queued_video": (
         "A video is rendering and holding memory; the LLM will reply right after it finishes.",
         "视频生成占着内存，LLM 先排队，生成结束后马上处理。",
@@ -73,6 +87,44 @@ M: dict[str, tuple[str, str]] = {
     ),
     "btn_approve": ("✅ Approve", "✅ 同意"),
     "btn_decline": ("✕ No", "✕ 不要"),
+    "btn_always": ("✅ Always ({r})", "✅ 始终允许（{r}）"),
+    "agent_auto_approved": ("⚡ Auto-approved ({how}): {what}", "⚡ 已自动批准（{how}）：{what}"),
+    "perm_how_bypass": ("bypass mode", "bypass 模式"),
+    "perm_how_rule": ("always-allow rule", "始终允许规则"),
+    "perm_now": (
+        (
+            "Permission mode: {m}\nAlways-allowed:\n{rules}\n"
+            "/permissions bypass — stop asking · /permissions default — ask each time · "
+            "/permissions forget <rule|all>"
+        ),
+        (
+            "权限模式：{m}\n始终允许：\n{rules}\n"
+            "/permissions bypass 不再审批 · /permissions default 逐条审批 · "
+            "/permissions forget <规则|all> 删除规则"
+        ),
+    ),
+    "perm_no_rules": ("(none)", "（无）"),
+    "status_bypass": (
+        "\n⚡ Permissions: bypass (agent does not ask)",
+        "\n⚡ 权限：bypass（agent 不再请求批准）",
+    ),
+    "perm_set_bypass": (
+        (
+            "Bypass mode on: the agent no longer asks before commands, MCP calls, hand-overs or "
+            "unmeasured video tiers (installing nodes / downloading models still asks). Hard refusals (ComfyUI :8188, FreeVideo token, killing "
+            "processes, LLM load/unload) and the online switch still apply. /permissions default to go back."
+        ),
+        (
+            "已开 bypass：agent 执行命令、MCP 调用、交给外部 agent、未实测的视频档位都不再问你（装节点 / 下模型仍会问）。"
+            "硬拒绝（直连 ComfyUI :8188、读 FreeVideo token、结束进程、加载 / 卸载 LLM）和在线开关照旧。"
+            "/permissions default 恢复逐条审批。"
+        ),
+    ),
+    "perm_set_default": (
+        "Back to asking each time (always-allow rules still apply).",
+        "已恢复逐条审批（“始终允许”的规则仍然生效）。",
+    ),
+    "perm_forgot": ("Removed {n} rule(s).", "已删除 {n} 条规则。"),
     "agent_step_budget": (
         "I've used my step budget ({n} steps) for this request. Tell me how to continue.",
         "这次请求的步数预算（{n} 步）用完了。告诉我接下来怎么做。",
@@ -80,6 +132,44 @@ M: dict[str, tuple[str, str]] = {
     "agent_already_decided": ("That was already decided.", "这个已经决定过了。"),
     "agent_declined": ("OK — not doing that.", "好的，不做。"),
     "agent_approved": ("Approved.", "已同意。"),
+    "fv_offline": (
+        "Handing over to the FreeVideo agent uses Claude Code (online); turn on freevideo_agent_online (or allow_online) in config.toml first.",
+        "交给 FreeVideo agent 要用 Claude Code（在线）；先在 config.toml 打开 freevideo_agent_online（或 allow_online）。",
+    ),
+    "agent_delegate_approval": (
+        "Hand this sub-task to {agent} (online)? It reports back here.\n{task}",
+        "把这个子任务交给 {agent}（在线）？它做完会在这里汇报。\n{task}",
+    ),
+    "agent_online_off": (
+        "Online models / agents are off: set allow_online = true in config.toml first.",
+        "在线模型 / agent 没开：先在 config.toml 设 allow_online = true。",
+    ),
+    "model_now": (
+        "Agent brain: {m}{note}\nOptions: {opts}\nSwitch with /model <name>.",
+        "当前 agent 大脑：{m}{note}\n可选：{opts}\n用 /model <名字> 切换。",
+    ),
+    "model_set": ("Agent brain switched to {m}.", "agent 大脑已切换为 {m}。"),
+    "model_unknown": ("Unknown brain {m}. Options: {opts}", "没有 {m} 这个选项。可选：{opts}"),
+    "model_local_note": (
+        " (online is off, so local is used)",
+        "（在线没开，实际用本地）",
+    ),
+    "fv_delegate_approval": (
+        "Hand this task to the FreeVideo agent (Claude Code + FreeVideo tools)?\n{task}",
+        "把这个任务交给 FreeVideo agent（Claude Code + FreeVideo 工具）？\n{task}",
+    ),
+    "fv_started": (
+        "Handed to the FreeVideo agent (Claude Code). It reports back here; its videos are in FreeVideo's library.",
+        "已交给 FreeVideo agent（Claude Code）。它做完会在这里汇报；视频在 FreeVideo 的资料库里。",
+    ),
+    "agent_mcp_approval": (
+        "The agent wants to call MCP tool {tool} with:\n```\n{args}\n```{why}",
+        "agent 想调用 MCP 工具 {tool}，参数：\n```\n{args}\n```{why}",
+    ),
+    "agent_cmd_approval": (
+        "The agent wants to run a command:\n```\n{cmd}\n```{why}",
+        "agent 想执行命令：\n```\n{cmd}\n```{why}",
+    ),
     "style_set": ("Planner style: {s}", "规划方式：{s}"),
     "locked_as": ("Locked as “{r}”", "已锁定为「{r}」"),
     "ask_lock": ("Lock it into the baseline pack?", "要锁进基准包吗？"),
@@ -178,6 +268,14 @@ M: dict[str, tuple[str, str]] = {
         "Project: {p}\nRendering: {r}{paused}, queued {q}\nMemory: {m} GiB free, pressure {pr}\nLLM: {llm}",
         "项目：{p}\n出图：{r}{paused}，排队 {q}\n内存：可用 {m} GiB，压力 {pr}\nLLM：{llm}",
     ),
+    "status_agent": (
+        "\nAgent: {a} working, {w} queued for the LLM",
+        "\nAgent：处理中 {a}，等 LLM 排队 {w}",
+    ),
+    "status_llm_loaded": (" (loaded)", "（已加载）"),
+    "status_llm_unloaded": (" (unloaded)", "（未加载）"),
+    "status_films": ("\nFilm shooting: {n} (LLM held back)", "\n正在拍片：{n} 部（LLM 暂不加载）"),
+    "status_prod": ("\nProduction “{t}”: {stage} — {c}", "\n制片《{t}》：{stage} — {c}"),
     "status_running": ("running {t}", "正在跑 {t}"),
     "status_idle": ("idle", "空闲"),
     "status_paused": (" (paused)", "（已暂停）"),
@@ -239,6 +337,9 @@ M: dict[str, tuple[str, str]] = {
 HELP = (
     """aco_lw commands (no LLM needed):
 /status system and queue status
+/fv <task> hand a video task to the FreeVideo agent (Claude Code + FreeVideo tools)
+/model [local|openai|openrouter|anthropic|claude_code|codex] show / switch the agent's brain
+/permissions [default|bypass|forget <rule|all>] approval mode and always-allow rules
 /rounds recent rounds
 /round TEMPLATE [COUNT] [prompt]  queue a round directly
 /review re-send rounds waiting for review
@@ -255,6 +356,9 @@ HELP = (
 Anything else: a request or note — wakes the LLM.""",
     """aco_lw 命令（不唤醒 LLM）：
 /status 系统与队列状态
+/fv <任务> 把视频任务交给 FreeVideo agent（Claude Code + FreeVideo 工具）
+/model [local|openai|openrouter|anthropic|claude_code|codex] 查看 / 切换 agent 的大脑
+/permissions [default|bypass|forget <规则|all>] 审批模式与“始终允许”规则
 /rounds 最近几轮
 /round 模板 [数量] [prompt]  直接出一轮候选
 /review 重新推送待审阅的候选

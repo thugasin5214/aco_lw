@@ -32,6 +32,7 @@ class Poll:
     state: PollState
     detail: str | None = None
     result: Any = None  # 执行端自己的完成记录，交给 collect
+    alive: bool = False  # 执行端确认作业仍在推进（如近期心跳）：超过观察时限也继续盯，不标超时
 
 
 class Executor(Protocol):
@@ -68,5 +69,7 @@ def get_executors(cfg, comfy=None) -> dict[str, Executor]:
 
     out = {"comfy": ComfyExecutor(comfy, cfg), "ffmpeg": FFmpegExecutor(cfg)}
     if getattr(cfg, "freevideo_agent", True):
-        out["freevideo"] = FreeVideoExecutor(FreeVideo(cfg.comfy_url))
+        out["freevideo"] = FreeVideoExecutor(
+            FreeVideo(cfg.comfy_url), cfg.data_dir / "freevideo_jobs.json"
+        )
     return out

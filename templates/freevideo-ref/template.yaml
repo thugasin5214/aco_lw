@@ -1,0 +1,26 @@
+title: 参考生视频 · FreeVideo agent API（参考视频复刻运镜 / 动作 + 参考图定人物）
+kind: video
+model: freevideo-h3
+executor: freevideo
+release_after: keep
+# 不是 ComfyUI workflow：api.json 只承载参数，由 executors/freevideo.py 组成 POST /jobs 的 generate 作业。
+# 提示词里按顺序引用：<Video 1> = ref_video；<Picture 1>、<Picture 2> = ref_image、ref_image2。
+# early_steps：参考视频只引导第一遍的前 K 步（FreeVideo 指南：8 步取 3），之后丢弃——保留运镜、站位、动作节奏，
+# 质感、人物、光线由提示词和参考图决定；省略则参考视频引导每一步（更像原片，人物也更容易被带偏）。
+# 注意：Mac 上 FreeVideo 未实现 early_steps（CUDA 才有），executor 会直接拒绝。
+slots:
+  prompt:      {node: "1", field: prompt, type: str, required: true}
+  ref_video:   {node: "1", field: ref_video, type: image}          # 本机视频路径（24 fps，≤15 s）
+  early_steps: {node: "1", field: early_steps, type: int, min: 0, max: 32}
+  ref_image:   {node: "1", field: ref_image, type: image}
+  ref_image2:  {node: "1", field: ref_image2, type: image}
+  seed:        {node: "1", field: seed, type: int, min: 0}
+  quality:     {node: "1", field: quality, type: str}               # light / medium / high / max
+  width:       {node: "1", field: width, type: int, min: 256, max: 4096, multiple_of: 32}
+  height:      {node: "1", field: height, type: int, min: 256, max: 4096, multiple_of: 32}
+  seconds:     {node: "1", field: seconds, type: float, min: 1.625, max: 15}
+tiers:
+  draft-5s:   {width: 960, height: 544, seconds: 5, quality: light, verified: false}   # FreeVideo 指南的运镜草稿档
+  light-10s:  {width: 1344, height: 768, seconds: 10, quality: light, verified: false}
+  medium-10s: {width: 1344, height: 768, seconds: 10, quality: medium, verified: false}
+default_tier: draft-5s
