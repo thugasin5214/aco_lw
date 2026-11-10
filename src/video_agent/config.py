@@ -12,6 +12,8 @@ ROOT = Path(__file__).resolve().parents[2]
 @dataclass
 class Settings:
     comfy_url: str = "http://127.0.0.1:8188"
+    # ComfyUI 的 output 目录：删除产物时连同本系统在那里生成的原图一起删（只删 aco_lw/<任务ID>_*）；留空则只删 data/jobs
+    comfy_output_dir: str = ""
     lms_url: str = "http://127.0.0.1:1234"
     llm_model: str = "qwen3.8-27b-splash"
     llm_context: int = 131072

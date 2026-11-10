@@ -87,6 +87,20 @@ M: dict[str, tuple[str, str]] = {
     ),
     "btn_approve": ("✅ Approve", "✅ 同意"),
     "btn_decline": ("✕ No", "✕ 不要"),
+    "delete_busy": (
+        "{n} task(s) are still queued or running; cancel them first.",
+        "有 {n} 个任务还在排队或生成中，先取消再删。",
+    ),
+    "delete_in_production": (
+        "Used by the active production “{p}”; finish or delete that production first.",
+        "进行中的制片「{p}」还在用它；先结束或删除那个制片。",
+    ),
+    "no_round": ("No round {r}.", "没有这一轮：{r}。"),
+    "no_task": ("No task {t}.", "没有这个任务：{t}。"),
+    "log_deleted": (
+        "Deleted {rounds} round(s), {tasks} task(s) and their files ({freed_mb} MB).",
+        "已删除 {rounds} 轮、{tasks} 个任务及其文件（{freed_mb} MB）。",
+    ),
     "btn_always": ("✅ Always ({r})", "✅ 始终允许（{r}）"),
     "agent_auto_approved": ("⚡ Auto-approved ({how}): {what}", "⚡ 已自动批准（{how}）：{what}"),
     "perm_how_bypass": ("bypass mode", "bypass 模式"),

@@ -90,7 +90,12 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
         try:
             return fn()
         except (
-            StudioError, KeyError, ValueError, TransitionError, ProductionError, FreeVideoError
+            StudioError,
+            KeyError,
+            ValueError,
+            TransitionError,
+            ProductionError,
+            FreeVideoError,
         ) as e:
             raise HTTPException(400, str(e)) from e
         except jsonschema.ValidationError as e:
@@ -384,6 +389,19 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
             guard(lambda: studio.lock(rnd["decision"]["task_id"], role))
         return rnd
 
+    # ---- 删除产物（连同 data/jobs 与 ComfyUI 里本系统生成的原图） ----
+    @app.post("/api/rounds/{round_id}/delete")
+    def delete_round(round_id: str) -> dict:
+        return guard(lambda: studio.delete_round(round_id))
+
+    @app.post("/api/tasks/{task_id}/delete")
+    def delete_task(task_id: str) -> dict:
+        return guard(lambda: studio.delete_task(task_id))
+
+    @app.post("/api/projects/{project_id}/purge")
+    def purge_project(project_id: str, scope: str = Body("review", embed=True)) -> dict:
+        return guard(lambda: studio.purge_project(project_id, scope))
+
     @app.post("/api/rounds/{round_id}/redo")
     def redo(round_id: str) -> dict:
         return guard(lambda: studio.redo(round_id, origin="web"))
@@ -627,8 +645,15 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
                 "description": w.description,
                 "settings": w.settings,
                 "stages": [
-                    {"id": s.id, "title": s.title or s.id, "kind": s.kind, "needs": s.needs,
-                     "skill": s.skill, "gate": s.gate, "confirm": s.confirm}
+                    {
+                        "id": s.id,
+                        "title": s.title or s.id,
+                        "kind": s.kind,
+                        "needs": s.needs,
+                        "skill": s.skill,
+                        "gate": s.gate,
+                        "confirm": s.confirm,
+                    }
                     for s in w.stages
                 ],
             }
@@ -670,7 +695,9 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
         overrides: dict | None = Body(None),  # noqa: B008
     ) -> list[dict]:
         return guard(
-            lambda: _production().run_stage(pid, stage, keys, note, origin="web", overrides=overrides)
+            lambda: _production().run_stage(
+                pid, stage, keys, note, origin="web", overrides=overrides
+            )
         )
 
     @app.post("/api/productions/{pid}/provide")
