@@ -98,6 +98,8 @@ class AgentCLI:
             self.command(run_id, url, workdir),
             input=prompt,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             capture_output=True,
             cwd=workdir,
             check=False,

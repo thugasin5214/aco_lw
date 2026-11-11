@@ -154,6 +154,8 @@ class Toolbox:
                 cwd=d,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",  # 输出可能截断在多字节字符中间（如 head -c），不能让整条命令失败
                 timeout=min(max(timeout_s, 1), MAX_TIMEOUT_S),
                 stdin=subprocess.DEVNULL,
             )

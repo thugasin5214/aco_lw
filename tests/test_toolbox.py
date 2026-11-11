@@ -358,3 +358,11 @@ def test_permissions_command(env):  # noqa: F811
     a.inbound("web", "/permissions forget all", say)
     a.inbound("web", "/permissions default", say)
     assert a.runtime.allow_rules() == [] and a.runtime.permission_mode() == "default"
+
+
+def test_command_output_cut_inside_a_utf8_char_does_not_fail(env):  # noqa: F811
+    _studio, make, _said = env
+    a, _ = make()
+    # “中”是 3 个字节，只输出前 2 个：以前整条命令报 UnicodeDecodeError
+    res = a.runtime.toolbox.run_command("r-utf8", "printf '中文\\xe4\\xb8'", 10)
+    assert res["exit_code"] == 0 and res["stdout"].startswith("中文")
