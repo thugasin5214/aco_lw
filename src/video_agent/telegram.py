@@ -193,7 +193,21 @@ class TelegramBot:
             self.api.answer(cq["id"])
             msg = cq.get("message", {})
             reply = lambda m, b=None: self.api.send(chat, m, b)
-            done = self.actions.button("telegram", cq.get("data", ""), reply)
+            data = cq.get("data", "")
+            label = next(
+                (
+                    b.get("text")
+                    for row in (msg.get("reply_markup") or {}).get("inline_keyboard", [])
+                    for b in row
+                    if b.get("callback_data") == data
+                ),
+                data,
+            )
+            try:  # 按钮点击也记进当前会话（控制台的对话历史里看得到你点了什么）
+                self.actions.studio.log("telegram", "in", tr("btn_pressed", b=label), button=data)
+            except Exception as e:  # noqa: BLE001 — 记录失败不影响按钮本身
+                log.warning("Logging button press failed: %s", e)
+            done = self.actions.button("telegram", data, reply)
             if done and msg:
                 self.api.clear_buttons(chat, msg["message_id"])
 

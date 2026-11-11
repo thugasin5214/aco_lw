@@ -537,6 +537,35 @@ class Store:
             args.append(state)
         return self._rows(q + " ORDER BY created DESC", tuple(args))
 
+    # ---- 删除（文件由 Studio 先删，这里只删记录） ----
+    @_locked
+    def delete_tasks(self, task_ids: list[str]) -> None:
+        if not task_ids:
+            return
+        marks = ",".join("?" * len(task_ids))
+        with self.db:
+            self.db.execute(f"DELETE FROM events WHERE task_id IN ({marks})", tuple(task_ids))
+            self.db.execute(f"DELETE FROM tasks WHERE id IN ({marks})", tuple(task_ids))
+
+    @_locked
+    def delete_round_row(self, round_id: str) -> None:
+        with self.db:
+            self.db.execute("DELETE FROM rounds WHERE id=?", (round_id,))
+
+    @_locked
+    def active_production_refs(self, round_ids: list[str], task_ids: list[str]) -> list[dict]:
+        """进行中的制片还在用的产物（删了会让制片缺图）。"""
+        ids = [*round_ids, *task_ids]
+        if not ids:
+            return []
+        rm, tm = ",".join("?" * len(round_ids)) or "''", ",".join("?" * len(task_ids)) or "''"
+        return self._rows(
+            "SELECT a.*, p.title AS production_title FROM artifacts a"
+            " JOIN productions p ON p.id = a.production_id"
+            f" WHERE p.state = 'active' AND (a.round_id IN ({rm}) OR a.task_id IN ({tm}))",
+            (*round_ids, *task_ids),
+        )
+
     @_locked
     def round_tasks(self, round_id: str) -> list[dict]:
         return self._rows("SELECT * FROM tasks WHERE round_id=? ORDER BY idx", (round_id,))
@@ -629,7 +658,9 @@ class Store:
     @_locked
     def sessions(self, project_id: str) -> list[dict]:
         return self._rows(
-            "SELECT s.*, (SELECT COUNT(*) FROM messages m WHERE m.session_id=s.id) AS n_messages"
+            "SELECT s.*, (SELECT COUNT(*) FROM messages m WHERE m.session_id=s.id) AS n_messages,"
+            " (SELECT COUNT(*) FROM messages m WHERE m.session_id=s.id AND m.channel='telegram')"
+            " AS n_telegram"
             " FROM sessions s WHERE project_id=? ORDER BY updated DESC",
             (project_id,),
         )
@@ -643,6 +674,22 @@ class Store:
                 (*fields.values(), time.time(), session_id),
             )
         return self.get_session(session_id)
+
+    @_locked
+    def delete_session(self, session_id: str) -> dict:
+        """删掉会话本身、它的对话记录与 agent 运行记录（项目记忆、产物不动）。"""
+        runs = [
+            r["id"]
+            for r in self._rows("SELECT id FROM agent_runs WHERE session_id=?", (session_id,))
+        ]
+        with self.db:
+            n = self.db.execute("DELETE FROM messages WHERE session_id=?", (session_id,)).rowcount
+            for rid in runs:
+                self.db.execute("DELETE FROM agent_msgs WHERE run_id=?", (rid,))
+            self.db.execute("DELETE FROM agent_runs WHERE session_id=?", (session_id,))
+            self.db.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+            self.db.execute("DELETE FROM kv WHERE key=?", (f"agent_upto:{session_id}",))
+        return {"messages": n, "runs": len(runs)}
 
     @_locked
     def adopt_orphan_messages(self, project_id: str, session_id: str) -> int:
@@ -853,7 +900,15 @@ class Store:
             self.db.execute(
                 "INSERT INTO productions (id, project_id, created, updated, workflow, title, settings)"
                 " VALUES (?,?,?,?,?,?,?)",
-                (pid, project_id, now, now, workflow, title, json.dumps(settings, ensure_ascii=False)),
+                (
+                    pid,
+                    project_id,
+                    now,
+                    now,
+                    workflow,
+                    title,
+                    json.dumps(settings, ensure_ascii=False),
+                ),
             )
         return self.get_production(pid)
 
@@ -908,9 +963,7 @@ class Store:
         return self._one("SELECT * FROM artifacts WHERE round_id=?", (round_id,))
 
     @_locked
-    def artifacts(
-        self, production_id: str, stage: str | None = None, *statuses: str
-    ) -> list[dict]:
+    def artifacts(self, production_id: str, stage: str | None = None, *statuses: str) -> list[dict]:
         q, args = "SELECT * FROM artifacts WHERE production_id=?", [production_id]
         if stage:
             q += " AND stage=?"

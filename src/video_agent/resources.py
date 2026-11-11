@@ -132,7 +132,14 @@ class LLMWorkload:
         llm.unload(self.cfg.llm_model)
 
     def load(self, ttl: int | None) -> None:
-        llm.load(self.cfg.llm_model, self.cfg.llm_context, ttl)
+        c = self.cfg
+        llm.load(
+            c.llm_model,
+            c.llm_context,
+            ttl,
+            getattr(c, "llm_gpu", ""),
+            getattr(c, "llm_parallel", 0),
+        )
 
 
 class ResourceBusy(RuntimeError):

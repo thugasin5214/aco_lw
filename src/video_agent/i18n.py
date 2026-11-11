@@ -87,6 +87,20 @@ M: dict[str, tuple[str, str]] = {
     ),
     "btn_approve": ("✅ Approve", "✅ 同意"),
     "btn_decline": ("✕ No", "✕ 不要"),
+    "delete_busy": (
+        "{n} task(s) are still queued or running; cancel them first.",
+        "有 {n} 个任务还在排队或生成中，先取消再删。",
+    ),
+    "delete_in_production": (
+        "Used by the active production “{p}”; finish or delete that production first.",
+        "进行中的制片「{p}」还在用它；先结束或删除那个制片。",
+    ),
+    "no_round": ("No round {r}.", "没有这一轮：{r}。"),
+    "no_task": ("No task {t}.", "没有这个任务：{t}。"),
+    "log_deleted": (
+        "Deleted {rounds} round(s), {tasks} task(s) and their files ({freed_mb} MB).",
+        "已删除 {rounds} 轮、{tasks} 个任务及其文件（{freed_mb} MB）。",
+    ),
     "btn_always": ("✅ Always ({r})", "✅ 始终允许（{r}）"),
     "agent_auto_approved": ("⚡ Auto-approved ({how}): {what}", "⚡ 已自动批准（{how}）：{what}"),
     "perm_how_bypass": ("bypass mode", "bypass 模式"),
@@ -242,9 +256,24 @@ M: dict[str, tuple[str, str]] = {
         "已新开会话「{t}」。项目记忆会带过来，之前的对话不会。",
     ),
     "session_use": ("Switched to session “{t}”", "已切换到会话「{t}」"),
+    "session_deleted": (
+        "Deleted session “{t}” ({m} messages). Current session: “{c}”",
+        "已删除会话「{t}」（{m} 条消息）。当前会话：「{c}」",
+    ),
+    "session_delete_q": (
+        "Delete session “{t}” ({n} messages, with the agent's history in it)? This cannot be undone.",
+        "删除会话「{t}」（{n} 条消息，连同其中的 agent 记录）？删除后无法恢复。",
+    ),
+    "btn_delete": ("🗑 Delete", "🗑 删除"),
+    "btn_keep": ("Keep", "保留"),
+    "btn_pressed": ("[button] {b}", "［按钮］{b}"),
+    "session_busy": (
+        "The agent is still working in this session ({n} run(s)); cancel it first",
+        "agent 还在这个会话里干活（{n} 个运行），先取消再删",
+    ),
     "session_list": (
-        "Sessions (1 = most recent):\n{rows}\n/session new [TITLE] · /session use N",
-        "会话（1 = 最近活跃）：\n{rows}\n/session new [标题] · /session use 序号",
+        "Sessions (1 = most recent):\n{rows}\n/session new [TITLE] · /session use N · /session delete N",
+        "会话（1 = 最近活跃）：\n{rows}\n/session new [标题] · /session use 序号 · /session delete 序号",
     ),
     "session_row": ("{i}. {t} · {n} msgs{cur}", "{i}. {t} · {n} 条{cur}"),
     "current_mark": (" ← current", " ← 当前"),
@@ -349,7 +378,7 @@ HELP = (
 /cancel cancel queued tasks (and interrupt our running one)
 /mode [on_demand|session|always|command_only] LLM residency
 /project · /projects · /project new NAME · /project use NAME · /project done
-/session · /session new [TITLE] · /session use N
+/session · /session new [TITLE] · /session use N · /session delete N
 /memory · /memory add TEXT · /memory del ID
 /pack current baseline pack
 /whoami show your chat_id
@@ -368,7 +397,7 @@ Anything else: a request or note — wakes the LLM.""",
 /cancel 取消排队中的任务（含正在跑的本系统任务）
 /mode [on_demand|session|always|command_only] LLM 驻留模式
 /project · /projects · /project new 名称 · /project use 名称 · /project done
-/session · /session new [标题] · /session use 序号
+/session · /session new [标题] · /session use 序号 · /session delete 序号
 /memory · /memory add 文本 · /memory del 编号
 /pack 当前基准包
 /whoami 显示 chat_id

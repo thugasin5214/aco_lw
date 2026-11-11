@@ -32,6 +32,89 @@ class Studio:
         self.decision_listeners: list = []  # 你对某轮做了决定 → 通知（例如等这轮的 agent 运行）
         self.round_listeners: list = []  # 新开了一轮（含重做 / 微调派生的）→ 通知（例如制片产物跟随）
 
+    # ---- 删除产物（连同本地文件） ----
+    BUSY = frozenset({"draft", "validated", "waiting_memory", "submitted", "running"})
+    RUN_DONE = frozenset({"done", "failed", "cancelled"})
+
+    def _remove_files(self, task: dict) -> int:
+        """删任务目录 data/jobs/<ID>/，以及 ComfyUI output 里本系统生成的原图；返回释放的字节数。"""
+        freed = 0
+        jobs = self.store.jobs_dir.resolve()
+        d = self.store.task_dir(task["id"]).resolve()
+        if d.parent == jobs and d.is_dir():
+            freed += sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+            shutil.rmtree(d)
+        root = getattr(self.orch.cfg, "comfy_output_dir", "") or ""
+        if root:
+            base = Path(root).expanduser().resolve()
+            for o in task["outputs"] or []:
+                src = o.get("source") or {}
+                name, sub = src.get("filename") or "", src.get("subfolder") or ""
+                # 只删自己的：output 类型、aco_lw 子目录、文件名以任务 ID 开头
+                if (
+                    src.get("type") != "output"
+                    or sub != "aco_lw"
+                    or not name.startswith(task["id"])
+                ):
+                    continue
+                p = (base / sub / name).resolve()
+                if p.is_relative_to(base) and p.is_file():
+                    freed += p.stat().st_size
+                    p.unlink()
+        return freed
+
+    def _delete(self, tasks: list[dict], round_ids: list[str]) -> dict:
+        busy = [t for t in tasks if t["state"] in self.BUSY]
+        if busy:
+            raise StudioError(tr("delete_busy", n=len(busy)))
+        refs = self.store.active_production_refs(round_ids, [t["id"] for t in tasks])
+        if refs:
+            raise StudioError(tr("delete_in_production", p=refs[0]["production_title"]))
+        freed = sum(self._remove_files(t) for t in tasks)
+        self.store.delete_tasks([t["id"] for t in tasks])
+        for rid in round_ids:
+            self.store.delete_round_row(rid)
+        return {"tasks": len(tasks), "rounds": len(round_ids), "freed_mb": round(freed / 2**20, 1)}
+
+    def delete_round(self, round_id: str) -> dict:
+        rnd = self.store.get_round(round_id)
+        if rnd is None:
+            raise StudioError(tr("no_round", r=round_id))
+        out = self._delete(self.store.round_tasks(round_id), [round_id])
+        self.log("system", "out", tr("log_deleted", **out), rnd["project_id"])
+        return out
+
+    def delete_task(self, task_id: str) -> dict:
+        task = self.store.get(task_id)
+        if task is None:
+            raise StudioError(tr("no_task", t=task_id))
+        rid = task["round_id"]
+        rest = [t for t in self.store.round_tasks(rid) if t["id"] != task_id] if rid else []
+        out = self._delete([task], [rid] if rid and not rest else [])
+        self.log("system", "out", tr("log_deleted", **out), task["project_id"])
+        return out
+
+    def purge_project(self, project_id: str, scope: str = "review") -> dict:
+        """清理项目产物。scope=review：只删待审阅的；unselected：删所有没被采纳的
+        （待审阅 / 打回 / 失败 / 超时）。采纳的、正在跑的、进行中制片用到的都保留。"""
+        if scope not in ("review", "unselected"):
+            raise StudioError("scope must be review or unselected")
+        states = {"review"} if scope == "review" else {"review", "rejected", "failed", "timeout"}
+        tasks = [t for t in self.store.list(1_000_000, project_id) if t["state"] in states]
+        rounds = {t["round_id"] for t in tasks if t["round_id"]}
+        used = self.store.active_production_refs(list(rounds), [t["id"] for t in tasks])
+        skip_r = {a["round_id"] for a in used if a["round_id"]}
+        skip_t = {a["task_id"] for a in used if a["task_id"]}
+        tasks = [t for t in tasks if t["id"] not in skip_t and t["round_id"] not in skip_r]
+        ids = {t["id"] for t in tasks}
+        empty = [
+            r for r in rounds - skip_r if all(t["id"] in ids for t in self.store.round_tasks(r))
+        ]
+        out = self._delete(tasks, empty)
+        out["kept_for_productions"] = len(skip_r) + len(skip_t)
+        self.log("system", "out", tr("log_deleted", **out), project_id)
+        return out
+
     # ---- 项目 ----
     def current_project(self) -> dict:
         pid = self.store.get_kv("current_project")
@@ -126,6 +209,28 @@ class Studio:
             s = self.store.update_session(s["id"], state="open")
         self.store.set_kv(f"session:{pid}", s["id"])
         return s
+
+    def delete_session(self, key: str, project_id: str | None = None) -> dict:
+        """删除会话（按 ID 或列表序号）。agent 还在这个会话里干活时拒绝；删的是当前会话则换到下一个。"""
+        if project_id is None and not key.isdigit():
+            s = self.store.get_session(key)
+            project_id = s and s["project_id"]
+        pid = project_id or self.current_project()["id"]
+        rows = self.store.sessions(pid)
+        s = (
+            self.store.get_session(key)
+            if not key.isdigit()
+            else (rows[int(key) - 1] if 0 < int(key) <= len(rows) else None)
+        )
+        if s is None or s["project_id"] != pid:
+            raise StudioError(f"当前项目里没有会话 {key}")
+        live = [r for r in self.store.runs(s["id"]) if r["status"] not in self.RUN_DONE]
+        if live:
+            raise StudioError(tr("session_busy", n=len(live)))
+        out = self.store.delete_session(s["id"])
+        if self.store.get_kv(f"session:{pid}") == s["id"]:
+            self.store.set_kv(f"session:{pid}", None)
+        return {**out, "title": s["title"], "current": self.current_session(pid)}
 
     # ---- 项目记忆（LLM 提议，用户确认后生效） ----
     def propose_memories(

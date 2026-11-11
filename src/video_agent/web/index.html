@@ -221,6 +221,8 @@ kbd{font:11.5px ui-monospace,monospace;border:1px solid var(--line);border-radiu
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .form{display:grid;grid-template-columns:max-content 1fr;gap:8px 12px;align-items:center;font-size:13.5px}
 .form label{color:var(--muted)}
+.form select{border:1px solid var(--line);border-radius:8px;background:var(--bg);padding:5px 8px;width:100%;color:var(--text)}
+.form input[type=password]{border:1px solid var(--line);border-radius:8px;background:var(--bg);padding:5px 8px;width:100%}
 .form input[type=number],.form input[type=text]{border:1px solid var(--line);border-radius:8px;background:var(--bg);padding:5px 8px;width:100%}
 .ctxmsg{border:1px solid var(--line);border-radius:8px;margin:8px 0}
 .ctxmsg .r{font-size:12px;color:var(--muted);padding:4px 8px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between}
@@ -247,6 +249,7 @@ kbd{font:11.5px ui-monospace,monospace;border:1px solid var(--line);border-radiu
     <button class="tab" data-view="progress" data-t="tab.progress">Progress</button>
     <button class="tab" data-view="runbook" data-t="tab.runbook">Runbook</button>
     <button class="tab" data-view="architecture" data-t="tab.architecture">Architecture</button>
+    <button class="btn sm" onclick="openSettings()" data-t="settings">⚙ Settings</button>
     <select class="sm lang" id="lang" aria-label="Language"><option value="en">EN</option><option value="zh">中文</option></select>
   </nav>
 </header>
@@ -268,6 +271,7 @@ kbd{font:11.5px ui-monospace,monospace;border:1px solid var(--line);border-radiu
   <section class="view" id="v-review">
     <div class="hint" style="margin-bottom:12px" data-t="review.keys" data-html="1"></div>
     <div id="review-stages"></div>
+    <div class="toolbar" id="review-tools"></div>
     <div id="review"></div>
   </section>
 
@@ -361,6 +365,21 @@ const I18N = {
     "flow.pick": "Click a node on the left",
     "review.keys": "Shortcuts: <kbd>1</kbd>–<kbd>9</kbd> highlight · <kbd>Enter</kbd> approve (locks with the chosen role) · <kbd>F</kbd> tweak with note · <kbd>R</kbd> redo round · <kbd>X</kbd> reject + note · <kbd>J</kbd>/<kbd>K</kbd> switch item · <kbd>V</kbd> view full screen (or double-click / ⤢; <kbd>←</kbd>/<kbd>→</kbd> browse, wheel to zoom). Notes wake the LLM; replies appear in “Projects & Chat”.",
     "review.empty": "Nothing to review. New candidates appear here (and are pushed to Telegram).",
+    settings: "⚙ Settings", "set.title": "Settings", "set.runtime": "Runtime", "set.g.llm": "Local LLM (LM Studio)", "set.g.agent": "Agent",
+    "set.g.online": "Online models", "set.g.render": "Rendering", "set.g.system": "System", "set.restart": "needs daemon restart",
+    "set.secret.set": "set — leave empty to keep", "set.secret.unset": "not set", "set.save": "Save", "set.saved": "Saved {n} item(s)",
+    "set.saved.restart": "; restart the daemon for: {r}", "set.load": "Load with these options", "set.reload": "Reload with these options",
+    "set.unload": "Unload", "set.loaded": "Loaded: {m}", "set.notloaded": "Not loaded", "set.working": "Loading / unloading…",
+    "set.llm_mode": "Residency mode", "set.agent_brain": "Agent brain", "set.permission_mode": "Approvals",
+    "set.file": "Saved to config.toml (other keys and comments are kept).", "set.load.hint": "Save first; loading uses the saved options. Refused while a render holds the memory or the LLM is answering.",
+    "sess.del": "🗑 Delete session", "sess.del.q": "Delete session “{t}” ({n} messages, with the agent history in it)? Outputs and project memory stay. This cannot be undone.",
+    "sess.deleted": "Deleted “{t}” ({m} messages)",
+    del: "🗑 Delete", "del.round.q": "Delete this round ({n} candidates) and its files? This cannot be undone.",
+    "del.task.q": "Delete this output and its files? This cannot be undone.",
+    "purge.review": "🗑 Clear pending review · {p} ({n})",
+    "purge.review.q": "Delete every candidate still waiting for review in “{p}”, with its files? Approved ones are kept.",
+    "purge.unsel": "🗑 Clean up project", "purge.unsel.q": "Delete everything in “{p}” that was not approved (pending, rejected, failed, timed out), with its files? Approved and baseline-pack items are kept.",
+    "deleted": "Deleted {rounds} round(s), {tasks} task(s), {freed_mb} MB",
     approve: "✅ Approve", redo: "🎲 Redo", "redo.round": "🎲 Redo round", reject: "↩️ Reject", "reject.note": "↩️ Reject + note",
     refine: "🔧 Tweak w/ note", send: "Send", "no.lock": "Don't lock", "goto.review": "Go to review →",
     "note.refine": "What to change in #{n}, e.g. softer eyes, light from the side",
@@ -453,6 +472,21 @@ const I18N = {
     "flow.pick": "点选左侧节点",
     "review.keys": "快捷键：<kbd>1</kbd>–<kbd>9</kbd> 高亮候选 · <kbd>Enter</kbd> 通过（按所选锁定角色）· <kbd>F</kbd> 微调 · <kbd>R</kbd> 整轮重做 · <kbd>X</kbd> 打回+批注 · <kbd>J</kbd>/<kbd>K</kbd> 切换审阅项 · <kbd>V</kbd> 全屏查看（或双击 / ⤢；<kbd>←</kbd>/<kbd>→</kbd> 切换，滚轮缩放）。批注会唤醒 LLM，回复见“项目与对话”。",
     "review.empty": "没有待审阅的内容。新一轮候选出来后会出现在这里（也会推送到 Telegram）。",
+    settings: "⚙ 设置", "set.title": "设置", "set.runtime": "运行时", "set.g.llm": "本地 LLM（LM Studio）", "set.g.agent": "Agent",
+    "set.g.online": "在线模型", "set.g.render": "渲染", "set.g.system": "系统", "set.restart": "需重启 daemon",
+    "set.secret.set": "已设置 · 留空不改", "set.secret.unset": "未设置", "set.save": "保存", "set.saved": "已保存 {n} 项",
+    "set.saved.restart": "；以下需重启 daemon 才生效：{r}", "set.load": "按这些选项加载", "set.reload": "按这些选项重新加载",
+    "set.unload": "卸载", "set.loaded": "已加载：{m}", "set.notloaded": "未加载", "set.working": "正在加载 / 卸载…",
+    "set.llm_mode": "驻留模式", "set.agent_brain": "Agent 大脑", "set.permission_mode": "审批",
+    "set.file": "保存写回 config.toml（其他配置和注释保留）。", "set.load.hint": "先保存，加载用已保存的选项。渲染占着内存或 LLM 正在回答时会拒绝。",
+    "sess.del": "🗑 删除会话", "sess.del.q": "删除会话「{t}」（{n} 条消息，连同其中的 agent 记录）？产物和项目记忆保留。删除后无法恢复。",
+    "sess.deleted": "已删除「{t}」（{m} 条消息）",
+    del: "🗑 删除", "del.round.q": "删除这一轮（{n} 个候选）及其文件？不能恢复。",
+    "del.task.q": "删除这个产物及其文件？不能恢复。",
+    "purge.review": "🗑 清空待审阅 · {p}（{n}）",
+    "purge.review.q": "删除「{p}」里所有待审阅的候选及其文件？已通过的保留。",
+    "purge.unsel": "🗑 清理本项目", "purge.unsel.q": "删除「{p}」里所有没通过的产物（待审阅、打回、失败、超时）及其文件？已通过的和基准包里的保留。",
+    "deleted": "已删除 {rounds} 轮、{tasks} 个任务，释放 {freed_mb} MB",
     approve: "✅ 通过", redo: "🎲 重做", "redo.round": "🎲 整轮重做", reject: "↩️ 打回", "reject.note": "↩️ 打回+批注",
     refine: "🔧 微调", send: "发送", "no.lock": "不锁定", "goto.review": "去审阅 →",
     "note.refine": "对 #{n} 的微调说明，例如：眼神更柔和，光打侧面",
@@ -989,7 +1023,28 @@ function renderStageReviews(){
     await act(url, {stage: r.stage, action: k, note, key: r.key});
   });
 }
+async function delDone(u, q){
+  if (!confirm(q)) return;
+  try { const r = await api(u, {}); toast(t("deleted", r)); refreshAll(true); } catch(e){ toast(t("not.done") + e.message, true); }
+}
+const delRound = (id, n) => delDone(`/api/rounds/${encodeURIComponent(id)}/delete`, t("del.round.q", {n}));
+const delTask = id => delDone(`/api/tasks/${encodeURIComponent(id)}/delete`, t("del.task.q"));
+async function purge(pid, scope){
+  const p = PROJECTS.find(x => x.id === pid) || {name: pid};
+  const n = REVIEW.filter(it => it.project_id === pid).reduce((a, it) => a + it.tasks.length, 0);
+  if (!confirm(t(scope === "review" ? "purge.review.q" : "purge.unsel.q", {p: p.name, n}))) return;
+  try { const r = await api(`/api/projects/${encodeURIComponent(pid)}/purge`, {scope}); toast(t("deleted", r)); refreshAll(true); }
+  catch(e){ toast(t("not.done") + e.message, true); }
+}
+function renderReviewTools(){
+  const counts = {};
+  REVIEW.forEach(it => { if (it.project_id) counts[it.project_id] = (counts[it.project_id] || 0) + it.tasks.length; });
+  const proj = Object.fromEntries(PROJECTS.map(p => [p.id, p.name]));
+  $("#review-tools").innerHTML = Object.entries(counts).map(([pid, n]) =>
+    `<button class="btn danger sm" onclick="purge('${esc(pid)}', 'review')">${esc(t("purge.review", {p: proj[pid] || pid, n}))}</button>`).join("");
+}
 function renderReview(){
+  renderReviewTools();
   const box = $("#review");
   if (!REVIEW.length){ box.innerHTML = SREVIEW.length ? "" : `<div class="empty">${t("review.empty")}</div>`; return; }
   reviewActive = Math.min(reviewActive, REVIEW.length - 1);
@@ -1011,7 +1066,8 @@ function renderReview(){
         ${isRound ? `<button class="btn" onclick="act('/api/rounds/${it.id}/redo', {})">${t("redo.round")}</button>
           <button class="btn danger" onclick="openNote(${i}, 'x')">${t("reject.note")}</button>`
         : `<button class="btn" onclick="act('/api/tasks/${it.id}/redo', {})">${t("redo")}</button>
-          <button class="btn danger" onclick="act('/api/tasks/${it.id}/approve', {accept:false})">${t("reject")}</button>`}</h2>
+          <button class="btn danger" onclick="act('/api/tasks/${it.id}/approve', {accept:false})">${t("reject")}</button>`}
+        <button class="btn danger" onclick="${isRound ? `delRound('${esc(it.id)}', ${it.tasks.length})` : `delTask('${esc(it.id)}')`}">${t("del")}</button></h2>
       ${isRound ? `<div class="note" id="note-x-${i}"><textarea placeholder="${esc(t("note.reject"))}"></textarea><button class="btn primary" onclick="sendNote(${i}, 'x')">${t("send")}</button></div>` : ""}
       <div class="grid">${cands}</div></div>`;
   }).join("");
@@ -1089,14 +1145,15 @@ async function loadProject(force){
   if (ptab === "workflows") body = workflowsHtml(wfs);
   $("#pdetail").innerHTML = `<h2>${esc(p.name)} ${badge(p.state)}<span class="sp"></span>
       ${isCurrentProject ? `<span class="badge ok">${t("current")}</span>` : `<button class="btn" onclick="act('/api/projects/${esc(p.id)}/use', {})">${t("set.current")}</button>`}
-      ${p.state === "active" ? `<button class="btn" onclick="if(confirm(t('confirm.done'))) act('/api/projects/${esc(p.id)}/done', {})">${t("mark.done")}</button>` : ""}</h2>
+      ${p.state === "active" ? `<button class="btn" onclick="if(confirm(t('confirm.done'))) act('/api/projects/${esc(p.id)}/done', {})">${t("mark.done")}</button>` : ""}
+      <button class="btn danger" onclick="purge('${esc(p.id)}', 'unselected')">${t("purge.unsel")}</button></h2>
     <div class="hint">${t("p.created", {a: fmtT(p.created), b: fmtT(p.updated)})}${p.note ? " · " + esc(p.note) : ""}</div>
     <div class="ptabs">${tabs}</div>${body}`;
   const nc = $("#pdetail .chat"); if (nc && (atBottom || force)) nc.scrollTop = nc.scrollHeight;
   if (ptab === "chat") bindChat();
 }
 function chatHtml(p, msgs, canChat){
-  const sess = p.sessions.map(s => `<span class="sess ${s.id === selSession ? "on" : ""}" onclick="selSession='${esc(s.id)}';loadProject(true)">${esc(s.title || s.id)}${s.id === p.current_session ? " ●" : ""}<span class="c">${s.n_messages}</span></span>`).join("");
+  const sess = p.sessions.map(s => `<span class="sess ${s.id === selSession ? "on" : ""}" onclick="selSession='${esc(s.id)}';loadProject(true)">${esc(s.title || s.id)}${s.id === p.current_session ? " ●" : ""}${s.n_telegram ? ` <span class="c" title="Telegram">TG ${s.n_telegram}</span>` : ""}<span class="c">${s.n_messages}</span></span>`).join("");
   let lastLlm = "";
   const bubbles = msgs.map(m => {
     const cls = m.channel === "system" ? "sys" : m.channel === "agent" ? "agent" : m.direction === "in" ? "in" : "out";
@@ -1113,7 +1170,7 @@ function chatHtml(p, msgs, canChat){
   return `<h3 class="sub">${t("sessions")}<span class="sessions">${sess}</span>
       ${p.state === "active" ? `<button class="btn sm" onclick="newSession()">${t("new.session")}</button>` : ""}
       ${selSession && selSession !== p.current_session && p.state === "active" ? `<button class="btn sm" onclick="act('/api/sessions/${esc(selSession)}/use', {})">${t("set.current")}</button>` : ""}
-      ${selSession ? `<button class="btn sm" onclick="renameSession()">${t("rename")}</button><button class="btn sm" onclick="showContext()">${t("ctx.view")}</button>` : ""}</h3>
+      ${selSession ? `<button class="btn sm" onclick="renameSession()">${t("rename")}</button><button class="btn sm" onclick="showContext()">${t("ctx.view")}</button><button class="btn sm danger" onclick="delSession()">${t("sess.del")}</button>` : ""}</h3>
     <div id="runbar"></div>
     <div class="chat">${bubbles}</div>
     ${canChat ? `<form class="chatbox" id="chatform"><label class="btn" style="margin:0">${t("attach")}<input type="file" id="chat-file" accept="image/*,video/mp4" hidden multiple></label>
@@ -1155,6 +1212,69 @@ function renderChips(){
 }
 async function pressBtn(data){ await act("/api/action", {data}); loadProject(true); }
 async function newSession(){ const title = prompt(t("rename.ph")); const s = await act("/api/sessions", {title: title || null}); if (s) { selSession = s.id; loadProject(true); } }
+async function delSession(){
+  const sx = PDATA?.sessions.find(x => x.id === selSession); if (!sx) return;
+  if (!confirm(t("sess.del.q", {t: sx.title || sx.id, n: sx.n_messages}))) return;
+  try { const r = await api(`/api/sessions/${encodeURIComponent(selSession)}/delete`, {}); toast(t("sess.deleted", {t: r.title, m: r.messages})); selSession = null; loadProject(true); }
+  catch(e){ toast(t("not.done") + e.message, true); }
+}
+/* ================= settings ================= */
+let CFG = null;
+async function openSettings(){
+  try { CFG = await api("/api/config"); } catch(e){ return toast(t("not.done") + e.message, true); }
+  renderSettings();
+}
+function cfgInput(f){
+  const id = "cf-" + f.name;
+  if (f.name === "llm_model" && CFG.models.length) return `<select id="${id}">${CFG.models.map(m => `<option value="${esc(m.key)}" ${m.key === f.value ? "selected" : ""}>${esc(m.key)}${m.max_context ? " · max " + m.max_context : ""}${m.vision ? " · 👁" : ""}</option>`).join("")}${CFG.models.some(m => m.key === f.value) ? "" : `<option selected>${esc(f.value)}</option>`}</select>`;
+  if (f.choices) return `<select id="${id}">${f.choices.map(c => `<option ${c === f.value ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>`;
+  if (f.type === "bool") return `<input type="checkbox" id="${id}" ${f.value ? "checked" : ""}>`;
+  if (f.secret) return `<input type="password" id="${id}" autocomplete="off" placeholder="${esc(t(f.is_set ? "set.secret.set" : "set.secret.unset"))}">`;
+  return `<input type="${f.type === "int" || f.type === "float" ? "number" : "text"}" ${f.type === "float" ? 'step="any"' : ""} id="${id}" value="${esc(f.value ?? "")}">`;
+}
+function renderSettings(){
+  const sel = (k) => `<select id="rt-${k}">${CFG.choices[k].map(c => `<option ${c === CFG.runtime[k] ? "selected" : ""}>${esc(c)}</option>`).join("")}</select>`;
+  const loaded = CFG.loaded.length ? t("set.loaded", {m: CFG.loaded.map(m => `${m.id}${m.context ? " · ctx " + m.context : ""}`).join(", ")}) : t("set.notloaded");
+  const job = CFG.llm_job.state === "working" ? t("set.working") : CFG.llm_job.state === "error" ? "⚠ " + CFG.llm_job.error : "";
+  const groups = ["llm","agent","online","render","system"].map(g => `<h3 class="sub">${t("set.g." + g)}</h3>
+    ${g === "llm" ? `<div class="hint">${esc(loaded)} ${esc(job)}</div>` : ""}
+    <div class="form">${CFG.fields.filter(f => f.group === g).map(f => `<label for="cf-${f.name}" title="${esc(f.name)}">${esc(f.desc)}${f.apply === "restart" ? ` <span class="badge idle">${t("set.restart")}</span>` : ""}</label>${cfgInput(f)}`).join("")}</div>
+    ${g === "llm" ? `<div class="actions"><button class="btn primary" onclick="llmLoad(${CFG.loaded.length ? "true" : "false"})">${t(CFG.loaded.length ? "set.reload" : "set.load")}</button>
+      ${CFG.loaded.length ? `<button class="btn" onclick="llmUnload()">${t("set.unload")}</button>` : ""}<span class="hint">${t("set.load.hint")}</span></div>` : ""}`).join("");
+  modal(`<h2>${t("set.title")}<span class="sp" style="flex:1"></span><button class="btn" onclick="closeModal()">${t("close")}</button></h2>
+    <h3 class="sub">${t("set.runtime")}</h3>
+    <div class="form"><label>${t("set.llm_mode")}</label>${sel("llm_mode")}<label>${t("set.agent_brain")}</label>${sel("agent_brain")}<label>${t("set.permission_mode")}</label>${sel("permission_mode")}</div>
+    ${groups}
+    <div class="hint">${t("set.file")}</div>
+    <div class="actions" style="justify-content:flex-end"><button class="btn" onclick="closeModal()">${t("close")}</button><button class="btn primary" onclick="saveSettings()">${t("set.save")}</button></div>`);
+}
+async function saveSettings(){
+  const values = {};
+  for (const f of CFG.fields){
+    const el = $("#cf-" + f.name); if (!el) continue;
+    const v = f.type === "bool" ? el.checked : el.value;
+    if (f.secret){ if (v) values[f.name] = v; continue; }
+    if (String(v) !== String(f.value ?? "")) values[f.name] = v;
+  }
+  const runtime = {}; for (const k of ["llm_mode","agent_brain","permission_mode"]){ const v = $("#rt-" + k).value; if (v !== CFG.runtime[k]) runtime[k] = v; }
+  try {
+    const r = await api("/api/config", {values, runtime});
+    toast(t("set.saved", {n: r.saved.length + Object.keys(runtime).length}) + (r.restart.length ? t("set.saved.restart", {r: r.restart.join(", ")}) : ""));
+    CFG = await api("/api/config"); renderSettings(); refreshAll();
+  } catch(e){ toast(t("not.done") + e.message, true); }
+}
+async function llmLoad(reload){
+  try { await api("/api/llm/load", {reload}); toast(t("set.working")); } catch(e){ return toast(t("not.done") + e.message, true); }
+  for (let i = 0; i < 120; i++){
+    await new Promise(r => setTimeout(r, 2000));
+    if (!$("#modal").classList.contains("on")) return;
+    CFG = await api("/api/config").catch(() => CFG); renderSettings();
+    if (CFG.llm_job.state !== "working") return;
+  }
+}
+async function llmUnload(){
+  try { await api("/api/llm/unload", {}); CFG = await api("/api/config"); renderSettings(); refreshAll(); } catch(e){ toast(t("not.done") + e.message, true); }
+}
 async function renameSession(){ const title = prompt(t("rename.ph")); if (title) { await act(`/api/sessions/${encodeURIComponent(selSession)}/rename`, {title}); loadProject(true); } }
 async function showContext(){
   let c; try { c = await api(`/api/sessions/${encodeURIComponent(selSession)}/context`); } catch(e){ return toast(t("not.done") + e.message, true); }
@@ -1182,7 +1302,8 @@ async function addMem(e){ e.preventDefault(); const v = $("#mem-in").value.trim(
 function roundsHtml(p){
   return `<div class="timeline">${p.rounds.map(r => `<div class="r">${badge(r.state)} <a href="#" onclick="selNode='${esc(r.id)}';$('#flow-project').value='${esc(p.id)}';show('flow');return false">${esc(r.title || r.template)}</a>
       <span class="hint">× ${r.n} · ${fmtT(r.created)}${r.decision?.action ? " · " + esc(decName(r.decision)) : ""}${r.request ? " · “" + esc(r.request.slice(0, 50)) + "”" : ""}</span>
-      ${r.state === "closed" && r.decision?.action && r.decision.action !== "cancel" && p.state === "active" ? `<button class="btn sm" onclick="reopenRound('${esc(r.id)}')">${t("reopen")}</button>` : ""}</div>`).join("") || `<div class="hint">${t("rounds.empty")}</div>`}</div>`;
+      ${r.state === "closed" && r.decision?.action && r.decision.action !== "cancel" && p.state === "active" ? `<button class="btn sm" onclick="reopenRound('${esc(r.id)}')">${t("reopen")}</button>` : ""}
+      ${r.state !== "generating" ? `<button class="btn sm danger" onclick="delRound('${esc(r.id)}', ${r.n})">${t("del")}</button>` : ""}</div>`).join("") || `<div class="hint">${t("rounds.empty")}</div>`}</div>`;
 }
 function packHtml(p){
   return `<div class="packs">${p.packs.map(v => `<div class="packv"><span class="v">v${v.version}</span>
@@ -1226,7 +1347,8 @@ function renderQueue(q){
 function renderGallery(){
   const items = TASKS.flatMap(tk => (tk.outputs || []).map(o => ({tk, o}))).filter(x => galleryKind === "all" || x.o.kind === galleryKind);
   $("#gallery").innerHTML = items.length ? items.map(({tk, o}) => `<div class="item">${media(tk, o)}
-      <div class="cap"><span title="${esc(tk.title || tk.template)}">${esc(tk.title || tk.template)}</span>${badge(tk.state)}</div></div>`).join("")
+      <div class="cap"><span title="${esc(tk.title || tk.template)}">${esc(tk.title || tk.template)}</span>${badge(tk.state)}
+        ${["review","done","rejected","failed","timeout"].includes(tk.state) ? `<button class="btn sm danger" title="${esc(t("del"))}" onclick="delTask('${esc(tk.id)}')">🗑</button>` : ""}</div></div>`).join("")
     : `<div class="empty">${t("no.outputs")}</div>`;
 }
 
