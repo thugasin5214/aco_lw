@@ -15,7 +15,7 @@ import jsonschema
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
 
-from .. import llm
+from .. import config, llm
 from ..config import ROOT, Settings
 from ..freevideo import FreeVideoError
 from ..memory import snapshot
@@ -486,6 +486,12 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
         guard(lambda: studio.use_project(s["project_id"]))
         return guard(lambda: studio.use_session(session_id, s["project_id"]))
 
+    @app.post("/api/sessions/{session_id}/delete")
+    def delete_session(session_id: str) -> dict:
+        if store.get_session(session_id) is None:
+            raise HTTPException(404, f"No session {session_id}.")
+        return guard(lambda: studio.delete_session(session_id))
+
     @app.post("/api/sessions/{session_id}/rename")
     def rename_session(session_id: str, title: str = Body(..., embed=True)) -> dict:
         return store.update_session(session_id, title=title.strip())
@@ -769,6 +775,142 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
     @app.get("/api/settings")
     def settings() -> dict:
         return {"language": cfg.language, "comfy_url": cfg.comfy_url}
+
+    # ---- 设置窗口：config.toml 的可编辑项 + 运行时开关 + 本地 LLM 加载 ----
+    llm_job: dict = {"state": "idle", "error": None}
+
+    def _runtime_cfg() -> dict:
+        rt = actions.runtime if hasattr(actions, "runtime") else None
+        return {
+            "llm_mode": actions.planner.mode,
+            "agent_brain": rt.brain() if rt else "local",
+            "permission_mode": rt.permission_mode() if rt else cfg.permission_mode,
+        }
+
+    @app.get("/api/config")
+    def get_config() -> dict:
+        from ..planner import BRAINS
+
+        rows = []
+        for group, name, desc, apply in config.EDITABLE:
+            v = getattr(cfg, name)
+            row = {
+                "group": group,
+                "name": name,
+                "desc": desc,
+                "apply": apply,
+                "type": type(v).__name__,
+                "choices": config.CHOICES.get(name),
+            }
+            if name in config.SECRET:
+                row["secret"], row["is_set"] = True, bool(v)
+            else:
+                row["value"] = ", ".join(map(str, v)) if isinstance(v, list) else v
+            rows.append(row)
+        loaded = llm.loaded_all()
+        return {
+            "fields": rows,
+            "runtime": _runtime_cfg(),
+            "choices": {
+                "llm_mode": list(MODES),
+                "agent_brain": list(BRAINS),
+                "permission_mode": ["default", "bypass"],
+            },
+            "models": llm.models(),
+            "loaded": [
+                {
+                    "id": m.get("identifier"),
+                    "context": m.get("contextLength"),
+                    "ttl_ms": m.get("ttlMs"),
+                    "status": m.get("status"),
+                }
+                for m in loaded
+            ],
+            "llm_job": llm_job,
+        }
+
+    @app.post("/api/config")
+    def set_config(
+        values: dict = Body({}),  # noqa: B008
+        runtime: dict = Body({}),  # noqa: B008
+    ) -> dict:
+        from .. import i18n
+        from ..planner import BRAINS
+
+        clean = {}
+        for name, v in values.items():
+            if name in config.SECRET and (v is None or v == ""):
+                continue  # 密钥留空 = 不改
+            clean[name] = guard(lambda n=name, v=v: config.coerce(n, v))
+        restart = [n for n in clean if {e[1]: e[3] for e in config.EDITABLE}[n] == "restart"]
+        if clean:
+            if cfg.config_path:
+                guard(lambda: config.save(clean, cfg.config_path))
+            for n, v in clean.items():
+                setattr(cfg, n, v)
+            if "language" in clean:
+                i18n.set_language(cfg.language)
+            if "agent_max_steps" in clean and hasattr(actions, "runtime"):
+                actions.runtime.max_steps = cfg.agent_max_steps
+        if runtime.get("agent_brain"):
+            if runtime["agent_brain"] not in BRAINS:
+                raise HTTPException(400, f"unknown brain {runtime['agent_brain']}")
+            store.set_kv("agent_brain", runtime["agent_brain"])
+        if runtime.get("permission_mode"):
+            if runtime["permission_mode"] not in ("default", "bypass"):
+                raise HTTPException(400, "permission_mode: default | bypass")
+            store.set_kv("permission_mode", runtime["permission_mode"])
+        if runtime.get("llm_mode") and runtime["llm_mode"] != actions.planner.mode:
+            mode = runtime["llm_mode"]
+            if mode not in MODES:
+                raise HTTPException(400, f"unknown mode {mode}")
+            store.set_kv("llm_mode", mode)  # 常驻模式会加载 LLM：放后台
+            threading.Thread(
+                target=_llm_bg, args=(lambda: actions.planner.set_mode(mode),), daemon=True
+            ).start()
+        return {"saved": sorted(clean), "restart": restart, "runtime": _runtime_cfg()}
+
+    def _llm_bg(fn) -> None:
+        llm_job.update(state="working", error=None)
+        try:
+            fn()
+            llm_job.update(state="idle")
+        except Exception as e:  # noqa: BLE001 — 结果显示在设置窗口
+            llm_job.update(state="error", error=str(e))
+
+    @app.post("/api/llm/load")
+    def llm_load(reload: bool = Body(False, embed=True)) -> dict:
+        """按当前设置加载（reload：先卸载再按新选项加载）。推理中 / 渲染独占时拒绝。"""
+        rm = studio.orch.resources
+        if llm_job["state"] == "working":
+            raise HTTPException(409, "上一次加载 / 卸载还没结束")
+        ok, why = rm.llm_admit()
+        if not ok:
+            raise HTTPException(409, f"现在不能加载：{why}")
+        is_loaded = rm.llm.loaded()
+        if is_loaded and not reload:
+            return {"state": "loaded"}
+        if is_loaded and not rm.llm.wait_idle(0):
+            raise HTTPException(409, "LLM 正在推理，稍后再重新加载")
+        ttl = cfg.llm_session_ttl_s if actions.planner.mode == "on_demand" else None
+
+        def job() -> None:
+            if rm.llm.loaded():
+                rm.llm.unload()
+            rm.llm.load(ttl)
+
+        threading.Thread(target=_llm_bg, args=(job,), daemon=True).start()
+        return {"state": "working"}
+
+    @app.post("/api/llm/unload")
+    def llm_unload() -> dict:
+        rm = studio.orch.resources
+        if not rm.llm.loaded():
+            return {"state": "unloaded"}
+        if not rm.llm.wait_idle(0):
+            raise HTTPException(409, "LLM 正在推理，稍后再卸载")
+        guard(rm.llm.unload)
+        return {"state": "unloaded"}
 
     # ---- W2：导出到 ComfyUI 编辑、导回为候选变体、试跑、晋升 ----
     workshop = Workshop(studio)

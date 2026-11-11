@@ -658,7 +658,9 @@ class Store:
     @_locked
     def sessions(self, project_id: str) -> list[dict]:
         return self._rows(
-            "SELECT s.*, (SELECT COUNT(*) FROM messages m WHERE m.session_id=s.id) AS n_messages"
+            "SELECT s.*, (SELECT COUNT(*) FROM messages m WHERE m.session_id=s.id) AS n_messages,"
+            " (SELECT COUNT(*) FROM messages m WHERE m.session_id=s.id AND m.channel='telegram')"
+            " AS n_telegram"
             " FROM sessions s WHERE project_id=? ORDER BY updated DESC",
             (project_id,),
         )
@@ -672,6 +674,22 @@ class Store:
                 (*fields.values(), time.time(), session_id),
             )
         return self.get_session(session_id)
+
+    @_locked
+    def delete_session(self, session_id: str) -> dict:
+        """删掉会话本身、它的对话记录与 agent 运行记录（项目记忆、产物不动）。"""
+        runs = [
+            r["id"]
+            for r in self._rows("SELECT id FROM agent_runs WHERE session_id=?", (session_id,))
+        ]
+        with self.db:
+            n = self.db.execute("DELETE FROM messages WHERE session_id=?", (session_id,)).rowcount
+            for rid in runs:
+                self.db.execute("DELETE FROM agent_msgs WHERE run_id=?", (rid,))
+            self.db.execute("DELETE FROM agent_runs WHERE session_id=?", (session_id,))
+            self.db.execute("DELETE FROM sessions WHERE id=?", (session_id,))
+            self.db.execute("DELETE FROM kv WHERE key=?", (f"agent_upto:{session_id}",))
+        return {"messages": n, "runs": len(runs)}
 
     @_locked
     def adopt_orphan_messages(self, project_id: str, session_id: str) -> int:

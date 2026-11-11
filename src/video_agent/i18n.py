@@ -256,9 +256,24 @@ M: dict[str, tuple[str, str]] = {
         "已新开会话「{t}」。项目记忆会带过来，之前的对话不会。",
     ),
     "session_use": ("Switched to session “{t}”", "已切换到会话「{t}」"),
+    "session_deleted": (
+        "Deleted session “{t}” ({m} messages). Current session: “{c}”",
+        "已删除会话「{t}」（{m} 条消息）。当前会话：「{c}」",
+    ),
+    "session_delete_q": (
+        "Delete session “{t}” ({n} messages, with the agent's history in it)? This cannot be undone.",
+        "删除会话「{t}」（{n} 条消息，连同其中的 agent 记录）？删除后无法恢复。",
+    ),
+    "btn_delete": ("🗑 Delete", "🗑 删除"),
+    "btn_keep": ("Keep", "保留"),
+    "btn_pressed": ("[button] {b}", "［按钮］{b}"),
+    "session_busy": (
+        "The agent is still working in this session ({n} run(s)); cancel it first",
+        "agent 还在这个会话里干活（{n} 个运行），先取消再删",
+    ),
     "session_list": (
-        "Sessions (1 = most recent):\n{rows}\n/session new [TITLE] · /session use N",
-        "会话（1 = 最近活跃）：\n{rows}\n/session new [标题] · /session use 序号",
+        "Sessions (1 = most recent):\n{rows}\n/session new [TITLE] · /session use N · /session delete N",
+        "会话（1 = 最近活跃）：\n{rows}\n/session new [标题] · /session use 序号 · /session delete 序号",
     ),
     "session_row": ("{i}. {t} · {n} msgs{cur}", "{i}. {t} · {n} 条{cur}"),
     "current_mark": (" ← current", " ← 当前"),
@@ -363,7 +378,7 @@ HELP = (
 /cancel cancel queued tasks (and interrupt our running one)
 /mode [on_demand|session|always|command_only] LLM residency
 /project · /projects · /project new NAME · /project use NAME · /project done
-/session · /session new [TITLE] · /session use N
+/session · /session new [TITLE] · /session use N · /session delete N
 /memory · /memory add TEXT · /memory del ID
 /pack current baseline pack
 /whoami show your chat_id
@@ -382,7 +397,7 @@ Anything else: a request or note — wakes the LLM.""",
 /cancel 取消排队中的任务（含正在跑的本系统任务）
 /mode [on_demand|session|always|command_only] LLM 驻留模式
 /project · /projects · /project new 名称 · /project use 名称 · /project done
-/session · /session new [标题] · /session use 序号
+/session · /session new [标题] · /session use 序号 · /session delete 序号
 /memory · /memory add 文本 · /memory del 编号
 /pack 当前基准包
 /whoami 显示 chat_id

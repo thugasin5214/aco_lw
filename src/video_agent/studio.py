@@ -34,6 +34,7 @@ class Studio:
 
     # ---- 删除产物（连同本地文件） ----
     BUSY = frozenset({"draft", "validated", "waiting_memory", "submitted", "running"})
+    RUN_DONE = frozenset({"done", "failed", "cancelled"})
 
     def _remove_files(self, task: dict) -> int:
         """删任务目录 data/jobs/<ID>/，以及 ComfyUI output 里本系统生成的原图；返回释放的字节数。"""
@@ -208,6 +209,28 @@ class Studio:
             s = self.store.update_session(s["id"], state="open")
         self.store.set_kv(f"session:{pid}", s["id"])
         return s
+
+    def delete_session(self, key: str, project_id: str | None = None) -> dict:
+        """删除会话（按 ID 或列表序号）。agent 还在这个会话里干活时拒绝；删的是当前会话则换到下一个。"""
+        if project_id is None and not key.isdigit():
+            s = self.store.get_session(key)
+            project_id = s and s["project_id"]
+        pid = project_id or self.current_project()["id"]
+        rows = self.store.sessions(pid)
+        s = (
+            self.store.get_session(key)
+            if not key.isdigit()
+            else (rows[int(key) - 1] if 0 < int(key) <= len(rows) else None)
+        )
+        if s is None or s["project_id"] != pid:
+            raise StudioError(f"当前项目里没有会话 {key}")
+        live = [r for r in self.store.runs(s["id"]) if r["status"] not in self.RUN_DONE]
+        if live:
+            raise StudioError(tr("session_busy", n=len(live)))
+        out = self.store.delete_session(s["id"])
+        if self.store.get_kv(f"session:{pid}") == s["id"]:
+            self.store.set_kv(f"session:{pid}", None)
+        return {**out, "title": s["title"], "current": self.current_session(pid)}
 
     # ---- 项目记忆（LLM 提议，用户确认后生效） ----
     def propose_memories(

@@ -450,6 +450,17 @@ class Actions:
                 m = self.studio.set_memory(int(mid), act)
                 say(tr("mem_accepted" if act == "accept" else "mem_ignored", t=m["text"]))
                 return True
+            if kind == "k":  # 确认删除会话
+                out = self.studio.delete_session(rest)
+                say(
+                    tr(
+                        "session_deleted",
+                        t=out["title"],
+                        m=out["messages"],
+                        c=out["current"]["title"],
+                    )
+                )
+                return True
             if kind == "noop":
                 return True
         except StudioError as e:
@@ -555,6 +566,21 @@ class Actions:
                 say(tr("session_new", t=s.new_session(" ".join(args[1:]) or None)["title"]))
             elif sub == "use" and len(args) > 1:
                 say(tr("session_use", t=s.use_session(args[1])["title"]))
+            elif sub in ("delete", "del", "rm") and len(args) > 1:
+                rows = store.sessions(s.current_project()["id"])
+                key = args[1]
+                row = (
+                    rows[int(key) - 1]
+                    if key.isdigit() and 0 < int(key) <= len(rows)
+                    else store.get_session(key)
+                )
+                if row is None:
+                    say(tr("not_done", e=f"no session {key}"))
+                else:
+                    say(
+                        tr("session_delete_q", t=row["title"], n=row.get("n_messages", "?")),
+                        [[(tr("btn_delete"), f"k:{row['id']}"), (tr("btn_keep"), "noop")]],
+                    )
             else:
                 cur = s.current_session()
                 rows = store.sessions(s.current_project()["id"])
@@ -755,9 +781,14 @@ class Daemon:
             )
             self.actions.channel_send["telegram"] = self.bot.broadcast
             default_send = self.actions.runtime.send_files
-            self.actions.runtime.send_files = lambda ch, items: (
-                self.bot.send_files(items) if ch == "telegram" else default_send(ch, items)
-            )
+
+            def send_files(ch: str, items: list) -> None:
+                if ch != "telegram":
+                    return default_send(ch, items)
+                self.bot.send_files(items)  # 也记进当前会话，控制台的对话历史里看得到
+                self.studio.log("telegram", "out", "\n".join(f"📎 {cap}: {p}" for p, cap in items))
+
+            self.actions.runtime.send_files = send_files
 
     def notify_round(self, rnd: dict) -> None:
         tasks = self.orch.store.round_tasks(rnd["id"])

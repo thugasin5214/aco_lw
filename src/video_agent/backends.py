@@ -180,12 +180,26 @@ class LMStudioBackend(OpenAICompatBackend):
         context: int,
         ttl: Callable[[], int | None],
         allowed: Callable[[], bool] = lambda: True,
+        cfg=None,
     ):
         super().__init__(base_url, model)
-        self.context = context
+        self.cfg = cfg  # 给了配置：模型 / 上下文 / GPU / 并发跟着设置窗口实时变
+        self._context = context
         self.ttl = ttl  # 由驻留模式与会话活跃度决定
         self.allowed = allowed
         self.load_guard: Callable[[], str | None] | None = None  # 返回拒绝加载的原因
+
+    @property
+    def model(self) -> str:
+        return self.cfg.llm_model if self.cfg else self._model
+
+    @model.setter
+    def model(self, v: str) -> None:
+        self._model = v
+
+    @property
+    def context(self) -> int:
+        return self.cfg.llm_context if self.cfg else self._context
 
     def prepare(self) -> float:
         if not self.allowed():
@@ -200,7 +214,14 @@ class LMStudioBackend(OpenAICompatBackend):
 
             raise PlannerUnavailable(f"not loading the LLM now: {why}")
         t = time.monotonic()
-        llm.load(self.model, self.context, self.ttl())
+        c = self.cfg
+        llm.load(
+            self.model,
+            self.context,
+            self.ttl(),
+            getattr(c, "llm_gpu", "") if c else "",
+            getattr(c, "llm_parallel", 0) if c else 0,
+        )
         return time.monotonic() - t
 
     def is_loaded(self) -> bool:

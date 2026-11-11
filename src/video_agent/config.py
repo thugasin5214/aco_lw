@@ -17,6 +17,8 @@ class Settings:
     lms_url: str = "http://127.0.0.1:1234"
     llm_model: str = "qwen3.8-27b-splash"
     llm_context: int = 131072
+    llm_gpu: str = ""  # lms load --gpu：空 = LM Studio 自动；max / off / 0~1
+    llm_parallel: int = 0  # lms load --parallel：0 = LM Studio 默认
     llm_idle_ttl_s: int = 300  # G0：加载约 15 s，空闲 5 min 卸载
     llm_restore_after_video: bool = True
     llm_session_ttl_s: int = 1200  # 会话活跃时延长驻留，保住前缀缓存
@@ -69,6 +71,7 @@ class Settings:
     templates_dir: Path = field(default_factory=lambda: ROOT / "templates")
     skills_dir: Path = field(default_factory=lambda: ROOT / "skills")
     workflows_dir: Path = field(default_factory=lambda: ROOT / "workflows")
+    config_path: Path | None = None  # 由 load() 填：设置窗口写回这里（测试里为空 = 不落盘）
 
     @property
     def db_path(self) -> Path:
@@ -92,6 +95,129 @@ def load(path: Path | None = None) -> Settings:
             if f.name in raw:
                 v = raw[f.name]
                 setattr(s, f.name, Path(v) if f.name.endswith("_dir") else v)
+    s.config_path = path
     s.data_dir.mkdir(parents=True, exist_ok=True)
     s.jobs_dir.mkdir(parents=True, exist_ok=True)
     return s
+
+
+# ---- 控制台“设置”窗口：可编辑的字段（写回 config.toml）----
+# (分组, 字段, 说明, 生效方式)  生效方式：live = 保存即生效；restart = 重启 daemon 后生效
+EDITABLE: list[tuple[str, str, str, str]] = [
+    ("llm", "llm_model", "本地 LLM（LM Studio 模型 key）", "live"),
+    ("llm", "llm_context", "上下文长度（tokens）", "live"),
+    ("llm", "llm_gpu", "GPU 卸载：空 = LM Studio 自动；max / off / 0~1", "live"),
+    ("llm", "llm_parallel", "并发预测数：0 = LM Studio 默认", "live"),
+    ("llm", "llm_session_ttl_s", "会话活跃时驻留秒数（按需模式）", "live"),
+    ("llm", "llm_idle_ttl_s", "空闲卸载秒数", "live"),
+    ("llm", "llm_restore_after_video", "视频渲染结束后重新加载 LLM", "live"),
+    ("llm", "planner_fast", "末尾加 /no_think（思考更少、更快）", "live"),
+    ("agent", "agent_max_steps", "一次请求最多调用 LLM 的次数", "live"),
+    ("agent", "session_summary_tokens", "超过此 prompt 长度压缩较早消息", "live"),
+    ("agent", "session_keep_messages", "压缩时保留的最近原话条数", "live"),
+    ("agent", "tool_workers", "后台工具并发数", "restart"),
+    ("agent", "llm_fallback", "本地 LLM 不可用时的回退顺序（逗号分隔）", "live"),
+    ("online", "allow_online", "允许把对话发给在线模型 / 在线 agent", "live"),
+    ("online", "freevideo_agent_online", "只为 /fv 放行 Claude Code（在线）", "live"),
+    ("online", "openai_model", "OpenAI 模型（openai / openai_compatible 共用）", "live"),
+    ("online", "openai_api_key", "OpenAI API key（留空读环境变量）", "live"),
+    ("online", "openai_base_url", "openai_compatible 的地址", "live"),
+    ("online", "openrouter_model", "OpenRouter 模型 ID", "live"),
+    ("online", "openrouter_api_key", "OpenRouter API key（留空读环境变量）", "live"),
+    ("online", "anthropic_model", "Claude 模型", "live"),
+    ("online", "anthropic_effort", "Claude effort：low / medium / high / xhigh / max", "live"),
+    ("online", "anthropic_api_key", "Claude API key（留空由 SDK 解析）", "live"),
+    ("online", "claude_model", "Claude Code 模型（留空用默认）", "live"),
+    ("online", "codex_model", "Codex 模型（留空用默认）", "live"),
+    ("render", "round_size", "每轮候选数", "restart"),
+    ("render", "memory_margin_gib", "渲染前预留内存（GiB）", "live"),
+    ("render", "memory_wait_s", "等内存的最长秒数", "live"),
+    ("render", "task_timeout_s", "单个任务超时秒数", "live"),
+    ("render", "comfy_output_dir", "ComfyUI output 目录（删除产物时连同原图）", "live"),
+    ("system", "language", "系统消息语言：en / zh", "live"),
+    ("system", "telegram_token", "Telegram bot token", "restart"),
+    ("system", "telegram_chat_ids", "Telegram 白名单 chat id（逗号分隔）", "restart"),
+]
+SECRET = {"openai_api_key", "openrouter_api_key", "anthropic_api_key", "telegram_token"}
+CHOICES = {
+    "anthropic_effort": ["low", "medium", "high", "xhigh", "max"],
+    "language": ["en", "zh"],
+}
+
+
+def _toml_value(v) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, int | float):
+        return repr(v)
+    if isinstance(v, list):
+        return "[" + ", ".join(_toml_value(x) for x in v) + "]"
+    s = str(v).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+    return f'"{s}"'
+
+
+def coerce(name: str, value):
+    """把控制台提交的值转成字段的类型；不合法抛 ValueError。"""
+    f = next((f for f in fields(Settings) if f.name == name), None)
+    if f is None or name not in {e[1] for e in EDITABLE}:
+        raise ValueError(f"不可编辑的配置项：{name}")
+    cur = getattr(Settings(), name)
+    if isinstance(cur, bool):
+        if isinstance(value, str):
+            return value.strip().lower() in ("1", "true", "yes", "on")
+        return bool(value)
+    if isinstance(cur, int):
+        return int(value)
+    if isinstance(cur, float):
+        return float(value)
+    if isinstance(cur, list):
+        items = value if isinstance(value, list) else str(value).split(",")
+        items = [str(x).strip() for x in items if str(x).strip()]
+        return [int(x) for x in items] if name == "telegram_chat_ids" else items
+    v = str(value).strip()
+    if name in CHOICES and v not in CHOICES[name]:
+        raise ValueError(f"{name} 只能是 {' / '.join(CHOICES[name])}")
+    if name == "llm_gpu" and v not in ("", "max", "off"):
+        try:
+            if not 0 <= float(v) <= 1:
+                raise ValueError
+        except ValueError:
+            raise ValueError("llm_gpu 只能是 空 / max / off / 0~1") from None
+    return v
+
+
+def save(updates: dict, path: Path) -> None:
+    """只改顶层的这些键（其余内容、注释、[表] 原样保留），写前重新解析校验。"""
+    lines = path.read_text().splitlines() if path.exists() else []
+    first_table = next(  # 第一个 [表] 头之前才是顶层键
+        (i for i, ln in enumerate(lines) if ln.lstrip().startswith("[") and "=" not in ln),
+        len(lines),
+    )
+    for name, value in updates.items():
+        new = f"{name} = {_toml_value(value)}"
+        start = next(
+            (
+                i
+                for i, ln in enumerate(lines[:first_table])
+                if ln.split("=")[0].strip() == name and "=" in ln
+            ),
+            None,
+        )
+        if start is None:
+            lines.insert(first_table, new)
+            first_table += 1
+            continue
+        end, depth = (
+            start,
+            lines[start].split("#")[0].count("[") - lines[start].split("#")[0].count("]"),
+        )
+        while depth > 0 and end + 1 < len(lines):  # 多行数组
+            end += 1
+            depth += lines[end].count("[") - lines[end].count("]")
+        lines[start : end + 1] = [new]
+        first_table -= end - start
+    text = "\n".join(lines) + "\n"
+    tomllib.loads(text)  # 写坏了就不写
+    tmp = path.with_suffix(".toml.tmp")
+    tmp.write_text(text)
+    tmp.replace(path)

@@ -29,8 +29,43 @@ def unload(model: str) -> None:
     _lms("unload", model)
 
 
-def load(model: str, context: int, ttl_s: int | None = None) -> None:
+def load(
+    model: str, context: int, ttl_s: int | None = None, gpu: str = "", parallel: int = 0
+) -> None:
     args = ["load", model, "-y", "--identifier", model, "-c", str(context)]
     if ttl_s:
         args += ["--ttl", str(ttl_s)]
+    if gpu:
+        args += ["--gpu", str(gpu)]
+    if parallel:
+        args += ["--parallel", str(parallel)]
     _lms(*args)
+
+
+def models() -> list[dict]:
+    """LM Studio 里已下载的 LLM（设置窗口的下拉框用）。"""
+    if not available():
+        return []
+    try:
+        rows = json.loads(_lms("ls", "--json"))
+    except (subprocess.CalledProcessError, json.JSONDecodeError):
+        return []
+    return [
+        {
+            "key": m.get("modelKey"),
+            "max_context": m.get("maxContextLength"),
+            "vision": bool(m.get("vision")),
+            "size": m.get("sizeBytes"),
+        }
+        for m in rows
+        if m.get("type") == "llm"
+    ]
+
+
+def loaded_all() -> list[dict]:
+    if not available():
+        return []
+    try:
+        return json.loads(_lms("ps", "--json"))
+    except (subprocess.CalledProcessError, json.JSONDecodeError):
+        return []

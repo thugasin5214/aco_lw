@@ -164,6 +164,7 @@ def make_backend(cfg: Settings, store: Store):
         cfg.llm_context,
         ttl,
         allowed=lambda: store.get_kv("llm_mode", "on_demand") != "command_only",
+        cfg=cfg,
     )
 
 
