@@ -132,7 +132,11 @@ class OpenAICompatBackend:
         calls: dict[int, dict] = {}
         body = self._body(messages, schema, max_tokens, tools)
         with self.http.stream("POST", url, json=body) as r:
-            r.raise_for_status()
+            if r.status_code >= 400:  # 带上服务端的原因（LM Studio 会说清楚哪里不对）
+                r.read()
+                raise httpx.HTTPStatusError(
+                    f"{r.status_code} from {url}: {_error_text(r)}", request=r.request, response=r
+                )
             for line in r.iter_lines():
                 if not line.startswith("data:") or line.strip() == "data: [DONE]":
                     continue
@@ -226,6 +230,33 @@ class LMStudioBackend(OpenAICompatBackend):
 
     def is_loaded(self) -> bool:
         return llm.loaded(self.model) is not None
+
+    def _body(self, messages, schema, max_tokens, tools=None):
+        if llm.supports_vision(self.model) is False:  # 换成了不支持图片的模型：图片换成文字说明
+            messages = strip_images(messages, self.model)
+        return super()._body(messages, schema, max_tokens, tools)
+
+
+def strip_images(messages: list[dict], model: str) -> list[dict]:
+    note = f"[image omitted: the current local model {model} cannot see images]"
+    out = []
+    for m in messages:
+        c = m.get("content")
+        if isinstance(c, list) and any(p.get("type") == "image_url" for p in c):
+            n = sum(p.get("type") == "image_url" for p in c)
+            text = "\n".join(p.get("text", "") for p in c if p.get("type") == "text").strip()
+            m = {**m, "content": (text + "\n" if text else "") + note + (f" ×{n}" if n > 1 else "")}
+        out.append(m)
+    return out
+
+
+def _error_text(r: httpx.Response) -> str:
+    try:
+        d = r.json()
+        e = d.get("error", d)
+        return str(e.get("message", e) if isinstance(e, dict) else e)[:500]
+    except ValueError:
+        return r.text[:500]
 
 
 class FuncBackend:

@@ -69,3 +69,32 @@ def loaded_all() -> list[dict]:
         return json.loads(_lms("ps", "--json"))
     except (subprocess.CalledProcessError, json.JSONDecodeError):
         return []
+
+
+_VISION: dict[str, tuple[float, bool | None]] = {}
+
+
+def supports_vision(model: str) -> bool | None:
+    """LM Studio 报告的视觉能力（None = 不知道）。缓存 60 s，模型换了很快就跟上。"""
+    import time
+
+    hit = _VISION.get(model)
+    if hit and time.monotonic() - hit[0] < 60:
+        return hit[1]
+    ans = None
+    key = model.lower()
+    for m in [*loaded_all(), *_ls()]:
+        if key in (str(m.get("identifier", "")).lower(), str(m.get("modelKey", "")).lower()):
+            ans = bool(m.get("vision"))
+            break
+    _VISION[model] = (time.monotonic(), ans)
+    return ans
+
+
+def _ls() -> list[dict]:
+    if not available():
+        return []
+    try:
+        return json.loads(_lms("ls", "--json"))
+    except (subprocess.CalledProcessError, json.JSONDecodeError):
+        return []

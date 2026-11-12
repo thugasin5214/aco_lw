@@ -105,6 +105,7 @@ def no_side_effects(monkeypatch):
     monkeypatch.setattr(llm, "load", boom)
     monkeypatch.setattr(llm, "models", list)
     monkeypatch.setattr(llm, "loaded_all", list)
+    monkeypatch.setattr(llm, "supports_vision", lambda model: None)
     monkeypatch.setattr(
         resources,
         "snapshot",

@@ -133,3 +133,30 @@ def test_local_backend_follows_settings(monkeypatch):
         "--parallel",
         "2",
     )
+
+
+def test_images_become_text_for_a_model_without_vision(monkeypatch):
+    import httpx
+
+    from video_agent import llm
+    from video_agent.backends import LMStudioBackend
+
+    img = {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAA"}}
+    msgs = [
+        {"role": "user", "content": "hi"},
+        {"role": "user", "content": [{"type": "text", "text": "look:"}, img]},
+    ]
+    b = LMStudioBackend("http://x", "dpo", 1000, lambda: None)
+    monkeypatch.setattr(llm, "supports_vision", lambda m: False)
+    body = b._body(msgs, None, 10)
+    assert "image omitted" in body["messages"][1]["content"] and "base64" not in str(body)
+    monkeypatch.setattr(llm, "supports_vision", lambda m: True)
+    assert b._body(msgs, None, 10)["messages"][1]["content"][1]["type"] == "image_url"
+
+    def handler(req):
+        return httpx.Response(400, json={"error": {"message": "no images please"}})
+
+    monkeypatch.setattr(llm, "loaded", lambda m: {"identifier": m})
+    b.http = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(httpx.HTTPStatusError, match="no images please"):
+        b.chat([{"role": "user", "content": "x"}])
