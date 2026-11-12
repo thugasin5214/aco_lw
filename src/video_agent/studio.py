@@ -63,11 +63,13 @@ class Studio:
                     p.unlink()
         return freed
 
-    def _delete(self, tasks: list[dict], round_ids: list[str]) -> dict:
+    def _delete(self, tasks: list[dict], round_ids: list[str], productions: bool = True) -> dict:
         busy = [t for t in tasks if t["state"] in self.BUSY]
         if busy:
             raise StudioError(tr("delete_busy", n=len(busy)))
-        refs = self.store.active_production_refs(round_ids, [t["id"] for t in tasks])
+        refs = productions and self.store.active_production_refs(
+            round_ids, [t["id"] for t in tasks]
+        )
         if refs:
             raise StudioError(tr("delete_in_production", p=refs[0]["production_title"]))
         freed = sum(self._remove_files(t) for t in tasks)
@@ -93,6 +95,82 @@ class Studio:
         out = self._delete([task], [rid] if rid and not rest else [])
         self.log("system", "out", tr("log_deleted", **out), task["project_id"])
         return out
+
+    def delete_tasks(self, task_ids: list[str]) -> dict:
+        """多选删除：排队 / 生成中、进行中制片在用的跳过（结果里说明），其余连同文件删掉；
+        删空的轮次一并删。"""
+        tasks = [t for t in (self.store.get(i) for i in dict.fromkeys(task_ids)) if t]
+        busy = [t for t in tasks if t["state"] in self.BUSY]
+        tasks = [t for t in tasks if t["state"] not in self.BUSY]
+        rounds = {t["round_id"] for t in tasks if t["round_id"]}
+        used = self.store.active_production_refs(list(rounds), [t["id"] for t in tasks])
+        skip_r = {
+            a["round_id"]
+            for a in used
+            if a["round_id"] and not (a["status"] == "current" and a["task_id"])
+        }
+        skip_t = {a["task_id"] for a in used if a["task_id"]}
+        kept = [t for t in tasks if t["id"] in skip_t or t["round_id"] in skip_r]
+        tasks = [t for t in tasks if t not in kept]
+        ids = {t["id"] for t in tasks}
+        empty = [
+            r
+            for r in {t["round_id"] for t in tasks if t["round_id"]}
+            if all(t["id"] in ids for t in self.store.round_tasks(r))
+        ]
+        out = self._delete(tasks, empty, productions=False)
+        out["skipped_busy"], out["kept_for_productions"] = len(busy), len(kept)
+        out["kept_productions"] = sorted({a["production_title"] for a in used})
+        for pid in {t["project_id"] for t in tasks}:
+            self.log("system", "out", tr("log_deleted", **out), pid)
+        return out
+
+    def delete_project(self, project_id: str) -> dict:
+        """删除整个项目：全部产物（连同文件）、会话与对话、agent 记录、记忆、基准包、制片、上传。
+        还有任务在排队 / 生成、agent 还在这个项目里干活、制片阶段正在跑时拒绝。"""
+        p = self.store.get_project(project_id)
+        if p is None:
+            raise StudioError(f"找不到项目 {project_id}")
+        tasks = self.store.list(1_000_000, project_id)
+        busy = [t for t in tasks if t["state"] in self.BUSY]
+        if busy:
+            raise StudioError(tr("delete_busy", n=len(busy)))
+        runs = [
+            r
+            for s in self.store.sessions(project_id)
+            for r in self.store.runs(s["id"])
+            if r["status"] not in self.RUN_DONE
+        ]
+        if runs:
+            raise StudioError(tr("session_busy", n=len(runs)))
+        for prod in self.store.productions(project_id):
+            if self.store.artifacts(prod["id"], None, "running", "queued"):
+                raise StudioError(tr("delete_production_running", p=prod["title"]))
+        rounds = [r["id"] for r in self.store.rounds(project_id)]
+        out = self._delete(tasks, rounds, productions=False)
+        rows = self.store.delete_project_rows(project_id)
+        data = self.store.jobs_dir.parent
+        dirs = [
+            data / "packs" / project_id,
+            data / "uploads" / project_id,
+            *(data / "productions" / x for x in rows["productions"]),
+            *(data / "agent-work" / x for x in rows["runs"]),
+        ]
+        freed = 0
+        for d in dirs:
+            d = d.resolve()
+            if d.is_dir() and d.is_relative_to(data.resolve()) and d != data.resolve():
+                freed += sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
+                shutil.rmtree(d)
+        if self.store.get_kv("current_project") == project_id:
+            self.store.set_kv("current_project", None)
+        return {
+            **out,
+            "name": p["name"],
+            "sessions": rows["sessions"],
+            "productions": len(rows["productions"]),
+            "freed_mb": round(out["freed_mb"] + freed / 2**20, 1),
+        }
 
     def purge_project(self, project_id: str, scope: str = "review") -> dict:
         """清理项目产物。scope=review：只删待审阅的；unselected：删所有没被采纳的
