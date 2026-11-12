@@ -83,7 +83,14 @@ def test_active_production_blocks_delete(studio, monkeypatch):  # noqa: F811
         studio.store,
         "active_production_refs",
         lambda rids, tids: (
-            [{"round_id": rnd["id"], "task_id": None, "production_title": "Film"}]
+            [
+                {
+                    "round_id": rnd["id"],
+                    "task_id": None,
+                    "status": "review",
+                    "production_title": "Film",
+                }
+            ]
             if rnd["id"] in rids
             else []
         ),
@@ -97,3 +104,24 @@ def test_active_production_blocks_delete(studio, monkeypatch):  # noqa: F811
 def test_active_production_refs_query(studio):  # noqa: F811
     assert studio.store.active_production_refs(["r"], []) == []
     assert studio.store.active_production_refs([], ["t"]) == []
+
+
+def test_old_versions_in_an_active_production_do_not_block_purge(studio):  # noqa: F811
+    failed = studio.start_round("flux2-t2i", {"prompt": "a", "seed": 1})
+    used = studio.start_round("flux2-t2i", {"prompt": "b", "seed": 10})
+    waiting = studio.start_round("flux2-t2i", {"prompt": "c", "seed": 20})
+    drain(studio)
+    studio.select(used["id"], 2)
+    pick = studio.store.get_round(used["id"])["decision"]["task_id"]
+    pid = failed["project_id"]
+    st = studio.store
+    prod = st.create_production(pid, "film", "Film", {})
+    assert prod["state"] == "active"
+    st.add_artifact(prod["id"], "clips", "sh01", "failed", round_id=failed["id"])
+    st.add_artifact(prod["id"], "clips", "sh01", "current", round_id=used["id"], task_id=pick)
+    st.add_artifact(prod["id"], "clips", "sh02", "review", round_id=waiting["id"])
+    out = studio.purge_project(pid, "unselected")
+    assert st.get_round(failed["id"]) is None  # 制片里失败的旧版本：照删
+    assert [t["id"] for t in st.round_tasks(used["id"])] == [pick]  # 只留制片用的那张
+    assert len(st.round_tasks(waiting["id"])) == 3  # 制片还在审阅：整轮保留
+    assert out["kept_for_productions"] == 2 and out["kept_productions"] == ["Film"]
