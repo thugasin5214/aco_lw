@@ -125,3 +125,14 @@ def test_old_versions_in_an_active_production_do_not_block_purge(studio):  # noq
     assert [t["id"] for t in st.round_tasks(used["id"])] == [pick]  # 只留制片用的那张
     assert len(st.round_tasks(waiting["id"])) == 3  # 制片还在审阅：整轮保留
     assert out["kept_for_productions"] == 2 and out["kept_productions"] == ["Film"]
+
+
+def test_clear_review_also_removes_review_rounds_whose_candidates_all_failed(studio, fake):  # noqa: F811
+    fake.fail = True
+    rnd = studio.start_round("flux2-t2i", {"prompt": "a", "seed": 1})
+    drain(studio)
+    st = studio.store
+    assert st.get_round(rnd["id"])["state"] == "review"
+    assert {t["state"] for t in st.round_tasks(rnd["id"])} == {"failed"}
+    out = studio.purge_project(rnd["project_id"], "review")
+    assert out["rounds"] == 1 and st.get_round(rnd["id"]) is None
