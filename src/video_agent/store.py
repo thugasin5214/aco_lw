@@ -1,8 +1,8 @@
-"""持久化：SQLite 做索引，每任务目录下的 manifest.json 是可读副本。
+"""Persistence: SQLite is the index; manifest.json in each task directory is a readable copy.
 
-层级：项目 project → 候选轮 round → 任务 task；基准包 pack 与对话 messages 挂在项目下。
-所有任务状态变化都经 `transition()`，非法迁移直接抛错；每次变化写 events 并重写 manifest。
-同一连接会被 daemon 的多个线程使用，所有访问经一把可重入锁串行化。
+Hierarchy: project → round of candidates → task; baseline packs and chat messages hang under the project.
+Every task state change goes through `transition()`; illegal transitions raise; each change writes events and rewrites the manifest.
+One connection is shared by several daemon threads; all access is serialized with a re-entrant lock.
 """
 
 from __future__ import annotations
@@ -28,7 +28,8 @@ STATES = [
     "failed",
     "timeout",
 ]
-TERMINAL = {"done", "rejected", "failed", "timeout"}  # done / rejected 可经 reopen 回到待审阅
+# done / rejected can go back to review via reopen
+TERMINAL = {"done", "rejected", "failed", "timeout"}
 ACTIVE = {"submitted", "running"}
 TRANSITIONS = {
     "draft": {"validated", "failed"},
@@ -37,9 +38,10 @@ TRANSITIONS = {
     "submitted": {"running", "review", "failed", "timeout"},
     "running": {"review", "failed", "timeout"},
     "review": {"done", "rejected"},
-    "done": {"review"},  # 审阅结果可更改：重新打开
+    "done": {"review"},  # a review decision can be changed: reopen
     "rejected": {"review"},
-    "timeout": {"review", "failed"},  # 超时只是停止观察；恢复时可能发现已完成
+    # timeout only means we stopped watching; recovery may find it finished
+    "timeout": {"review", "failed"},
 }
 STATE_ZH = {
     "draft": "排队",
@@ -225,13 +227,13 @@ CREATE TABLE IF NOT EXISTS uploads (
 );
 """
 
-# 旧库升级：给 tasks 补列
+# old databases: add missing columns to tasks
 MIGRATIONS = {
     "tasks": [
         ("project_id", "TEXT"),
         ("round_id", "TEXT"),
         ("idx", "INTEGER"),
-        ("priority", "INTEGER"),  # 2 交互 / 1 agent / 0 后台（调度器排序用）
+        ("priority", "INTEGER"),  # 2 interactive / 1 agent / 0 background (scheduler ordering)
     ],
     "messages": [("session_id", "TEXT")],
 }
@@ -257,7 +259,8 @@ class TransitionError(RuntimeError):
     pass
 
 
-DEAD_ARTIFACT = ("failed", "rejected", "superseded")  # 制片里的旧版本：不再被使用
+# old versions inside a production: no longer used
+DEAD_ARTIFACT = ("failed", "rejected", "superseded")
 DEAD_ARTIFACT_SQL = ",".join(f"'{x}'" for x in DEAD_ARTIFACT)
 
 
@@ -292,7 +295,7 @@ class Store:
         self.db.execute("CREATE INDEX IF NOT EXISTS messages_session ON messages(session_id)")
         self.db.commit()
 
-    # ---- 通用 ----
+    # ---- general ----
     def _row(self, r: sqlite3.Row | None) -> dict | None:
         if r is None:
             return None
@@ -314,7 +317,7 @@ class Store:
             k: json.dumps(v, ensure_ascii=False) if k in JSON_COLS else v for k, v in fields.items()
         }
 
-    # ---- 任务：读 ----
+    # ---- tasks: read ----
     @_locked
     def get(self, task_id: str) -> dict | None:
         return self._one("SELECT * FROM tasks WHERE id=?", (task_id,))
@@ -339,7 +342,7 @@ class Store:
 
     @_locked
     def find_duplicate(self, params_hash: str) -> dict | None:
-        """同参数且未失败的任务；失败/打回的可以重做（超时的可能仍在跑，不算）。"""
+        """A task with the same parameters that has not failed; failed / rejected ones may be redone (timed-out ones may still be running, so they count)."""
         return self._one(
             "SELECT * FROM tasks WHERE params_hash=? AND state NOT IN ('failed','rejected')"
             " ORDER BY created DESC LIMIT 1",
@@ -354,7 +357,7 @@ class Store:
     def task_dir(self, task_id: str) -> Path:
         return self.jobs_dir / task_id
 
-    # ---- 任务：写 ----
+    # ---- tasks: write ----
     @_locked
     def create(
         self,
@@ -375,7 +378,7 @@ class Store:
         outputs: list | None = None,
         note: str | None = None,
     ) -> dict:
-        """新建任务。state / outputs 只给“导入外部已完成结果”用（例如 FreeVideo 的 take）。"""
+        """Create a task. state / outputs are only for importing externally finished results (e.g. FreeVideo takes)."""
         now = time.time()
         task_id = _new_id()
         with self.db:
@@ -455,7 +458,7 @@ class Store:
         tmp.write_text(json.dumps(task, ensure_ascii=False, indent=2))
         tmp.replace(path)
 
-    # ---- 项目 ----
+    # ---- projects ----
     @_locked
     def create_project(self, name: str, note: str | None = None) -> dict:
         now, pid = time.time(), _new_id()
@@ -472,7 +475,7 @@ class Store:
 
     @_locked
     def find_project(self, key: str) -> dict | None:
-        """按 ID 或名称（最近的同名项目）查找。"""
+        """Find by ID or by name (the most recent project with that name)."""
         return self.get_project(key) or self._one(
             "SELECT * FROM projects WHERE name=? ORDER BY created DESC LIMIT 1", (key,)
         )
@@ -499,7 +502,7 @@ class Store:
                     "UPDATE projects SET updated=? WHERE id=?", (time.time(), project_id)
                 )
 
-    # ---- 候选轮 ----
+    # ---- rounds ----
     @_locked
     def create_round(self, **fields) -> dict:
         now, rid = time.time(), _new_id()
@@ -541,7 +544,7 @@ class Store:
             args.append(state)
         return self._rows(q + " ORDER BY created DESC", tuple(args))
 
-    # ---- 删除（文件由 Studio 先删，这里只删记录） ----
+    # ---- deletion (Studio deletes the files first; here only the rows) ----
     @_locked
     def delete_tasks(self, task_ids: list[str]) -> None:
         if not task_ids:
@@ -558,9 +561,9 @@ class Store:
 
     @_locked
     def active_production_refs(self, round_ids: list[str], task_ids: list[str]) -> list[dict]:
-        """进行中的制片还在用的产物（删了会让制片缺图）。
+        """Outputs an active production still uses (deleting them would leave the production missing images).
 
-        制片里已失败 / 打回 / 被替代的旧版本不算“在用”：它们只是历史，删掉不影响制片。"""
+        Failed / rejected / superseded old versions inside a production are not "in use": they are only history, deleting them does not affect the production."""
         ids = [*round_ids, *task_ids]
         if not ids:
             return []
@@ -577,7 +580,7 @@ class Store:
     def round_tasks(self, round_id: str) -> list[dict]:
         return self._rows("SELECT * FROM tasks WHERE round_id=? ORDER BY idx", (round_id,))
 
-    # ---- 基准包 ----
+    # ---- baseline packs ----
     @_locked
     def pack(self, project_id: str, version: int | None = None) -> dict | None:
         if version is None:
@@ -607,7 +610,7 @@ class Store:
         self.touch_project(project_id)
         return self.pack(project_id, version)
 
-    # ---- 对话历史 ----
+    # ---- chat history ----
     @_locked
     def log_message(
         self,
@@ -647,7 +650,7 @@ class Store:
             "SELECT * FROM messages WHERE session_id=? AND id>? ORDER BY id", (session_id, after)
         )
 
-    # ---- 会话 ----
+    # ---- sessions ----
     @_locked
     def create_session(self, project_id: str, title: str | None = None) -> dict:
         now, sid = time.time(), _new_id()
@@ -684,7 +687,7 @@ class Store:
 
     @_locked
     def delete_session(self, session_id: str) -> dict:
-        """删掉会话本身、它的对话记录与 agent 运行记录（项目记忆、产物不动）。"""
+        """Delete the session itself with its messages and agent run records (project memory and outputs stay)."""
         runs = [
             r["id"]
             for r in self._rows("SELECT id FROM agent_runs WHERE session_id=?", (session_id,))
@@ -707,7 +710,7 @@ class Store:
             )
         return cur.rowcount
 
-    # ---- 项目记忆 ----
+    # ---- project memory ----
     @_locked
     def add_memory(
         self,
@@ -763,7 +766,8 @@ class Store:
             )
         return self.get_memory(memory_id)
 
-    # ---- Agent 运行（A1）：每条消息逐字保存（前缀缓存与崩溃恢复都依赖它） ----
+    # ---- agent runs (A1): every message stored verbatim (prefix cache and crash recovery depend on
+    # it) ----
     @_locked
     def create_run(
         self, project_id: str | None, session_id: str | None, channel: str, origin_text: str
@@ -860,7 +864,7 @@ class Store:
             args = (status,)
         return self._rows(q + " ORDER BY id", args)
 
-    # ---- 上传（参考图） ----
+    # ---- uploads (reference images) ----
     @_locked
     def add_upload(self, project_id: str | None, name: str, path: str, kind: str) -> dict:
         uid = uuid.uuid4().hex[:10]
@@ -884,7 +888,7 @@ class Store:
             )[::-1]
         return self._rows("SELECT * FROM messages ORDER BY id DESC LIMIT ?", (limit,))[::-1]
 
-    # ---- 键值设置（当前项目、驻留模式、暂停、待补批注等） ----
+    # ---- key-value settings (current project, residency mode, pause, pending notes, ...) ----
     @_locked
     def get_kv(self, key: str, default=None):
         r = self.db.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
@@ -899,7 +903,7 @@ class Store:
                 (key, json.dumps(value, ensure_ascii=False)),
             )
 
-    # ---- 制片：production 与产物（artifact） ----
+    # ---- productions: productions and their artifacts ----
     @_locked
     def create_production(self, project_id: str, workflow: str, title: str, settings: dict) -> dict:
         now, pid = time.time(), _new_id()

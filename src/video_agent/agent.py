@@ -1,15 +1,15 @@
-"""Agent 运行时（A1 + A2）：LLM 发出 tool call，编排器执行，结果按资源情况择机交回 LLM。
+"""Agent runtime (A1 + A2): the LLM emits tool calls, the orchestrator executes them, results go back to the LLM when resources allow.
 
-一次运行（run）：
-    你的话 → [LLM → tool_calls → 编排器执行 → 结果落库]* → 最终回复
-每条消息（user / assistant+tool_calls / tool）逐字落库：既保证前缀缓存（只延长），也保证崩溃后能接着跑。
+One run:
+    your words → [LLM → tool_calls → orchestrator executes → result stored]* → final reply
+Every message (user / assistant+tool_calls / tool) is stored verbatim: keeps the prefix cache extend-only and lets a run continue after a crash.
 
-暂停与恢复（运行不占线程，状态都在数据库里）：
-- waiting_resources：结果都齐了，但现在不适合唤醒 LLM（视频渲染独占内存）→ 渲染结束时恢复。
-- waiting_event：在等某一轮渲染完成（wait_for_round）→ 该轮进入待审阅时带结果恢复。
-- waiting_user：在等你批准（选版 / 锁定 / 未实测视频档位）或回答问题 → 你点按钮或回话后恢复。
+Pause and resume (a run holds no thread; all state is in the database):
+- waiting_resources: all results are in, but now is not a good time to wake the LLM (a video render holds the memory) → resume when the render ends.
+- waiting_event: waiting for a round to finish rendering (wait_for_round) → resume with the result when that round enters review.
+- waiting_user: waiting for your approval (pick / lock / unmeasured video tier) or an answer → resume when you press a button or reply.
 
-工具分级：只读（立即）、动作（经 Studio，带幂等记录）、等待（事件唤醒）、需审批（按钮）。
+Tool classes: read-only (immediate), action (via Studio, with idempotency records), wait (woken by events), needs approval (buttons).
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ FREEVIDEO_ENV = (
 )
 
 
-# ---------------- 工具定义 ----------------
+# ---------------- tool definitions ----------------
 @dataclass
 class Done:
     result: dict
@@ -60,14 +60,19 @@ class Done:
 @dataclass
 class Pending:
     kind: str  # event | approval | user
-    key: str  # round:<id> | approval:<msg id 由运行时补> | ask:<run id>
-    message: str | None = None  # 发给你的消息（审批 / 提问）
+    key: str  # round:<id> | approval:<msg id filled in by the runtime> | ask:<run id>
+    message: str | None = None  # message sent to you (approval / question)
     buttons: list | None = None
-    on_approve: dict | None = None  # 审批通过后要执行的动作 {"tool": ..., "args": ...}
+    on_approve: dict | None = None  # action to run once approved {"tool": ..., "args": ...}
     info: dict = field(default_factory=dict)
-    start: Callable[[], None] | None = None  # 等待消息落库之后才开始的后台工作（防结果先到丢失）
-    rule: str | None = None  # 审批可“始终允许”的规则（如 cmd:ffmpeg、mcp:exa.web_search_exa）
-    bypassable: bool = True  # bypass 模式能否跳过（装节点 / 下模型不能：硬约束，每次问）
+    # background work started only after the waiting message is stored (so an early result is not
+    # lost)
+    start: Callable[[], None] | None = None
+    # the "always allow" rule for this approval (e.g. cmd:ffmpeg, mcp:exa.web_search_exa)
+    rule: str | None = None
+    # whether bypass mode may skip it (installing nodes / downloading models may not: hard rule,
+    # always asks)
+    bypassable: bool = True
 
 
 @dataclass
@@ -113,7 +118,7 @@ def _round_view(store, rnd: dict) -> dict:
 
 
 def park_reason(why: str) -> str:
-    """llm_admit 的内部原因 → 给人看的一句话。"""
+    """llm_admit's internal reason → one human-readable sentence."""
     if "film" in why:
         return tr("park_film")
     if "render" in why:
@@ -124,7 +129,7 @@ def park_reason(why: str) -> str:
 
 
 def explicit_pick(text: str, idx: int) -> bool:
-    """你在原话里明确点名了要选 / 锁哪一张（如“就用 #2”“2号锁成角色”）。"""
+    """You named which candidate to pick / lock explicitly in your message (e.g. "就用 #2", "2号锁成角色")."""
     t = text.lower()
     named = re.search(rf"(#\s*{idx}\b|{idx}\s*号|no\.?\s*{idx}\b|number\s*{idx}\b)", t)
     verbs = ("选", "锁", "用", "就要", "pick", "lock", "use", "choose", "select")
@@ -287,7 +292,8 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
         if rule == "never" or (
             rule == "unless_named" and explicit_pick(ctx["origin_text"], a["idx"])
         ):
-            return Done(_select(ctx, a))  # 策略允许 / 你在原话里点名了 → 视为已批准
+            # policy allows it / you named it in your message → counts as approved
+            return Done(_select(ctx, a))
         txt = tr(
             "agent_select_approval",
             idx=a["idx"],
@@ -330,7 +336,7 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
         steps = a.get("steps") or []
         if not steps:
             return Done({"error": "steps is empty"})
-        for st in steps:  # 先整体校验，避免跑到一半才发现模板不存在
+        for st in steps:  # validate everything first, so we do not find a missing template halfway
             studio.orch.registry.template(st["template"])
         rnd = _queue_step(ctx, steps[0], None)
         pipe = {"steps": steps, "index": 0, "rounds": [rnd["id"]]}
@@ -339,7 +345,7 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
     def _queue_step(ctx, st, prev_round):
         params = {"prompt": st["prompt"]} if st.get("prompt") else {}
         image = st.get("image")
-        if image == "@prev" and prev_round:  # 上一步的第一个成功产物
+        if image == "@prev" and prev_round:  # the first successful output of the previous step
             ok = next(t for t in store.round_tasks(prev_round) if t["outputs"])
             image = f"@task:{ok['id']}"
         if image:
@@ -401,7 +407,8 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
             ),
         )
 
-    # ---- 制片流水线（阶段 3）：agent 只读计划、按计划开跑或转达你的审核，不自建状态机 ----
+    # ---- production pipeline (stage 3): the agent only reads the plan, runs it as planned or
+    # relays your review; no state machine of its own ----
     def _prod():
         prod = getattr(rt, "production", None)
         if prod is None:
@@ -491,7 +498,8 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
             }
         )
 
-    # ---- ComfyUI 探索 / 搭建（artokun/comfyui-mcp，由编排器调度；见 comfy_bridge.py） ----
+    # ---- ComfyUI exploration / building (artokun/comfyui-mcp, scheduled by the orchestrator; see
+    # comfy_bridge.py) ----
     def _bridge():
         b = getattr(rt, "comfy", None)
         if b is None:
@@ -837,7 +845,7 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
 
 
 def command_rule(cmd: str) -> str | None:
-    """单条命令按程序名记规则（cmd:ffmpeg）；带管道 / 串联 / 重定向的不能“始终允许”。"""
+    """A single command gets a rule by program name (cmd:ffmpeg); ones with pipes / chaining / redirects cannot be "always allowed"."""
     import re
 
     c = cmd.strip()
@@ -847,7 +855,7 @@ def command_rule(cmd: str) -> str | None:
 
 
 def general_tools(rt: AgentRuntime) -> list[Tool]:
-    """通用工具（见 toolbox.py）：慢的进后台工具队列，命令先经你批准。"""
+    """Generic tools (see toolbox.py): slow ones go to the background tool queue; commands need your approval first."""
     from .toolbox import blocked
 
     S, I = {"type": "string"}, {"type": "integer"}
@@ -1138,7 +1146,7 @@ def tools_spec(tools: dict[str, Tool]) -> list[dict]:
     ]
 
 
-# ---------------- 运行时 ----------------
+# ---------------- runtime ----------------
 class AgentRuntime:
     def __init__(
         self,
@@ -1148,7 +1156,7 @@ class AgentRuntime:
         say_for: Callable[[str], Callable],
         max_steps: int = 16,
     ):
-        """enqueue：把一步放进规划器队列（单线程）；say_for(channel)：给某个渠道发消息的函数。"""
+        """enqueue: put a step into the planner queue (single thread); say_for(channel): a function that sends a message to that channel."""
         self.studio, self.planner, self.store = studio, planner, studio.store
         self.enqueue, self.say_for, self.max_steps = enqueue, say_for, max_steps
         self.cfg = studio.orch.cfg
@@ -1156,7 +1164,8 @@ class AgentRuntime:
         from .toolbox import Toolbox
 
         self.toolbox = Toolbox(self.cfg, self)
-        # 给你发文件（由 daemon 按渠道注入；默认只发一条带路径的消息）
+        # sending you files (injected per channel by the daemon; by default just a message with the
+        # paths)
         self.send_files: Callable[[str, list], None] = lambda ch, items: self.say_for(ch)(
             "\n".join(f"📎 {cap}: {p}" for p, cap in items)
         )
@@ -1165,9 +1174,10 @@ class AgentRuntime:
         self._lock = threading.RLock()
         studio.orch.resources.listeners.append(self.on_resources_freed)
 
-    # ---- 上下文（稳定前缀 + 逐字复现） ----
+    # ---- context (stable prefix + verbatim replay) ----
     def system_prompt(self, project_id: str, session: dict | None) -> str:
-        # agent 规则 + 与规划器相同的模板说明、项目记忆、会话摘要（稳定前缀）
+        # agent rules + the same template docs, project memory and session summary as the planner
+        # (stable prefix)
         rules = RULES_FILE.read_text().strip()
         skills = self.toolbox.skills_index()
         if skills:
@@ -1181,9 +1191,11 @@ class AgentRuntime:
     def _wire(m: dict) -> dict:
         if m["role"] == "assistant":
             out = {"role": "assistant", "content": m["content"]}
-            if m["meta"].get("reasoning"):  # 本次运行内逐字回放思考内容（与生成时一致）
+            # within this run, replay the thinking verbatim (as generated)
+            if m["meta"].get("reasoning"):
                 out["reasoning_content"] = m["meta"]["reasoning"]
-            if m["meta"].get("anthropic"):  # Claude 生成的回合：原始内容块原样回放
+            # a turn Claude generated: replay its raw content blocks unchanged
+            if m["meta"].get("anthropic"):
                 out["_anthropic"] = m["meta"]["anthropic"]
             if m["tool_calls"]:
                 out["tool_calls"] = [
@@ -1200,10 +1212,10 @@ class AgentRuntime:
         return {"role": m["role"], "content": m["content"]}
 
     def _compact(self, run: dict) -> list[dict]:
-        """已结束的运行压成稳定的两条（原话 + 最终回复）。
+        """Finished runs are folded into two stable messages (your words + final reply).
 
-        实测：模型的聊天模板在新的用户消息到来后会去掉更早轮次的思考内容，跨运行的前缀
-        本来就无法逐字延长；压成稳定形式后，每次只重算上一轮的这两条，更早的都命中缓存。
+        Measured: the model's chat template drops earlier turns' thinking once a new user message arrives, so the prefix
+        cannot be extended verbatim across runs anyway; in the stable form, only the last run's two messages are recomputed and everything earlier hits the cache.
         """
         final = next(
             (
@@ -1230,7 +1242,7 @@ class AgentRuntime:
             msgs += self._compact(r)
         pics: list[dict] = []
         for m in self.store.agent_msgs(run["id"]):
-            if m["role"] != "tool" and pics:  # 图片紧跟在这一组工具结果之后
+            if m["role"] != "tool" and pics:  # images go right after this group of tool results
                 msgs.append({"role": "user", "content": pics})
                 pics = []
             msgs.append(self._wire(m))
@@ -1242,7 +1254,7 @@ class AgentRuntime:
 
     @staticmethod
     def _look_parts(content: str) -> list[dict]:
-        """look 的结果 → 视觉消息（OpenAI 格式的 image_url data URL；Claude 后端会转换）。"""
+        """look results → a vision message (OpenAI-style image_url data URLs; the Claude backend converts them)."""
         import base64
 
         try:
@@ -1261,7 +1273,7 @@ class AgentRuntime:
             )
         return parts
 
-    # ---- 启动 ----
+    # ---- start ----
     def start(
         self,
         text: str,
@@ -1280,8 +1292,9 @@ class AgentRuntime:
         self.enqueue(lambda: self.step(run["id"]))
         return run
 
-    # ---- 一步 ----
-    # ---- 选后端：本地优先；资源不够 / 本地不可用时按配置回退到在线模型或 agent CLI ----
+    # ---- one step ----
+    # ---- backend choice: local first; when short of resources / local unavailable, fall back to
+    # online models or agent CLIs as configured ----
     def _api_backend(self, name: str):
         cache = self.__dict__.setdefault("_api_backends", {})
         if name not in cache:
@@ -1291,13 +1304,14 @@ class AgentRuntime:
         return cache[name]
 
     def _fallback(self, run: dict, why: str):
-        """返回 ("backend", 后端) | ("delegate", CLI 名) | ("park", 原因)。"""
+        """Returns ("backend", backend) | ("delegate", CLI name) | ("park", reason)."""
         chain = list(self.cfg.llm_fallback or [])
         if not chain:
             return "park", why
-        if not self.cfg.allow_online:  # 隐私开关没开：不往外发
+        if not self.cfg.allow_online:  # privacy switch off: nothing goes out
             return "park", f"{why}; online fallback is configured but allow_online is off"
-        fresh = len(self.store.agent_msgs(run["id"])) == 1  # 还没开始：可以整个交给 CLI
+        # not started yet: can be handed to a CLI as a whole
+        fresh = len(self.store.agent_msgs(run["id"])) == 1
         for name in chain:
             if name in ONLINE_APIS:
                 return "backend", self._api_backend(name)
@@ -1306,20 +1320,21 @@ class AgentRuntime:
         return "park", why
 
     def brain(self) -> str:
-        """/model 选的大脑：local（= 配置里的主后端）| 在线 API | agent CLI。"""
+        """The brain chosen with /model: local (= the configured primary backend) | an online API | an agent CLI."""
         return self.store.get_kv("agent_brain", "local") or "local"
 
     def _chosen_brain(self, run: dict):
         name = self.brain()
         if name == "local":
             return None
-        if not self.cfg.allow_online:  # 隐私开关关了：退回本地
+        if not self.cfg.allow_online:  # privacy switch off: fall back to local
             return None
-        if name in AGENT_CLIS:  # 整个请求交给 CLI；已经在本地开始的运行继续用本地
+        # hand the whole request to the CLI; runs already started locally stay local
+        if name in AGENT_CLIS:
             return ("delegate", name) if len(self.store.agent_msgs(run["id"])) == 1 else None
         try:
             return "backend", self._api_backend(name)
-        except Exception as e:  # noqa: BLE001 — 没配 key / 模型：停下说明原因
+        except Exception as e:  # noqa: BLE001 — no key / model configured: stop and say why
             return "park", f"{name}: {e}"
 
     def _choose(self, run: dict):
@@ -1328,7 +1343,8 @@ class AgentRuntime:
             return picked
         primary = self.planner.backend
         if not getattr(primary, "local", False):
-            return "backend", primary  # 主后端本身就在线：不占本地内存，不需要把关
+            # the primary backend is online itself: uses no local memory, no gate needed
+            return "backend", primary
         ok, why = self.studio.orch.resources.llm_admit()
         if ok:
             return "backend", primary
@@ -1340,15 +1356,17 @@ class AgentRuntime:
             if run is None or run["status"] in TERMINAL_RUN or run["status"] == "delegated":
                 return
             if self._unresolved(run_id):
-                return  # 还有工具结果没回来，等事件 / 审批
+                return  # some tool results are still out; wait for the event / approval
             if run["steps"] >= self.max_steps:
                 self._finish(run, tr("agent_step_budget", n=self.max_steps), "done")
                 return
             kind, what = self._choose(run)
             parked = run["status"] == "waiting_resources"
-            if kind == "park":  # 结果先暂存，资源允许了再交回 LLM
+            if kind == "park":  # park the results; hand them to the LLM once resources allow
                 self.store.update_run(run_id, status="waiting_resources", waiting={"reason": what})
-                if not parked:  # 只在刚开始排队时告诉你一次：在等什么、谁会叫醒它
+                # tell you only once, when it starts waiting: what it waits for and what will wake
+                # it
+                if not parked:
                     self.say_for(run["channel"])(tr("agent_parked", why=park_reason(what)))
                 return
             if kind == "delegate":
@@ -1362,7 +1380,8 @@ class AgentRuntime:
         rm = self.studio.orch.resources
         try:
             res = self._call(backend, run, rm)
-        except Exception as e:  # 本地 LLM 出错 / 不可用：按配置回退一次，否则标为失败
+        # local LLM error / unavailable: fall back once as configured, otherwise mark failed
+        except Exception as e:
             kind, alt = self._fallback(run, f"{backend.name} failed: {e}")
             if kind == "backend" and alt is not backend:
                 log.warning(
@@ -1423,7 +1442,7 @@ class AgentRuntime:
         with inflight:
             return backend.chat(self.messages_for(run), None, tools=self.spec)
 
-    # ---- 交给本机 agent CLI（Claude Code / Codex） ----
+    # ---- hand off to a local agent CLI (Claude Code / Codex) ----
     def _delegate(self, run: dict, name: str) -> None:
         self.store.update_run(run["id"], status="delegated", waiting={"agent": name})
         self._log_policy(run, f"local LLM unavailable → whole request delegated to {name}")
@@ -1459,16 +1478,16 @@ class AgentRuntime:
         try:
             text, stats = self.cli_runner(name).run(run_id, self.cli_prompt(run), url)
             status = "done"
-        except Exception as e:  # CLI 失败：告诉你原因，运行标为失败
+        except Exception as e:  # CLI failed: tell you why and mark the run failed
             log.exception("agent CLI %s failed", name)
             text, stats, status = tr("planner_error", e=e), {"via": name}, "failed"
         self.store.add_agent_msg(run_id, "assistant", text, **stats)
         self.studio.log(
             "llm", "out", text, run["project_id"], name, run_id=run_id, purpose="agent", **stats
         )
-        self.store.update_run(run_id, status="running")  # 离开 delegated 后再结束
+        self.store.update_run(run_id, status="running")  # leave delegated before finishing
         self._finish(self.store.get_run(run_id), None, status, say_text=text)
-        self.resolve(f"run:{run_id}", {"status": status, "reply": text})  # 唤醒在等它的运行
+        self.resolve(f"run:{run_id}", {"status": status, "reply": text})  # wake runs waiting for it
 
     def cli_runner(self, name: str):
         from .agent_cli import AgentCLI
@@ -1478,7 +1497,7 @@ class AgentRuntime:
         return AgentCLI(name, self.cfg)
 
     def freevideo_mcp(self) -> dict:
-        """FreeVideo 自己给出的 MCP 启动配置（/freevideo/agent/connect）；token 不经过这里。"""
+        """FreeVideo's own MCP launch config (/freevideo/agent/connect); the token does not pass through here."""
         from .freevideo import FreeVideo
 
         fv = FreeVideo(self.cfg.comfy_url)
@@ -1488,14 +1507,14 @@ class AgentRuntime:
         r.raise_for_status()
         return r.json()["mcp_json"]["mcpServers"]
 
-    # ---- 交给 FreeVideo 的 agent（Claude Code + FreeVideo MCP） ----
+    # ---- hand off to FreeVideo's agent (Claude Code + FreeVideo MCP) ----
     def freevideo_online_ok(self) -> bool:
         return bool(self.cfg.allow_online or getattr(self.cfg, "freevideo_agent_online", False))
 
     def delegate_freevideo(
         self, text: str, channel: str, project_id: str, session_id: str | None, start: bool = True
     ) -> dict:
-        """新开一个运行，整个交给 FreeVideo agent；结束时以 `run:<id>` 唤醒在等它的运行。"""
+        """Start a new run handed entirely to the FreeVideo agent; when it ends, `run:<id>` wakes runs waiting for it."""
         if not self.freevideo_online_ok():
             raise ValueError(tr("fv_offline"))
         return self.delegate_to("freevideo", text, channel, project_id, session_id, start)
@@ -1509,7 +1528,7 @@ class AgentRuntime:
         session_id: str | None,
         start: bool = True,
     ) -> dict:
-        """新开一个运行交给 agent CLI（claude_code / codex / freevideo）；结束时唤醒 `run:<id>`。"""
+        """Start a new run handed to an agent CLI (claude_code / codex / freevideo); wakes `run:<id>` when it ends."""
         run = self.store.create_run(project_id, session_id, channel, text)
         self.store.add_agent_msg(run["id"], "user", f"## User\n{text}")
         if start:
@@ -1517,7 +1536,7 @@ class AgentRuntime:
         return run
 
     def external_tool(self, run_id: str, name: str, args: dict, timeout: float = 1800) -> dict:
-        """CLI agent 经 MCP 发来的工具调用：同样的执行策略、审批与等待，只是同步返回结果。"""
+        """Tool calls from a CLI agent over MCP: same execution policy, approvals and waits, only the result is returned synchronously."""
         run = self.store.get_run(run_id)
         if run is None or run["status"] != "delegated":
             return {"error": "this run is not delegated to an external agent"}
@@ -1566,7 +1585,7 @@ class AgentRuntime:
         if tool is None or not tool.description:
             return self._tool_done(run, call, args, {"error": f"unknown tool {call['name']}"})
         denied = self.policies.check(call["name"], args)
-        if denied:  # 执行策略：只拒绝，不替你改参数
+        if denied:  # execution policy: only refuses, never rewrites your parameters
             return self._tool_done(run, call, args, {"error": denied})
         try:
             out = tool.handler(ctx, args)
@@ -1585,7 +1604,9 @@ class AgentRuntime:
             out = Done({"error": f"schema: {e.message}"})
         if isinstance(out, Pending) and out.kind == "approval" and out.on_approve:
             how = self.auto_approval(out.rule, out.bypassable)
-            if how:  # bypass 模式或你设过“始终允许”：不再问，直接执行批准后的动作
+            # bypass mode or an "always allow" rule you set: do not ask, run the approved action
+            # directly
+            if how:
                 say(tr("agent_auto_approved", how=tr(f"perm_how_{how}"), what=_first_line(out)))
                 out = self._run_approved(ctx, out.on_approve, how)
         if isinstance(out, Done):
@@ -1619,7 +1640,8 @@ class AgentRuntime:
 
     def _tool_done(self, run: dict, call: dict, args: dict, result: dict) -> None:
         text = json.dumps(result, ensure_ascii=False)
-        if len(text) > MAX_RESULT_CHARS:  # 太长的结果截断后交回，原文留在 meta
+        # overly long results are truncated before handing back; the full text stays in meta
+        if len(text) > MAX_RESULT_CHARS:
             text = text[:MAX_RESULT_CHARS] + "…(truncated)"
         self.store.add_agent_msg(
             run["id"], "tool", text, tool_call_id=call["id"], name=call["name"], full=result
@@ -1649,7 +1671,9 @@ class AgentRuntime:
     def _advance(self, run_id: str) -> None:
         run = self.store.get_run(run_id)
         if run and run["status"] == "delegated":
-            return  # CLI agent 自己在等这个结果（external_tool 轮询），不要排本地步骤
+            # the CLI agent is waiting for this result itself (external_tool polling); do not queue
+            # a local step
+            return
         pending = self._unresolved(run_id)
         if not pending:
             self.store.update_run(run_id, status="running", waiting={})
@@ -1670,11 +1694,11 @@ class AgentRuntime:
             self.enqueue(lambda: self.prewarm(run["session_id"]))
 
     def prewarm(self, session_id: str) -> None:
-        """为下一条消息预热缓存。
+        """Prewarm the cache for the next message.
 
-        实测（docs/baseline.md）：引擎在每个请求“最后一条消息之前”留检查点，新请求只有与某个旧请求
-        一直相同到那里才复用。这里发一次 [稳定前缀 + 压缩历史 + 占位用户消息]，
-        你的下一句话就会命中“占位消息之前”的检查点。资源不允许时跳过（不抢渲染）。
+        Measured (docs/baseline.md): the engine keeps a checkpoint "before the last message" of each request; a new request reuses it only if it
+        matches an old request all the way up to there. Here we send [stable prefix + compacted history + placeholder user message] once,
+        so your next message hits the checkpoint "before the placeholder". Skipped when resources do not allow (never competes with a render).
         """
         rm = self.studio.orch.resources
         if not rm.llm_admit()[0] or not self.planner.available():
@@ -1691,12 +1715,12 @@ class AgentRuntime:
         try:
             with rm.llm.inference():
                 self.planner.backend.prewarm(msgs, tools=self.spec)
-        except Exception:  # 预热失败不影响任何结果
+        except Exception:  # a failed prewarm affects no result
             log.warning("agent prewarm failed", exc_info=True)
 
-    # ---- 恢复与唤醒 ----
+    # ---- recovery and wake-up ----
     def resolve(self, key: str, result: dict) -> int:
-        """把等待中的工具结果补上（事件 / 审批 / 回答），能继续的运行排队继续。"""
+        """Fill in waiting tool results (events / approvals / answers) and queue runs that can continue."""
         n = 0
         for m in self.store.pending_tool_msgs():
             if m["meta"].get("key") != key:
@@ -1721,7 +1745,7 @@ class AgentRuntime:
         self._advance(m["run_id"])
 
     def on_round_ready(self, rnd: dict) -> None:
-        """渲染结果到了：按续跑策略决定交回 LLM、自动下一步、还是有限重试。"""
+        """A render result arrived: by continuation policy, hand it back to the LLM, auto next step, or bounded retry."""
         key = f"round:{rnd['id']}"
         for m in self.store.pending_tool_msgs():
             if m["meta"].get("key") != key:
@@ -1801,7 +1825,7 @@ class AgentRuntime:
         self.studio.log("agent", "out", f"⚙️ policy: {text}", run["project_id"], run_id=run["id"])
 
     def on_round_decided(self, rnd: dict) -> None:
-        """你用普通审阅按钮做了决定：等这轮的批准请求也就有了答案。"""
+        """You decided with the normal review buttons: the approval request waiting on this round now has its answer."""
         d = rnd["decision"] or {}
         for m in self.store.pending_tool_msgs():
             if (
@@ -1818,7 +1842,7 @@ class AgentRuntime:
                 )
         self.on_round_ready(rnd)
 
-    # ---- 权限：default（逐条审批）| bypass（不再审批）；“始终允许”的规则 ----
+    # ---- permissions: default (approve each) | bypass (no approvals); "always allow" rules ----
     def permission_mode(self) -> str:
         return self.store.get_kv("permission_mode") or getattr(
             self.cfg, "permission_mode", "default"
@@ -1846,7 +1870,8 @@ class AgentRuntime:
             return Done({"approved": True, "auto": how, "error": str(e)})
         if isinstance(out, Done):
             return Done({"approved": True, "auto": how, **out.result})
-        out.info = {**out.info, "auto": how}  # 后台执行：记在消息里，结果到时照常交回
+        # runs in the background: noted in the message, the result comes back as usual
+        out.info = {**out.info, "auto": how}
         return out
 
     def on_approval(self, msg_id: int, approve: bool, remember: bool = False) -> str:
@@ -1870,7 +1895,9 @@ class AgentRuntime:
         }
         try:
             out = self.tools[act["tool"]].handler(ctx, act["args"])
-            if isinstance(out, Pending):  # 批准后在后台执行：先改成等它的结果，再开始
+            # runs in the background after approval: switch to waiting for its result first, then
+            # start
+            if isinstance(out, Pending):
                 self.store.update_agent_msg(
                     msg_id, meta={"key": out.key, "kind": out.kind, "approved": True}
                 )
@@ -1897,11 +1924,12 @@ class AgentRuntime:
             self.enqueue(lambda rid=run["id"]: self.step(rid))
 
     def recover(self) -> None:
-        """daemon 重启：能继续的运行继续；在等的轮若已完成，直接补上结果。"""
+        """Daemon restart: runs that can continue do; if the round a run waits for has finished, fill in the result directly."""
         for m in self.store.pending_tool_msgs():
             key = m["meta"].get("key") or ""
             if key.startswith("job:") and not self.toolbox.jobs.busy(key):
-                # 后台工具随 daemon 重启中断了：如实交回，由 agent 决定要不要重来（不自动重跑命令）
+                # background tools were interrupted by the daemon restart: report that honestly and
+                # let the agent decide whether to redo (commands are never rerun automatically)
                 self.resolve_msg(m, {"error": "interrupted by a daemon restart; not rerun"})
                 continue
             if key.startswith("round:"):

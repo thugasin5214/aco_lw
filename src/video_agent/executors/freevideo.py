@@ -1,10 +1,10 @@
-"""FreeVideo 执行端（agent API）。
+"""FreeVideo executor (agent API).
 
-- `freevideo-take`：电影的 take 由 FreeVideo 自己排队拍摄（见 production.py 的 film 阶段），这里不提交，
-  只让资源闸门看得见 FreeVideo 自己的队列（拍片时不加载 LLM、不抢内存）。
-- 其他模板（如 `freevideo-ref`）：组成一个 `POST /jobs` 的 generate 作业——参考视频（可只引导前 K 步）、
-  参考图、首帧——由编排器提交、轮询、下载。编排器的 job_id 作为幂等键 `ref`，FreeVideo 的作业 ID
-  记在 `jobs_file` 里，daemon 重启后仍能对账（永不自动重提）。
+- `freevideo-take`: a film's takes are queued and shot by FreeVideo itself (see the film stage in production.py); nothing is submitted here,
+  we only let the resource gate see FreeVideo's own queue (no LLM loading and no memory grabbing while shooting).
+- Other templates (e.g. `freevideo-ref`): build one generate job for `POST /jobs` — reference video (optionally guiding only the first K steps),
+  reference images, first frame — submitted, polled and downloaded by the orchestrator. The orchestrator's job_id is the idempotency key `ref`; FreeVideo's job ID
+  is recorded in `jobs_file`, so the daemon can still reconcile after a restart (never resubmits automatically).
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ HEARTBEAT_FRESH_S = 600
 
 
 def _alive(job: dict, now: float | None = None) -> bool:
-    """近 HEARTBEAT_FRESH_S 秒内有心跳 = 作业还在推进。"""
+    """A heartbeat within HEARTBEAT_FRESH_S seconds = the job is still progressing."""
     hb = job.get("last_heartbeat_at")
     if not hb:
         return False
@@ -38,15 +38,16 @@ def _alive(job: dict, now: float | None = None) -> bool:
 
 
 def build_job(params: dict, media: dict[str, str], platform: str = sys.platform) -> dict:
-    """参数 + 已上传的 media 名 → generate 作业（纯函数，便于测试）。
-    references 的顺序决定提示词里的编号：<Video 1> 是参考视频，<Picture 1>/<Picture 2> 依次是参考图。"""
+    """Parameters + uploaded media names → a generate job (pure function, easy to test).
+    The order of references decides the numbering in the prompt: <Video 1> is the reference video, <Picture 1>/<Picture 2> the reference images in order."""
     q = params.get("quality", "light")
     if q not in QUALITIES:
         raise ValueError(f"quality 只能是 {'/'.join(QUALITIES)}，收到 {q}")
     refs: list = []
     if params.get("early_steps") and platform == "darwin":
-        # FreeVideo 的 Mac 编码路径没实现 early_steps：会先编码几个小时再报
-        # "early_steps requires separately encoded early reference conditions"（实测 2026-11-07）
+        # FreeVideo's Mac encoding path does not implement early_steps: it encodes for hours and
+        # then reports
+        # "early_steps requires separately encoded early reference conditions" (measured 2026-11-07)
         raise ValueError("early_steps 在 Mac 上 FreeVideo 不支持；去掉 early_steps（参考视频引导全部步数）")
     if "ref_video" in media:
         v: dict = {"file": media["ref_video"]}
@@ -78,7 +79,7 @@ class FreeVideoExecutor:
         self.jobs_file = jobs_file
         self._lock = threading.Lock()
 
-    # ---- 编排器 job_id → FreeVideo 作业 ID（落盘，重启后对账） ----
+    # ---- orchestrator job_id → FreeVideo job ID (on disk, reconciled after restart) ----
     def _jobs(self) -> dict:
         if self.jobs_file and self.jobs_file.exists():
             return json.loads(self.jobs_file.read_text())
@@ -96,7 +97,7 @@ class FreeVideoExecutor:
     def _queue(self) -> dict:
         try:
             q = self.client.status().get("queue") or {}
-        except Exception:  # noqa: BLE001 — FreeVideo 不可达：不当作忙
+        except Exception:  # noqa: BLE001 — FreeVideo unreachable: not treated as busy
             q = {}
         self._last = q
         return q
@@ -136,7 +137,8 @@ class FreeVideoExecutor:
             return Poll("lost")
         try:
             job = self.client.call("GET", f"/jobs/{fv_id}").get("job")
-        except Exception as e:  # noqa: BLE001 — 404 = FreeVideo 里没有；其他（网络抖动）下次再问
+        # 404 = not in FreeVideo; anything else (network hiccup) ask again next time
+        except Exception as e:  # noqa: BLE001
             if getattr(e, "status", None) == 404:
                 return Poll("lost", str(e))
             return Poll("running", f"poll error: {e}")
@@ -167,11 +169,11 @@ class FreeVideoExecutor:
 
     def cancel(self, job_id: str) -> None:
         fv_id = self._jobs().get(job_id)
-        if fv_id:  # 只取消自己提交的这一个
+        if fv_id:  # cancel only the one we submitted
             self.client.call("POST", f"/jobs/{fv_id}/cancel", {})
 
     def queued_payloads(self) -> list[dict]:
-        """FreeVideo 正在拍 / 排着：报告成一个独占的视频任务，跨进程闸门据此不加载 LLM。"""
+        """FreeVideo shooting / queued: reported as one exclusive video task so the cross-process gate does not load the LLM."""
         q = self._queue()
         if (q.get("running") or 0) + (q.get("pending") or 0) > 0:
             return [{"freevideo": {"class_type": "FreeVideoGenerate", "inputs": {}}}]

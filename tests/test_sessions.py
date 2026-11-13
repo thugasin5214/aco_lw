@@ -51,20 +51,21 @@ def test_sessions_share_project_memory_not_history(studio):
     a.inbound("web", "按之前定的风格出一版", reply)
     run_jobs(a)
     msgs = planner.backend.calls[-1]
-    assert "角色约 19 岁" in msgs[0]["content"]  # 项目记忆进 system
+    assert "角色约 19 岁" in msgs[0]["content"]  # project memory goes into system
     joined = json.dumps(msgs, ensure_ascii=False)
-    assert "第一句" not in joined  # 别的会话的原话不带过来
+    assert "第一句" not in joined  # other sessions' words are not carried over
     assert studio.current_session()["id"] == s2["id"]
-    first = studio.use_session("2")  # 按序号切回
+    first = studio.use_session("2")  # switch back by index
     assert first["id"] != s2["id"]
 
 
 def test_each_call_extends_the_previous(studio):
-    """缓存前提（实测该模型只能“延长”复用）：第 N+1 次请求以第 N 次请求的全部消息原样开头。"""
+    """Cache premise (measured: this model can only reuse by "extension"): request N+1 starts with all of request N's messages verbatim."""
     a, planner, _out, reply = actions_with(
         studio, [plan_reply(reply="一"), plan_reply(reply="二"), plan_reply(reply="三")]
     )
-    rnd = studio.start_round("flux2-t2i", {"seed": 1})  # 让实时状态在两次调用之间变化
+    # make the live status change between the two calls
+    rnd = studio.start_round("flux2-t2i", {"seed": 1})
     for text in ("甲", "乙", "丙"):
         a.inbound("web", text, reply)
         run_jobs(a)
@@ -74,7 +75,7 @@ def test_each_call_extends_the_previous(studio):
     assert [m["role"] for m in c3] == ["system", "user", "assistant", "user", "assistant", "user"]
     assert "## 当前状态" in c3[-1]["content"] and "## 当前状态" not in c3[0]["content"]
     assert rnd["id"] in c3[-1]["content"]
-    # 预热请求 = 最后一次请求原样
+    # prewarm request = the last request verbatim
     planner.prewarm(studio.current_session()["id"])
     assert planner.backend.calls[-1] == c3
 
@@ -165,7 +166,7 @@ def test_upload_reference_and_tweak(studio):
 
 def test_orphan_messages_become_history_session(studio):
     pid = studio.current_project()["id"]
-    studio.store.log_message("web", "in", "旧消息", pid)  # 旧版本没有 session_id
+    studio.store.log_message("web", "in", "旧消息", pid)  # old versions had no session_id
     studio.store.set_kv(f"session:{pid}", None)
     for s in studio.store.sessions(pid):
         studio.store.update_session(s["id"], state="closed")
@@ -229,10 +230,10 @@ def test_unmeasured_video_tier_falls_back_with_opt_in_button(studio):
     a.inbound("web", "make a video", reply)
     run_jobs(a)
     rnd = studio.store.rounds(state="generating")[0]
-    assert rnd["tier"] == "smoke"  # 自动降到已实测档位
+    assert rnd["tier"] == "smoke"  # automatically lowered to a measured tier
     btn = next(b for t, b in out if b)[0][0][1]
     assert btn == f"u:{rnd['id']}:hd"
-    a.button("web", btn, reply)  # 用户确认后才跑 hd
+    a.button("web", btn, reply)  # hd runs only after the user confirms
     tiers = sorted(r["tier"] for r in studio.store.rounds(state="generating"))
     assert tiers == ["hd", "smoke"]
 
@@ -259,5 +260,5 @@ def test_explicit_tier_in_user_text_is_honoured(studio):
     )
     a.inbound("web", "做成hd", reply)
     run_jobs(a)
-    assert studio.store.rounds(state="generating")[0]["tier"] == "hd"  # 不降档
-    assert not any(b for _t, b in out)  # 不再弹“也试一下”
+    assert studio.store.rounds(state="generating")[0]["tier"] == "hd"  # not lowered
+    assert not any(b for _t, b in out)  # no more "try that too" button

@@ -29,7 +29,8 @@ def test_save_keeps_other_keys_tables_and_comments(tmp_path):
     assert raw["llm_context"] == 65536 and raw["telegram_chat_ids"] == [5]
     assert raw["llm_gpu"] == "max" and raw["mcp_servers"]["exa"]["url"].startswith("https")
     assert "# 注释保留" in text and raw["comfy_output_dir"] == "~/x"
-    assert text.index("llm_gpu") < text.index("[mcp_servers.exa]")  # 新键进顶层，不进表里
+    # new keys go to the top level, not into a table
+    assert text.index("llm_gpu") < text.index("[mcp_servers.exa]")
 
 
 def test_coerce_types_and_rejects():
@@ -41,7 +42,7 @@ def test_coerce_types_and_rejects():
     with pytest.raises(ValueError):
         config.coerce("llm_gpu", "2")
     with pytest.raises(ValueError):
-        config.coerce("data_dir", "/tmp")  # 不在可编辑列表里
+        config.coerce("data_dir", "/tmp")  # not in the editable list
     with pytest.raises(ValueError):
         config.coerce("language", "fr")
 
@@ -66,7 +67,8 @@ def test_config_api_masks_secrets_and_applies_live(studio, tmp_path):  # noqa: F
         },
     ).json()
     assert r["saved"] == ["agent_max_steps", "round_size"] and r["restart"] == ["round_size"]
-    assert a.runtime.max_steps == 12 and cfg.openai_api_key == "sk-secret"  # 空密钥 = 不改
+    # empty secret = unchanged
+    assert a.runtime.max_steps == 12 and cfg.openai_api_key == "sk-secret"
     assert a.runtime.permission_mode() == "bypass"
     assert tomllib.loads(cfg.config_path.read_text())["agent_max_steps"] == 12
     assert c.post("/api/config", json={"values": {"data_dir": "/"}}).status_code == 400
@@ -79,7 +81,7 @@ def test_delete_session_removes_history_and_switches(studio):  # noqa: F811
     first = studio.current_session()
     run = studio.store.create_run(first["project_id"], first["id"], "telegram", "x")
     studio.store.add_agent_msg(run["id"], "user", "x")
-    with pytest.raises(StudioError):  # agent 还在这个会话里跑
+    with pytest.raises(StudioError):  # the agent is still running in this session
         studio.delete_session(first["id"])
     studio.store.update_run(run["id"], status="done")
     second = studio.new_session("第二个")
@@ -88,7 +90,8 @@ def test_delete_session_removes_history_and_switches(studio):  # noqa: F811
     assert res["messages"] >= 2 and res["runs"] == 1
     assert studio.store.get_session(first["id"]) is None
     assert studio.store.runs(first["id"]) == [] and studio.store.agent_msgs(run["id"]) == []
-    assert studio.current_session()["id"] == second["id"]  # 删的是当前会话：换到剩下的
+    # deleted the current session: switched to the remaining one
+    assert studio.current_session()["id"] == second["id"]
 
 
 def test_session_delete_command_asks_then_deletes(studio):  # noqa: F811
@@ -99,7 +102,7 @@ def test_session_delete_command_asks_then_deletes(studio):  # noqa: F811
     assert studio.store.sessions(studio.current_project()["id"])[0]["n_telegram"] >= 1
     a.inbound("telegram", "/session delete 1", reply)
     _text, buttons = out[-1]
-    assert buttons[0][0][1] == f"k:{sid}"  # 先问，确认按钮才删
+    assert buttons[0][0][1] == f"k:{sid}"  # asks first; only the confirm button deletes
     assert studio.store.get_session(sid)
     a.button("telegram", f"k:{sid}", reply)
     assert studio.store.get_session(sid) is None

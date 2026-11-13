@@ -1,4 +1,4 @@
-"""ComfyUI 执行端：渲染 API workflow、按 /object_info 校验、上传输入、提交、轮询、收集、释放。"""
+"""ComfyUI executor: render API workflows, validate against /object_info, upload inputs, submit, poll, collect, release."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ class ComfyExecutor:
             self._object_info = self.comfy.object_info()
         return self._object_info
 
-    # ---- 准备 ----
+    # ---- prepare ----
     def prepare(self, template, task: dict) -> Prepared:
         if template.name == "comfy-raw":
             return self._prepare_raw(task)
@@ -58,7 +58,7 @@ class ComfyExecutor:
         )
 
     def _prepare_raw(self, task: dict) -> Prepared:
-        """agent 搭建的任意 workflow：校验后原样提交，只把保存节点的前缀改成本任务（方便收集与追踪）。"""
+        """Any workflow the agent built: validated and submitted as-is, only the save nodes' prefix is changed to this task (easier collection and tracking)."""
         graph = json.loads(task["params"]["graph"])
         for node in graph.values():
             if node.get("class_type", "").startswith("Save") and "filename_prefix" in node.get(
@@ -74,7 +74,7 @@ class ComfyExecutor:
             note=f"agent workflow · {len(graph)} nodes · 节点校验通过",
         )
 
-    # ---- 提交与轮询 ----
+    # ---- submit and poll ----
     def submit(self, prepared: Prepared, job_id: str) -> None:
         self.comfy.submit(prepared.payload, job_id)
 
@@ -127,12 +127,12 @@ class ComfyExecutor:
                     outputs.append({"file": name, "kind": kind, "node": node, "source": item})
         return outputs
 
-    # ---- 取消、占用、释放 ----
+    # ---- cancel, occupancy, release ----
     def cancel(self, job_id: str) -> None:
         self.comfy.interrupt(job_id)
 
     def queued_payloads(self) -> list[dict]:
-        """执行端里正在跑 / 排队的全部任务（含别人提交的）的 workflow，用于跨进程把关。"""
+        """Workflows of every task running / queued in the executor (including other people's), for cross-process gating."""
         q = self.comfy.queue()
         return [
             item[2]

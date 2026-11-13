@@ -1,7 +1,7 @@
-"""策略层（P1 续跑策略 + P2 执行策略）：从 policies.yaml 读取，运行时只按它行事。
+"""Policy layer (P1 continuation policy + P2 execution policy): read from policies.yaml; the runtime only follows it.
 
-- 续跑策略：异步结果到来时，决定交回 LLM、自动下一步、有限重试；没写到的一律交回 LLM。
-- 执行策略：每个工具是否允许、参数上限、何时需要你批准；网络访问默认关闭。
+- Continuation: when an async result arrives, decide between handing it back to the LLM, auto next step, or bounded retry; anything unlisted goes back to the LLM.
+- Execution: whether each tool is allowed, parameter limits, when your approval is needed; network access is off by default.
 """
 
 from __future__ import annotations
@@ -35,12 +35,12 @@ class Policies:
             base = _merge(base, yaml.safe_load(user.read_text()) or {})
         return cls(base)
 
-    # ---- 执行策略 ----
+    # ---- execution policy ----
     def tool(self, name: str) -> dict:
         return self.data["execution"]["tools"].get(name, {"allow": False})
 
     def check(self, name: str, args: dict) -> str | None:
-        """返回拒绝原因；None 表示允许。只拒绝，不改参数（不改变任务含义）。"""
+        """Return the reason for refusing; None means allowed. Only refuses, never rewrites parameters (that would change what the task means)."""
         rule = self.tool(name)
         if not rule.get("allow"):
             return f"tool {name} is not permitted by the execution policy"
@@ -53,10 +53,10 @@ class Policies:
     def approval(self, name: str, key: str = "approval") -> str:
         return self.tool(name).get(key, "never")
 
-    # ---- 续跑策略 ----
+    # ---- continuation policy ----
     def on_round(self, outcome: str, retries_done: int, in_pipeline: bool, last_step: bool) -> str:
         """outcome: succeeded | failed:oom | failed:lost | failed:other
-        返回：resume_llm | retry | auto_next | finished"""
+        Returns: resume_llm | retry | auto_next | finished"""
         c = self.data["continuation"]
         if outcome == "succeeded":
             if in_pipeline:

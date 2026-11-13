@@ -1,4 +1,4 @@
-"""测试夹具：假 ComfyUI（httpx.MockTransport）+ 临时数据目录；LLM 与内存读数全部打桩。"""
+"""Test fixtures: fake ComfyUI (httpx.MockTransport) + temporary data directory; the LLM and memory readings are all stubbed."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from video_agent.store import Store
 
 
 class FakeComfy:
-    """最小 ComfyUI：/prompt 入队，history_after 次轮询后完成。"""
+    """Minimal ComfyUI: /prompt enqueues, completes after history_after polls."""
 
     def __init__(self, history_after: int = 2, fail: bool = False):
         self.history_after = history_after
@@ -126,7 +126,7 @@ def make_orch(tmp_path, no_side_effects):
             templates_dir=ROOT / "templates",
             poll_interval_s=0,
             memory_wait_s=0.0,
-            freevideo_agent=False,  # 测试不碰真实 FreeVideo
+            freevideo_agent=False,  # tests never touch the real FreeVideo
         )
         cfg.jobs_dir.mkdir(parents=True, exist_ok=True)
         comfy = Comfy("http://fake", transport=httpx.MockTransport(fake_comfy.handler))

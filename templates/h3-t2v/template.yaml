@@ -2,22 +2,22 @@ title: 文生视频 · FreeVideo / MiniMax H3
 kind: video
 model: freevideo-h3
 source: 标准实验室/04-文生视频-纯文字-API.json
-release_after: free        # 视频结束且队列空闲即 /free
+release_after: free        # /free once the video finishes and the queue is idle
 slots:
   prompt:       {node: "3", field: text, type: str}
   seed:         {node: "3", field: seed, type: int, min: 0}
   width:        {node: "3", field: width, type: int, min: 256, max: 1920, multiple_of: 32}
   height:       {node: "3", field: height, type: int, min: 256, max: 1920, multiple_of: 32}
-  seconds:      {node: "3", field: seconds, type: float, min: 1.625, max: 60}  # FreeVideo 上限；>15 s 为实验性
+  seconds:      {node: "3", field: seconds, type: float, min: 1.625, max: 60}  # FreeVideo maximum; > 15 s is experimental
   base_steps:   {node: "3", field: base_steps, type: int, min: 4, max: 16}
   refine_steps: {node: "3", field: refine_steps, type: int, min: 0, max: 8}
   force_regenerate: {node: "3", field: force_regenerate, type: bool}
 tiers:
-  smoke: {width: 640, height: 384, seconds: 3, verified: true}    # G0 实测 230–321 s，峰值 54 GiB
+  smoke: {width: 640, height: 384, seconds: 3, verified: true}    # G0 measured 230–321 s, peak 54 GiB
   hd:    {width: 1280, height: 736, seconds: 3, verified: false}
   portrait: {width: 576, height: 1024, seconds: 3, verified: false}
   smoke-10s: {width: 640, height: 384, seconds: 10, verified: false}
-  smoke-60s: {width: 640, height: 384, seconds: 60, verified: false}   # >15 s 实验性
+  smoke-60s: {width: 640, height: 384, seconds: 60, verified: false}   # > 15 s experimental
   hd-10s:    {width: 1280, height: 736, seconds: 10, verified: false}
-  hd-60s:    {width: 1280, height: 736, seconds: 60, verified: false}  # >15 s 实验性，耗时以小时计（估算）
+  hd-60s:    {width: 1280, height: 736, seconds: 60, verified: false}  # > 15 s experimental, takes hours (estimate)
 default_tier: smoke

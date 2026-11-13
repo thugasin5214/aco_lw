@@ -1,7 +1,7 @@
-"""aco_lw 的 MCP 服务（stdio）：给 Claude Code / Codex 用，只暴露 aco_lw 的工具。
+"""aco_lw's MCP server (stdio): for Claude Code / Codex, exposes only aco_lw's tools.
 
-每个工具调用都转发给 daemon（POST /api/agent/tool），由 daemon 里的 agent 运行时执行——
-执行策略、审批、资源调度与本地 LLM 完全一致；这个进程本身不做任何事。
+Every tool call is forwarded to the daemon (POST /api/agent/tool) and executed by the agent runtime there —
+same execution policy, approvals, resource scheduling and local LLM; this process itself does nothing.
 
     python -m video_agent.mcp_server --run RUN_ID --url http://127.0.0.1:8790
 """
@@ -25,7 +25,7 @@ class Server:
 
     def handle(self, msg: dict) -> dict | None:
         method, mid = msg.get("method"), msg.get("id")
-        if mid is None:  # 通知（如 notifications/initialized）不回复
+        if mid is None:  # notifications (e.g. notifications/initialized) get no reply
             return None
         try:
             if method == "initialize":

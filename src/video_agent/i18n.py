@@ -1,7 +1,7 @@
-"""服务端文字的双语目录（I2）。默认英文；`config.language` 设为 zh 则输出中文。
+"""Bilingual catalogue of server-side text (I2). English by default; `config.language = "zh"` switches to Chinese.
 
-只覆盖用户能看到的文字（对话回复、系统通知、Telegram 帮助与按钮）。日志与代码注释不翻译。
-写入对话历史的是当时的语言，切换语言不会改写历史。
+Covers only text the user sees (chat replies, system notices, Telegram help and buttons). Logs and code comments are not translated.
+Chat history keeps the language it was written in; switching languages does not rewrite history.
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from __future__ import annotations
 _LANG = "en"
 
 M: dict[str, tuple[str, str]] = {
-    # 通用
+    # General
     "ack": ("Got it — thinking…", "收到，正在理解……"),
     "agent_parked": (
         "Queued: {why}. I'll pick this up automatically as soon as memory frees up; /status works meanwhile (no LLM needed).",
@@ -42,12 +42,12 @@ M: dict[str, tuple[str, str]] = {
         "当前是纯命令模式，文字不会唤醒 LLM。用 /round 直接出图，或 /mode on_demand。",
     ),
     "invalid_params": ("Invalid parameters: {e}", "参数无效：{e}"),
-    # ComfyUI 工具审批
+    # ComfyUI tool approvals
     "comfy_approval": (
         "The agent wants to run a ComfyUI action that changes your install: {t} {a}\n{why}",
         "agent 想执行一个会改动 ComfyUI 安装的操作：{t} {a}\n{why}",
     ),
-    # 制片
+    # Productions
     "stage_review": ("🎬 {p}: {s} is ready for review", "🎬 {p}：{s} 待审核"),
     "stage_invalid": (
         "🎬 {p}: {s} — the model's output failed validation; edit it or redo",
@@ -58,7 +58,7 @@ M: dict[str, tuple[str, str]] = {
         "🎬 {p}：FreeVideo 要你批准开拍——打开 ComfyUI（http://127.0.0.1:8188）→ 顶部菜单 Extensions → FreeVideo，在它的 agent 对话里点批准卡片；一分钟内开拍。",
     ),
     "stage_failed": ("🎬 {p}: {s} failed", "🎬 {p}：{s} 失败"),
-    # 规划结果
+    # Planner results
     "queued_round": (
         "Queued: {n} candidate(s) ({tpl} / {tier})",
         "已排队：{n} 个候选（{tpl} / {tier}）",
@@ -213,7 +213,7 @@ M: dict[str, tuple[str, str]] = {
         "请发一句打回原因 / 改进方向",
     ),
     "redo_queued": ("Redo: queued {n} new candidate(s)", "整轮重做：已排队 {n} 个新候选"),
-    # 记忆
+    # Memory
     "mem_offer": (
         "💡 Save this to the project memory?\n“{t}”",
         "💡 要把这条记进项目记忆吗？\n「{t}」",
@@ -233,7 +233,7 @@ M: dict[str, tuple[str, str]] = {
         "\n待确认 {n} 条（控制台“项目与对话”里处理）",
     ),
     "empty": ("(empty)", "（空）"),
-    # 命令
+    # Commands
     "paused": (
         "Paused: the running task finishes, queued ones won't start. /resume to continue.",
         "已暂停：正在跑的任务会跑完，排队的不再开始。/resume 恢复。",
@@ -312,7 +312,7 @@ M: dict[str, tuple[str, str]] = {
     "status_running": ("running {t}", "正在跑 {t}"),
     "status_idle": ("idle", "空闲"),
     "status_paused": (" (paused)", "（已暂停）"),
-    # 通知
+    # Notifications
     "round_ready": (
         "“{t}”: {ok}/{n} candidate(s) ready for review",
         "「{t}」{ok}/{n} 个候选待审阅",
@@ -324,14 +324,14 @@ M: dict[str, tuple[str, str]] = {
     "round_ready_tg": ("“{t}”: {n} candidate(s) to review", "「{t}」{n} 个候选待审阅"),
     "whoami": ("Your chat_id: {id}", "你的 chat_id：{id}"),
     "error": ("Something went wrong: {e}", "出错了：{e}"),
-    # 按钮
+    # Buttons
     "btn_select": ("✅ Pick {i}", "✅ 选{i}"),
     "btn_refine": ("🔧 Tweak {i}", "🔧 微调{i}"),
     "btn_redo": ("🎲 Redo round", "🎲 整轮重做"),
     "btn_reject": ("↩️ Reject + note", "↩️ 打回+批注"),
     "btn_no_lock": ("Don't lock", "不锁定"),
     "roles": ("character,scene,style", "角色,场景,风格"),
-    # Studio 记录
+    # Studio log entries
     "log_select": ("Selected #{idx}{lock}", "选中 #{idx}{lock}"),
     "log_lock_suffix": (", locked as “{r}”", "，锁定为「{r}」"),
     "log_redo": ("Redo whole round (new seeds)", "整轮重做（换种子）"),

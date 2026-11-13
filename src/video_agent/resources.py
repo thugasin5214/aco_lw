@@ -1,11 +1,11 @@
-"""动态资源调度（R1 + Q1，替代 memgate 的固定阈值）。
+"""Dynamic resource scheduling (R1 + Q1, replacing memgate's fixed thresholds).
 
-原则（与 vhotseat 一致）：
-- 运行中的工作绝不打断：LLM 正在写的回答要等它写完；渲染中不抢。
-- 在“加载 / 提交前”把关：LLM 推理前问 `llm_admit`；渲染提交前走 `prepare_render`。
-- 少交接：同一模型族的作业连着跑，切换代价计入排序。
+Principles (same as vhotseat):
+- Running work is never interrupted: an answer the LLM is writing gets finished; renders are not preempted.
+- Gate "before load / submit": ask `llm_admit` before LLM inference; go through `prepare_render` before submitting a render.
+- Fewer hand-overs: jobs of the same model family run back to back; switching cost counts in the ordering.
 
-估计来自历史 metrics（按模板 + 档位），没有历史时回退到模型注册表与档位成本比例。
+Estimates come from historical metrics (per template + tier); without history, fall back to the model registry and tier cost ratios.
 """
 
 from __future__ import annotations
@@ -25,11 +25,13 @@ from .memory import snapshot
 from .registry import ModelInfo, Template
 
 PRIORITY = {"interactive": 2, "agent": 1, "background": 0}
-AGING_PER_MIN = 20  # 每等待 1 分钟加的分（防饿死）
-AGING_CAP = 1500  # 50 min 后后台任务可超过新的 agent 任务，但永远不超过你的交互请求
-ANSWER_WAIT_S = 600  # 等 LLM 写完当前回答的上限（不打断回答）
-SAME_FAMILY_BONUS = 300  # 与当前常驻模型族相同 → 省一次切换
-LLM_LOAD_S = 15.4  # G0 实测
+AGING_PER_MIN = 20  # points added per minute of waiting (prevents starvation)
+# after 50 min background tasks can pass newer agent tasks, but never your interactive requests
+AGING_CAP = 1500
+# max wait for the LLM to finish its current answer (answers are not interrupted)
+ANSWER_WAIT_S = 600
+SAME_FAMILY_BONUS = 300  # same family as the resident model → saves a switch
+LLM_LOAD_S = 15.4  # G0 measured
 DEFAULT_EXEC_S = {"image": 20.0, "video": 330.0}
 
 
@@ -46,7 +48,7 @@ class Estimate:
 
 
 class Estimator:
-    """从已完成任务的 metrics 学习（中位数，抗个别异常），按档位成本比例外推未实测的档位。"""
+    """Learn from finished tasks' metrics (median, robust to outliers); extrapolate unmeasured tiers by tier cost ratios."""
 
     def __init__(self, store, registry):
         self.store, self.registry = store, registry
@@ -80,10 +82,12 @@ class Estimator:
         same = [h for h in hist if h["tier"] == tier]
         tier_peaks = [h["peak_gib"] for h in same if h["peak_gib"]]
         if model.adaptive or not tier_peaks:
-            # 自适应引擎有多少用多少，实测峰值不是最低需求；没有本档位数据时用注册表的值
+            # adaptive engines use whatever is available, so the measured peak is not the minimum
+            # need; without data for this tier use the registry value
             peak = model.peak_gib
         else:
-            peak = max(tier_peaks)  # 按档位，不让大档位的峰值抬高小档位的门槛
+            # per tier, so a big tier's peak does not raise a small tier's threshold
+            peak = max(tier_peaks)
         if same:
             return Estimate(
                 statistics.median(h["exec_s"] for h in same),
@@ -91,7 +95,7 @@ class Estimator:
                 template.model,
                 f"history n={len(same)}",
             )
-        # 外推：同模板其他档位按成本比例换算
+        # extrapolate: other tiers of the same template scaled by cost ratio
         for h in hist:
             if h["tier"] in template.tiers:
                 base = tier_cost(template.tiers[h["tier"]].values())
@@ -103,7 +107,7 @@ class Estimator:
 
 
 class LLMWorkload:
-    """本地 LLM 作为一个工作负载：是否加载、正在进行的推理数（推理中绝不卸载）。"""
+    """The local LLM as a workload: whether it is loaded and how many inferences are in flight (never unloaded mid-inference)."""
 
     def __init__(self, cfg):
         self.cfg = cfg
@@ -171,16 +175,18 @@ class ResourceManager:
         self.estimator = Estimator(store, registry)
         self.render_active: dict | None = None  # {"task_id", "family", "kind", "exclusive"}
         self.resident_family: str | None = None
-        self.listeners: list[Callable[[], None]] = []  # 渲染结束 → 唤醒被暂存的 LLM 作业
-        self.history: collections.deque = collections.deque(maxlen=720)  # 约 1 小时（5 s 一次）
-        self.executors: dict | None = None  # 由编排器注入：跨进程把关时直接问执行端
-        # 正在拍的 FreeVideo 电影（制片 film 阶段）：不经 prepare_render，但同样独占内存
+        self.listeners: list[Callable[[], None]] = []  # render finished → wake parked LLM jobs
+        self.history: collections.deque = collections.deque(maxlen=720)  # about 1 hour (every 5 s)
+        # injected by the orchestrator: cross-process gating asks the executors directly
+        self.executors: dict | None = None
+        # FreeVideo films being shot (production film stage): they skip prepare_render but hold the
+        # memory just the same
         self.films: set[str] = set()
 
         self._lock = threading.RLock()
 
     def record(self) -> None:
-        """心跳线程定期调用：记录资源曲线（控制台 Queue 页）。"""
+        """Called periodically by the heartbeat thread: records the resource curve (console Queue page)."""
         snap = self.snap()
         with self._lock:
             ra = self.render_active
@@ -190,11 +196,11 @@ class ResourceManager:
 
     @staticmethod
     def snap() -> dict:
-        return snapshot()  # 运行时查找，测试可替换模块级 snapshot
+        return snapshot()  # looked up at runtime so tests can replace the module-level snapshot
 
-    # ---- LLM 把关 ----
+    # ---- LLM gate ----
     def exclusive_classes(self) -> set[str]:
-        """独占内存的模板里用到的节点类型（如 FreeVideoGenerate），用来识别别人提交的同类任务。"""
+        """Node types used by memory-exclusive templates (e.g. FreeVideoGenerate), to recognise similar tasks submitted by others."""
         out: set[str] = set()
         for t in self.registry.templates.values():
             if self.registry.model_of(t).exclusive_llm:
@@ -203,8 +209,8 @@ class ResourceManager:
         return out - generic
 
     def external_exclusive(self) -> str | None:
-        """跨进程把关（vhotseat 的做法）：直接问共享的执行端，而不是只信本进程的记录。
-        任何来源（本 daemon、dev / CLI 进程、你在 ComfyUI 网页手动提交）的独占任务都算。"""
+        """Cross-process gate (vhotseat's approach): ask the shared executor directly instead of trusting only this process's records.
+        Exclusive tasks from any source count (this daemon, a dev / CLI process, your manual submissions in the ComfyUI page)."""
         now = time.monotonic()
         cached = getattr(self, "_ext_cache", None)
         if cached and now - cached[0] < 2:
@@ -217,7 +223,8 @@ class ResourceManager:
                 continue
             try:
                 payloads = probe()
-            except (httpx.HTTPError, OSError, ValueError, KeyError) as e:  # 执行端不可达：不当作忙
+            # executor unreachable: not treated as busy
+            except (httpx.HTTPError, OSError, ValueError, KeyError) as e:
                 self.log(f"{ex.name} queue check failed: {e}")
                 continue
             for graph in payloads:
@@ -228,7 +235,7 @@ class ResourceManager:
         return why
 
     def llm_admit(self) -> tuple[bool, str]:
-        """LLM 现在能不能推理？不能时调用方应暂存（不阻塞），渲染结束后会被唤醒。"""
+        """Can the LLM run inference now? If not, the caller should park the job (non-blocking); it is woken when the render ends."""
         with self._lock:
             ra = self.render_active
             if ra and ra["exclusive"]:
@@ -237,18 +244,21 @@ class ResourceManager:
                 return False, "FreeVideo film shooting — needs the memory"
         ext = self.external_exclusive()
         if ext and not self.llm.loaded():
-            return False, ext  # 已加载的 LLM 不在此卸载；只阻止在独占渲染期间重新加载
+            # an already-loaded LLM is not unloaded here; this only blocks reloading during an
+            # exclusive render
+            return False, ext
         if self.snap()["pressure"] >= 4:
             return False, "memory pressure critical"
         return True, ""
 
-    # ---- FreeVideo 电影把关（制片 film 阶段直接调 FreeVideo agent API，不经 prepare_render） ----
+    # ---- FreeVideo film gate (the production film stage calls the FreeVideo agent API directly,
+    # not via prepare_render) ----
     def prepare_film(self) -> list[str]:
-        """开拍 / 重拍前：等 LLM 写完当前回答再卸载。2026-11-05 实测：拍片时 27B LLM（25.5 GiB）
-        仍常驻，与 FreeVideo（51 GiB）共存触发 Jetsam，整机卡死重启。"""
+        """Before shooting / reshooting: wait for the LLM to finish its current answer, then unload it. Measured 2026-11-05: with the 27B LLM (25.5 GiB)
+        still resident while FreeVideo (51 GiB) was shooting, Jetsam kicked in and the whole machine froze and rebooted."""
         actions: list[str] = []
         if self.llm.loaded():
-            if not self.llm.wait_idle(ANSWER_WAIT_S):  # 不打断正在写的回答
+            if not self.llm.wait_idle(ANSWER_WAIT_S):  # do not interrupt an answer being written
                 raise ResourceBusy("LLM is still answering; start the film again in a moment")
             self.llm.unload()
             actions.append(f"unloaded LLM {self.cfg.llm_model} (FreeVideo film)")
@@ -260,8 +270,8 @@ class ResourceManager:
             self.films.add(film_id)
 
     def films_shooting(self, film_ids: set[str]) -> None:
-        """film 轮询每轮上报还在拍的电影。有片在拍：LLM 不得加载，已常驻的空闲后卸载
-        （覆盖 daemon 重启后接着拍、或拍片途中别处又加载了 LLM 的情况）；全部拍完：唤醒等待者。"""
+        """The film poller reports the films still shooting each round. While any is shooting: the LLM must not load, a resident one is unloaded once idle
+        (covers continuing a shoot after a daemon restart, or the LLM being loaded elsewhere mid-shoot); when all are done: wake the waiters."""
         with self._lock:
             was, self.films = self.films, set(film_ids)
         if self.films and self.llm.loaded() and self.llm.wait_idle(0):
@@ -274,10 +284,11 @@ class ResourceManager:
                 except Exception as e:  # noqa: BLE001
                     self.log(f"resource listener failed: {e}")
 
-    # ---- 渲染把关（替代 memgate.ensure） ----
+    # ---- render gate (replaces memgate.ensure) ----
     def prepare_render(self, template: Template, tier: str, executor, task_id: str) -> RenderGate:
         model = self.registry.model_of(template)
-        if model.resource == "cpu":  # 不占统一内存的大头：不等、不卸载、不记 render_active
+        # does not use the bulk of unified memory: no waiting, no unloading, no render_active
+        if model.resource == "cpu":
             return RenderGate(ok=True, required_gib=0, actions=["cpu job; memory gate skipped"])
         est = self.estimator.estimate(template, tier)
         res = RenderGate(ok=False, required_gib=round(est.peak_gib + self.cfg.memory_margin_gib, 1))
@@ -285,7 +296,7 @@ class ResourceManager:
         exclusive = model.exclusive_llm
 
         if exclusive and self.llm.loaded():
-            if not self.llm.wait_idle(ANSWER_WAIT_S):  # 不打断正在写的回答
+            if not self.llm.wait_idle(ANSWER_WAIT_S):  # do not interrupt an answer being written
                 res.actions.append("LLM still answering; gave up waiting")
                 res.waited_s = round(time.monotonic() - start, 1)
                 return res
@@ -296,7 +307,8 @@ class ResourceManager:
             self.sleep(2)
 
         switching = self.resident_family and self.resident_family != est.family
-        if switching and not executor.busy() and executor.release():  # 换模型族：先释放上一族
+        # switching model family: release the previous family first
+        if switching and not executor.busy() and executor.release():
             res.actions.append(f"released {self.resident_family} (switching to {est.family})")
             self.log(res.actions[-1])
             self.resident_family = None
@@ -362,7 +374,8 @@ class ResourceManager:
                 self.log(f"reloaded LLM (auto-unload after {self.cfg.llm_idle_ttl_s}s idle)")
                 if on_restored:
                     on_restored()
-            except Exception as e:  # noqa: BLE001 — 恢复失败不影响任务结果
+            # a failed restore does not affect the task result
+            except Exception as e:  # noqa: BLE001
                 self.log(f"reloading LLM failed: {e}")
         for cb in list(self.listeners):
             try:
@@ -370,7 +383,7 @@ class ResourceManager:
             except Exception as e:  # noqa: BLE001
                 self.log(f"resource listener failed: {e}")
 
-    # ---- 排队策略与 ETA ----
+    # ---- queue policy and ETA ----
     def score(self, task: dict, now: float, family: str | None) -> float:
         t = self.registry.templates.get(task["template"])
         wait_min = max(0.0, (now - task["created"]) / 60)
@@ -381,7 +394,7 @@ class ResourceManager:
         return s
 
     def choose_next(self, drafts: list[dict], family: str | None = None) -> dict | None:
-        """优先级 > 等待时间老化 > 与常驻模型族相同；同分按创建时间与候选序号。"""
+        """Priority > aging by waiting time > same family as the resident model; ties by creation time and candidate index."""
         if not drafts:
             return None
         now = time.time()
@@ -389,11 +402,11 @@ class ResourceManager:
         return max(drafts, key=lambda t: (self.score(t, now, fam), -t["created"], -(t["idx"] or 0)))
 
     def plan(self, drafts: list[dict]) -> list[dict]:
-        """按策略模拟出队顺序，给每个任务估计开始 / 结束时间（含切换代价）。不改共享状态。"""
+        """Simulate the dequeue order by policy and estimate each task's start / end time (including switching cost). Does not change shared state."""
         order, pending = [], list(drafts)
         with self._lock:
             fam, ra = self.resident_family, self.render_active
-        clock = time.time() + (60 if ra else 0)  # 正在跑的任务：粗略按 1 分钟剩余计
+        clock = time.time() + (60 if ra else 0)  # the running task: roughly 1 minute left
         while pending:
             nxt = self.choose_next(pending, fam or "")
             pending.remove(nxt)
@@ -401,7 +414,8 @@ class ResourceManager:
             if t is None:
                 continue
             est = self.estimator.estimate(t, nxt["tier"])
-            switch = 15.0 if fam and fam != est.family else 0.0  # 释放 + 冷启动的粗略代价
+            # rough cost of release + cold start
+            switch = 15.0 if fam and fam != est.family else 0.0
             start = clock + switch
             end = start + est.exec_s
             order.append(

@@ -1,8 +1,8 @@
-"""W2：在 ComfyUI 里改完整 workflow，再导回 aco_lw（设计稿 L4 受控探索）。
+"""W2: edit the full workflow in ComfyUI, then import it back into aco_lw (design doc L4, controlled exploration).
 
-生命周期：导入（API 格式）→ 与基础模板对比 + /object_info 校验 → 候选变体 → 最低档试跑
-→ 用户确认后晋升为正式模板（data/templates/，所有项目可用）；或被否决。
-候选变体只能手动调用，规划器看不到；晋升前不会进入任何自动流程。
+Life cycle: import (API format) → diff against the base template + /object_info validation → candidate variant → trial run at the lowest tier
+→ promoted to a real template after the user confirms (data/templates/, available to every project); or rejected.
+Candidate variants can only be invoked by hand and the planner does not see them; nothing automatic uses them before promotion.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ def is_api_graph(g) -> bool:
 
 
 def diff_graph(base: dict, new: dict) -> dict:
-    """节点增删、类型变化、参数与连线变化（按节点 ID 对齐；ComfyUI 导入 / 导出 API 会保留 ID）。"""
+    """Nodes added / removed, type changes, parameter and link changes (aligned by node ID; ComfyUI's API import / export keeps IDs)."""
     added = [{"id": k, "class": v["class_type"]} for k, v in new.items() if k not in base]
     removed = [{"id": k, "class": v["class_type"]} for k, v in base.items() if k not in new]
     retyped, changed, rewired = [], [], []
@@ -71,7 +71,7 @@ class Workshop:
         self.dir = self.orch.cfg.data_dir / "variants"
         self.user_dir = self.orch.cfg.data_dir / "templates"
 
-    # ---- 读 ----
+    # ---- read ----
     def _meta_path(self, vid: str) -> Path:
         return self.dir / vid / "meta.json"
 
@@ -98,7 +98,7 @@ class Workshop:
         return out
 
     def export(self, task_id: str) -> tuple[str, bytes]:
-        """任务实际提交的 API workflow，用于拖进 ComfyUI 画布编辑。"""
+        """The API workflow the task actually submitted, for dragging onto the ComfyUI canvas to edit."""
         task = self.store.get(task_id)
         if task is None:
             raise StudioError(f"task {task_id} not found")
@@ -107,7 +107,7 @@ class Workshop:
             raise StudioError("this task has no submitted workflow yet")
         return f"aco_lw-{task['template']}-{task_id}.json", p.read_bytes()
 
-    # ---- 导入 ----
+    # ---- import ----
     def import_graph(
         self,
         data: bytes,
@@ -126,7 +126,7 @@ class Workshop:
             raise StudioError("not an API-format workflow — in ComfyUI use Workflow → Export (API)")
         reg = self.orch.registry
         t = reg.template(base)
-        while t.origin == "variant":  # 变体上再改：对齐到最初的正式模板
+        while t.origin == "variant":  # a variant of a variant: align to the original real template
             t = reg.template(t.meta["base"])
         pid = project_id or self.studio.current_project()["id"]
         problems = check_graph(graph, self.orch.executor_for(t).object_info())
@@ -198,14 +198,14 @@ class Workshop:
         return meta
 
     def _diff_base(self, t, task_id: str | None) -> dict:
-        """对比基准：导出的那个任务实际提交的 workflow（只显示你在 ComfyUI 里的改动）；没有则用模板。"""
+        """Diff baseline: the workflow actually submitted by the exported task (so only your ComfyUI edits show); the template if there is none."""
         if task_id:
             p = self.store.task_dir(task_id) / "prompt.json"
             if p.exists():
                 return json.loads(p.read_text())
         return t.graph
 
-    # ---- 试跑 / 晋升 / 否决 ----
+    # ---- trial / promote / reject ----
     def trial(self, vid: str, origin: str = "web") -> dict:
         meta = self.refresh(vid)
         if meta["status"] not in ("candidate", "trial_ok"):
@@ -232,8 +232,8 @@ class Workshop:
         return self._save(meta)
 
     def graph_params(self, t, meta: dict) -> dict:
-        """试跑参数取自你在 ComfyUI 里改过的图本身（尺寸由档位决定）；
-        参考图例外：图里是 ComfyUI 侧的文件名，回退到来源任务的本地路径。"""
+        """Trial parameters come from the graph you edited in ComfyUI (size decided by the tier);
+        except reference images: the graph holds ComfyUI-side filenames, so fall back to the source task's local paths."""
         params = {}
         src = self.store.get(meta["task_id"]) if meta.get("task_id") else None
         for name, s in t.slots.items():
@@ -284,7 +284,8 @@ class Workshop:
         tpl = yaml.safe_load((src / "template.yaml").read_text())
         tpl["name"] = name
         tpl["title"] = title or tpl["title"].replace(f" · variant {vid}", f" · {name}")
-        tpl["tiers"][meta["trial"]["tier"]]["verified"] = True  # 只有试跑过的档位算已实测
+        # only the tier that was trial-run counts as measured
+        tpl["tiers"][meta["trial"]["tier"]]["verified"] = True
         tpl["source"] = f"promoted from variant {vid} of {meta['base']}"
         (dst / "template.yaml").write_text(yaml.safe_dump(tpl, allow_unicode=True, sort_keys=False))
         meta.update(status="promoted", promoted_as=name)

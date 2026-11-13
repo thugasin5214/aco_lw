@@ -202,7 +202,7 @@ kbd{font:11.5px ui-monospace,monospace;border:1px solid var(--line);border-radiu
 .modal.on{display:flex}
 .modal .box{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;width:min(760px,100%)}
 .modal .box h2{margin:0 0 12px;font-size:16px;display:flex;gap:8px;align-items:center}
-/* lightbox：审阅 / 产物里的图片、视频放大全屏看 */
+/* lightbox: view review / output images and videos full screen */
 #lb-open{position:fixed;z-index:15;display:none;width:30px;height:30px;border-radius:8px;border:0;
   background:rgba(0,0,0,.62);color:#fff;font-size:16px;line-height:30px;cursor:zoom-in;padding:0}
 #lb-open.on{display:block}
@@ -604,7 +604,7 @@ $("#modal").addEventListener("click", e => { if (e.target.id === "modal") closeM
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
 
 /* ================= lightbox ================= */
-// 任何 ≥80px 的图片 / 视频：悬停右上角出现 ⤢，或双击 → 全屏看；←/→ 在同组里切换，滚轮缩放、拖动平移。
+// any image / video ≥ 80px: hover shows ⤢ in the top-right corner, or double-click → full screen; ←/→ switch within the group, wheel zooms, drag pans.
 const LB = {list: [], i: 0, z: 1, x: 0, y: 0, hover: null};
 const LB_GROUP = ".review-item, .grid, #gallery, .media-row, .chips, section.view";
 const lbMediaOk = el => el && (el.tagName === "IMG" || el.tagName === "VIDEO") && !el.closest("#lb")
@@ -645,7 +645,7 @@ function lbApply(){
 function lbZoom(f, cx, cy){
   const img = $("#lb .lb-stage img"); if (!img) return;
   const r = img.getBoundingClientRect(), z = Math.min(12, Math.max(1, LB.z * f));
-  // 以光标为中心缩放：保持光标下的像素不动
+  // zoom around the cursor: keep the pixel under the cursor in place
   const ox = (cx - r.left) / LB.z, oy = (cy - r.top) / LB.z;
   LB.x += (LB.z - z) * ox; LB.y += (LB.z - z) * oy; LB.z = z;
   if (z === 1) { LB.x = 0; LB.y = 0; }
@@ -673,7 +673,7 @@ $("#lb .lb-full").onclick = () => document.fullscreenElement
 $("#lb .lb-fit").onclick = () => {
   const img = $("#lb .lb-stage img"); if (!img) return;
   if (LB.z !== 1) { LB.z = 1; LB.x = 0; LB.y = 0; lbApply(); return; }
-  const shown = Math.min(innerWidth / img.naturalWidth, innerHeight / img.naturalHeight);  // contain 后的缩放
+  const shown = Math.min(innerWidth / img.naturalWidth, innerHeight / img.naturalHeight);  // scale after contain
   lbZoom(Math.max(1.01, 1 / shown), innerWidth / 2, innerHeight / 2);
 };
 $("#lb .lb-stage").addEventListener("click", e => { if (e.target.classList.contains("lb-stage")) lbClose(); });
@@ -692,7 +692,7 @@ $("#lb .lb-stage").addEventListener("pointerdown", e => {
 });
 document.addEventListener("keydown", e => {
   if (!$("#lb").classList.contains("on")) return;
-  e.stopImmediatePropagation();  // 打开时不触发审阅快捷键（R 重做、Enter 选中等）
+  e.stopImmediatePropagation();  // while open, review shortcuts do not fire (R redo, Enter pick, ...)
   if (e.key === "Escape") lbClose();
   else if (e.key === "ArrowLeft") lbStep(-1);
   else if (e.key === "ArrowRight") lbStep(1);
@@ -761,7 +761,7 @@ function renderDag(){
   };
   roots.forEach(r => place(r, 0));
   GRAPH.forEach(n => { if (!pos[n.id]) place(n, 0); });
-  // 多个上游的节点（如分镜依赖设定与全部定妆图）：列 = 最长依赖路径；同列按树形位置排序并消除重叠
+  // nodes with several upstreams (e.g. the storyboard depends on the bible and all casting images): column = longest dependency path; within a column sort by tree position and remove overlaps
   const depth = {}, visiting = new Set();
   const dep = n => { if (n.id in depth) return depth[n.id]; if (visiting.has(n.id)) return 0; visiting.add(n.id);
     const ps = n.parents.filter(p => byId[p]); depth[n.id] = ps.length ? 1 + Math.max(...ps.map(p => dep(byId[p]))) : 0; return depth[n.id]; };
@@ -978,7 +978,7 @@ async function openTweak(taskId){
 
 /* ================= review ================= */
 
-/* ---- 规划阶段的待审核（制片） ---- */
+/* ---- planning stages awaiting review (productions) ---- */
 let SREVIEW = [];
 function summarize(d){
   if (!d || typeof d !== "object") return "";
@@ -1159,7 +1159,7 @@ function chatHtml(p, msgs, canChat){
   let lastLlm = "";
   const bubbles = msgs.map(m => {
     const cls = m.channel === "system" ? "sys" : m.channel === "agent" ? "agent" : m.direction === "in" ? "in" : "out";
-    let text = m.text;  // 渠道回复会重复 LLM 原话（Telegram 需要）；控制台只显示新增部分
+    let text = m.text;  // channel replies repeat the LLM's words (Telegram needs them); the console shows only the new part
     if (m.channel === "llm") lastLlm = m.text;
     else if (m.direction === "out" && lastLlm && text.startsWith(lastLlm)) { text = text.slice(lastLlm.length).trim(); lastLlm = ""; if (!text) return ""; }
     const st = m.meta || {};
@@ -1548,7 +1548,7 @@ $("#prod-new").onclick = async () => {
   };
 };
 
-/* ---- 暂停 / 继续 ---- */
+/* ---- pause / resume ---- */
 function askPause(onPick){
   modal(`<h3>${t("pause.ask")}</h3><div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">
     <button class="btn" id="pz-soft">${t("pause.soft")}</button><button class="btn danger" id="pz-hard">${t("pause.hard")}</button>

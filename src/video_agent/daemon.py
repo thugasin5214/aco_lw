@@ -1,8 +1,8 @@
-"""常驻服务 `va daemon`：Worker（串行出图）+ 规划器队列（按需唤醒 LLM）+ Telegram 监听 + Web。
+"""Long-running service `va daemon`: Worker (serial rendering) + planner queue (wakes the LLM on demand) + Telegram listener + web.
 
-- Worker 只经编排器执行 draft 任务；一轮候选全部跑完后通知审阅。
-- Actions 是与渠道无关的入口：Telegram 与 Web 控制台共用，所有消息写入对话历史。
-- 命令与按钮立即执行；自由文本进规划器队列。视频生成占内存时规划器排队，不抢占。
+- The Worker executes draft tasks only through the orchestrator; when a whole round of candidates is done, review is notified.
+- Actions is the channel-independent entry: shared by Telegram and the web console; every message goes into chat history.
+- Commands and buttons run immediately; free text goes to the planner queue. While a video render holds memory the planner waits, never preempts.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ class Worker(threading.Thread):
         self.current: dict | None = None
         self.hold: Callable[[dict], bool] = lambda task: (
             False
-        )  # True：先别执行（例如所属制片已暂停）
+        )  # True: do not run it yet (e.g. its production is paused)
 
     def run(self) -> None:
         try:
@@ -59,7 +59,8 @@ class Worker(threading.Thread):
             if self.store.get_kv("paused"):
                 self.stop.wait(2)
                 continue
-            if time.monotonic() - last_reconcile > 120:  # 定期收回“观察超时”后才跑完的任务
+            # periodically collect tasks that finished after their watch timed out
+            if time.monotonic() - last_reconcile > 120:
                 last_reconcile = time.monotonic()
                 for tid, state in self.orch.reconcile_timeouts():
                     log.info("Collected %s after timeout: %s", tid, state)
@@ -90,7 +91,7 @@ class Worker(threading.Thread):
             self._after(task)
 
     def stop_current(self, only: Callable[[dict], bool] = lambda task: True) -> dict | None:
-        """中断正在执行的任务（只中断自己提交的那个 job）；返回被中断的任务。"""
+        """Interrupt the running task (only the job we submitted); returns the interrupted task."""
         cur = self.current
         if not cur or not only(cur):
             return None
@@ -104,7 +105,7 @@ class Worker(threading.Thread):
         return t
 
     def heartbeat(self) -> None:
-        """独立线程写心跳：渲染时 Worker 卡在一次长任务里，心跳不能跟着停。"""
+        """Heartbeat in its own thread: while rendering, the Worker is stuck in one long task and the heartbeat must not stop with it."""
         while not self.stop.is_set():
             self.store.set_kv(
                 "daemon",
@@ -136,23 +137,25 @@ EXPLICIT_HD = ("高清", "1080", "720p", "4k", "full hd")
 
 
 def explicit_tier(text: str, tier: str) -> bool:
-    """你在这句话里明确点名了档位（如 hd、高清、10s），视为批准使用未实测档位。"""
+    """You named the tier explicitly in your message (e.g. hd, 高清, 10s): counts as approval to use an unmeasured tier."""
     t = text.lower()
     parts = tier.lower().split("-")
-    if all(p in t for p in parts):  # “hd” / “hd-60s” 需要 hd 与 60s 都出现
+    if all(p in t for p in parts):  # "hd" / "hd-60s" needs both hd and 60s to appear
         return True
     return parts[0] == "hd" and any(k in t for k in EXPLICIT_HD)
 
 
 class Actions:
-    """渠道无关的交互入口。reply(text, buttons=None) 把回复送回来源渠道。"""
+    """Channel-independent interaction entry. reply(text, buttons=None) sends the answer back to the source channel."""
 
     def __init__(self, studio: Studio, planner: Planner, worker: Worker | None = None):
         self.studio, self.planner, self.worker = studio, planner, worker
         self.store = studio.store
-        self.push_round: Callable[[dict], None] | None = None  # 由 Daemon 注入（推送到 Telegram）
+        # injected by Daemon (push to Telegram)
+        self.push_round: Callable[[dict], None] | None = None
         self.jobs: queue.Queue[tuple] = queue.Queue()
-        # 各渠道的主动发送（agent 在后台继续时用；控制台靠轮询对话历史，不需要推送）
+        # proactive sends per channel (used when the agent continues in the background; the console
+        # polls chat history, no push needed)
         self.channel_send: dict[str, Reply] = {
             "web": lambda text, buttons=None: None,
             "cli": lambda text, buttons=None: None,
@@ -166,7 +169,7 @@ class Actions:
         )
         studio.decision_listeners.append(self.runtime.on_round_decided)
 
-    # ---- 规划器队列（单线程，按需唤醒 LLM） ----
+    # ---- planner queue (single thread, wakes the LLM on demand) ----
     def planner_loop(self, stop: threading.Event) -> None:
         while not stop.is_set():
             try:
@@ -174,10 +177,12 @@ class Actions:
             except queue.Empty:
                 continue
             job, reply = item[0], item[1]
-            gated = item[2] if len(item) > 2 else True  # agent 的步骤自己把关（不阻塞队列）
+            # agent steps gate themselves (they do not block the queue)
+            gated = item[2] if len(item) > 2 else True
             warned = False
             rm = self.studio.orch.resources
-            while gated and not stop.is_set():  # LLM 推理前把关：资源不够就等渲染结束
+            # gate before LLM inference: without resources, wait for the render to end
+            while gated and not stop.is_set():
                 if rm.llm_admit()[0]:
                     break
                 if not warned:
@@ -195,16 +200,17 @@ class Actions:
     def _say(self, channel: str, reply: Reply) -> Reply:
         def say(text: str, buttons=None) -> None:
             meta = {"buttons": buttons} if buttons else {}
-            self.studio.log(channel, "out", text, **meta)  # 按钮也存下，控制台对话里可点
+            # buttons are stored too, so they are clickable in the console chat
+            self.studio.log(channel, "out", text, **meta)
             reply(text, buttons)
 
         return say
 
-    # ---- 入站文字 ----
+    # ---- inbound text ----
     def inbound(
         self, channel: str, text: str, reply: Reply, attachments: list[dict] | None = None
     ) -> None:
-        """attachments：已保存的上传 [{id, name}]（控制台上传或 Telegram 发图）。"""
+        """attachments: saved uploads [{id, name}] (console upload or an image sent in Telegram)."""
         meta = {"attachments": attachments} if attachments else {}
         msg_id = self.studio.log(channel, "in", text, **meta)
         say = self._say(channel, reply)
@@ -212,7 +218,7 @@ class Actions:
             return self.command(channel, text, say)
         _, sid = self._ctx()
         if self.runtime.answer_pending_question(channel, sid, text):
-            return  # 你在回答 agent 的提问，运行接着走
+            return  # you are answering the agent's question; the run continues
         pending = self.store.get_kv(f"pending:{channel}")
         if pending:
             self.store.set_kv(f"pending:{channel}", None)
@@ -271,19 +277,23 @@ class Actions:
                 say(plan.reply)
                 return
             parent = None
-            if ref:  # 对某一轮的反馈：关闭该轮（打回 + 原话作批注）并连线
+            # feedback on a round: close that round (reject + your words as the note) and link it
+            if ref:
                 parent = ref["id"]
                 if ref["state"] == "review":
                     self.studio.reject(ref["id"], text, origin=channel)
             tpl = self.studio.orch.registry.template(plan.template)
             kind, tier, asked = tpl.kind, plan.tier, None
-            approved = bool(tier) and explicit_tier(text, tier)  # 你在原话里点名了档位
+            # you named the tier in your message
+            approved = bool(tier) and explicit_tier(text, tier)
             if (
                 kind == "video"
                 and tier in tpl.tiers
                 and not tpl.tiers[tier].verified
                 and not approved
-            ):  # 视频的未实测档位可能超出内存预算：先用已实测档位出，未实测档位要你点按钮确认
+                # an unmeasured video tier may exceed the memory budget: use a measured tier first; the
+                # unmeasured one needs your button press
+            ):
                 asked = tier
                 tier = next((k for k, v in tpl.tiers.items() if v.verified), tpl.default_tier)
             rnd = self.studio.start_round(
@@ -296,7 +306,8 @@ class Actions:
                 request=text,
                 parent_round=parent,
                 project_id=pid,
-                # 图片档位风险低，允许未实测档位；视频必须用已实测档位（内存）
+                # image tiers are low-risk, unmeasured ones allowed; video must use a measured tier
+                # (memory)
                 allow_unverified=kind == "image" or approved,
             )
             say(
@@ -334,7 +345,8 @@ class Actions:
     ) -> None:
         rnd = self.studio.reject(round_id, note, origin=channel)
         say(tr("reject_ack", note=note))
-        # 记下“还欠一个按意见派生的新轮”：任务只在内存队列里，daemon 重启后据此补上
+        # record "a follow-up round from the note is still owed": the task only lives in the
+        # in-memory queue, so a daemon restart can redo it from this
         rnd = self.store.update_round(round_id, decision={**rnd["decision"], "followup": "pending"})
         self.followup_note(rnd, note, channel, say, msg_id)
 
@@ -374,7 +386,7 @@ class Actions:
         self.jobs.put((job, say))
 
     def reopen(self, round_id: str, channel: str, say: Reply) -> None:
-        """更改审阅结果：轮回到待审阅，并重新推送候选。"""
+        """Change a review decision: the round goes back to review and its candidates are pushed again."""
         rnd, running = self.studio.reopen(round_id, origin=channel)
         extra = tr("reopen_children", n=running) if running else ""
         say(tr("reopened", t=rnd["title"] or rnd["template"], c=extra))
@@ -382,16 +394,16 @@ class Actions:
             self.push_round(rnd)
 
     def prewarm_current(self) -> None:
-        """LLM 被视频卸载后重新加载：后台预热当前会话的前缀缓存。"""
+        """The LLM is reloaded after a video unloaded it: prewarm the current session's prefix cache in the background."""
         _, sid = self._ctx()
         if self.store.get_kv("planner_style", "agent") == "agent":
             self.jobs.put((lambda: self.runtime.prewarm(sid), lambda *a, **k: None, False))
         else:
             self.jobs.put((lambda: self.planner.prewarm(sid), lambda *a, **k: None))
 
-    # ---- 按钮（Telegram callback_data 与 Web 共用格式） ----
+    # ---- buttons (same format for Telegram callback_data and the web) ----
     def button(self, channel: str, data: str, reply: Reply) -> bool:
-        """返回 True 表示该消息上的按钮已失效、可清除。"""
+        """Returns True when the buttons on that message are now stale and can be cleared."""
         say = self._say(channel, reply)
         kind, _, rest = data.partition(":")
         try:
@@ -421,7 +433,7 @@ class Actions:
                 new = self.studio.redo(rest, origin=channel)
                 say(tr("redo_queued", n=new["n"]))
                 return True
-            if kind == "u":  # 你确认后才用未实测档位
+            if kind == "u":  # use the unmeasured tier only after you confirm
                 rid, tier = rest.split(":")
                 src = self.store.get_round(rid)
                 new = self.studio.start_round(
@@ -438,7 +450,7 @@ class Actions:
                 )
                 say(tr("try_tier_queued", t=tier, n=new["n"]))
                 return True
-            if kind == "a":  # agent 的审批请求
+            if kind == "a":  # an approval request from the agent
                 mid, yn = rest.split(":")
                 say(self.runtime.on_approval(int(mid), yn in ("yes", "always"), yn == "always"))
                 return True
@@ -450,7 +462,7 @@ class Actions:
                 m = self.studio.set_memory(int(mid), act)
                 say(tr("mem_accepted" if act == "accept" else "mem_ignored", t=m["text"]))
                 return True
-            if kind == "k":  # 确认删除会话
+            if kind == "k":  # confirm deleting a session
                 out = self.studio.delete_session(rest)
                 say(
                     tr(
@@ -469,7 +481,7 @@ class Actions:
         say(tr("unknown_button", d=data))
         return False
 
-    # ---- 命令 ----
+    # ---- commands ----
     def command(self, channel: str, text: str, say: Reply) -> None:
         cmd, *args = text.split()
         cmd = cmd.split("@")[0].lower()
@@ -693,12 +705,12 @@ class Actions:
     def _llm_state(self) -> str:
         try:
             loaded = self.studio.orch.resources.llm.loaded()
-        except Exception:  # noqa: BLE001 — LM Studio 不在线：不影响 /status
+        except Exception:  # noqa: BLE001 — LM Studio offline: does not affect /status
             return ""
         return tr("status_llm_loaded") if loaded else tr("status_llm_unloaded")
 
     def _status_extra(self) -> str:
-        """不需要 LLM 的进度：agent 队列、拍片、进行中的制片。"""
+        """Progress that needs no LLM: agent queue, film shoots, active productions."""
         out = tr("status_bypass") if self.runtime.permission_mode() == "bypass" else ""
         active = len(self.store.runs(None, "running"))
         waiting = len(self.store.runs(None, "waiting_resources"))
@@ -713,7 +725,8 @@ class Actions:
                 continue
             try:
                 stages = prod.plan(p["id"])["stages"]
-            except Exception:  # 计划算不出来时跳过这一部，不影响 /status
+            # if the plan cannot be computed, skip this part; does not affect /status
+            except Exception:
                 log.warning("status: plan for %s failed", p["id"], exc_info=True)
                 continue
             cur = next((s for s in stages if s["state"] not in ("completed",)), None)
@@ -757,11 +770,14 @@ class Daemon:
             freevideo=fv,
         )
         if self.production.film is not None:
-            self.production.film.notify_round = self.notify_round  # 导入的一轮 take：推送审阅
+            # an imported round of takes: push for review
+            self.production.film.notify_round = self.notify_round
             self.production.film.notify_text = self.notify_film
-            self.production.film.resources = self.orch.resources  # 拍片独占内存：卸载 / 拦住 LLM
+            # shooting holds the memory: unload / block the LLM
+            self.production.film.resources = self.orch.resources
         self.production.listeners.append(self.notify_stage)
-        self.orch.resources.listeners.append(self.production.wake)  # 渲染结束 → 排队的 skill 再试
+        # render finished → queued skills try again
+        self.orch.resources.listeners.append(self.production.wake)
         self.actions.production = self.production
         self.actions.runtime.production = self.production
         from .comfy_bridge import ComfyBridge
@@ -785,7 +801,8 @@ class Daemon:
             def send_files(ch: str, items: list) -> None:
                 if ch != "telegram":
                     return default_send(ch, items)
-                self.bot.send_files(items)  # 也记进当前会话，控制台的对话历史里看得到
+                # also logged into the current session so the console's chat history shows it
+                self.bot.send_files(items)
                 self.studio.log("telegram", "out", "\n".join(f"📎 {cap}: {p}" for p, cap in items))
 
             self.actions.runtime.send_files = send_files
@@ -802,10 +819,12 @@ class Daemon:
         )
         if self.bot:
             self.bot.send_round(rnd, tasks, self.orch.store.task_dir)
-        self.actions.runtime.on_round_ready(rnd)  # 在等这轮的 agent 运行带着结果继续
-        self.production.on_round_ready(rnd)  # 制片阶段：自动通过 / 通知审阅
+        # agent runs waiting for this round continue with the result
+        self.actions.runtime.on_round_ready(rnd)
+        self.production.on_round_ready(rnd)  # production stages: auto-approve / notify for review
 
-    # ---- 制片：skill 阶段的 LLM（本地优先；不够时按回退链；在线须 allow_online） ----
+    # ---- productions: LLM for skill stages (local first; fallback chain when short of resources;
+    # online needs allow_online) ----
     def skill_llm(self, stage, messages: list[dict], schema: dict) -> tuple[str, dict]:
         from .agent_cli import AgentCLI
         from .planner import make_named_backend
@@ -826,7 +845,7 @@ class Daemon:
             res = make_named_backend(cfg, self.orch.store, name).chat(messages, schema, 8192)
             return res.text, res.stats()
 
-        if stage.llm:  # 阶段指定了后端
+        if stage.llm:  # the stage names a backend
             if stage.llm in online and not cfg.allow_online:
                 raise Park(f"stage {stage.id} uses {stage.llm} but allow_online is off")
             if stage.llm in online:
@@ -860,11 +879,12 @@ class Daemon:
         key = f" · {ev['key']}" if ev["key"] != "main" else ""
         text = tr(f"stage_{ev['status']}", p=prod["title"], s=ev["title"] + key)
         self.studio.log("system", "out", text, prod["project_id"])
-        if self.bot and not ev["artifact"].get("round_id"):  # 渲染阶段的轮已经单独推送过
+        # render stages' rounds were already pushed separately
+        if self.bot and not ev["artifact"].get("round_id"):
             self.bot.broadcast(text)
 
     def resume_followups(self) -> int:
-        """重启前没做完的“按打回意见派生新轮”：重新排队（只认带 pending 标记的，旧记录不动）。"""
+        """Re-queue "follow-up rounds from reject notes" not finished before a restart (only ones marked pending; old records untouched)."""
         n = 0
         for r in self.orch.store.rounds(None, "closed"):
             d = r.get("decision") or {}

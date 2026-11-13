@@ -1,11 +1,11 @@
-"""把一次请求交给本机的 agent CLI（Claude Code / Codex，用它们自己的在线模型与登录）。
+"""Hand one request to a local agent CLI (Claude Code / Codex, with their own online models and logins).
 
-它们只拿到 aco_lw 的 MCP 工具：Claude Code 用 `--tools ""` 关掉全部内置工具（shell、读写文件、联网），
-Codex 用只读沙箱。所有工具调用经 daemon 执行，执行策略、审批、资源调度不变。
+They only get aco_lw's MCP tools: Claude Code uses `--tools ""` to turn off every built-in tool (shell, file read/write, web),
+Codex uses a read-only sandbox. Every tool call is executed by the daemon; execution policy, approvals and resource scheduling are unchanged.
 
-`freevideo`：交给 FreeVideo 的 agent——即 Claude Code 再加上 FreeVideo 自己的 MCP 服务（配置取自
-FreeVideo 的 /freevideo/agent/connect，只写进本次运行的 --mcp-config，不改你的全局 Claude Code 配置；
-token 由 FreeVideo 的 MCP 服务自己读取）。它提交的生成在 FreeVideo 队列里，aco 的资源闸门照样看得见。
+`freevideo`: hand off to FreeVideo's agent — i.e. Claude Code plus FreeVideo's own MCP server (config taken from
+FreeVideo's /freevideo/agent/connect, written only into this run's --mcp-config, your global Claude Code config is untouched;
+the token is read by FreeVideo's MCP server itself). What it submits sits in the FreeVideo queue, so aco's resource gate still sees it.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ class AgentCLI:
         if name not in ("claude_code", "codex", "freevideo"):
             raise ValueError(f"unknown agent CLI {name}")
         self.name, self.cfg = name, cfg
-        self.extra_mcp = extra_mcp or {}  # 额外的 MCP 服务 {名字: 启动配置}
+        self.extra_mcp = extra_mcp or {}  # extra MCP servers {name: launch config}
 
     def mcp_server(self, run_id: str, url: str) -> dict:
         return {
@@ -56,13 +56,13 @@ class AgentCLI:
                 "--output-format",
                 "json",
                 "--tools",
-                "",  # 关掉全部内置工具
+                "",  # turn off all built-in tools
                 "--strict-mcp-config",
                 "--mcp-config",
                 str(cfg_file),
                 "--allowedTools",
-                allowed,  # 只自动批准这些 MCP 服务的工具
-                "--no-session-persistence",  # 不写进你的 Claude Code 会话历史
+                allowed,  # auto-approve only these MCP servers' tools
+                "--no-session-persistence",  # do not write into your Claude Code session history
             ]
             if self.cfg.claude_model:
                 cmd += ["--model", self.cfg.claude_model]
@@ -86,11 +86,13 @@ class AgentCLI:
         ]
         if self.cfg.codex_model:
             cmd += ["-m", self.cfg.codex_model]
-        return [*cmd, "-"]  # 指令从 stdin 读
+        return [*cmd, "-"]  # instructions come from stdin
 
     def run(self, run_id: str, prompt: str, url: str) -> tuple[str, dict]:
-        # 仓库之外的空临时目录：CLI 拿不到任何项目文件或 git 信息（实测：在仓库里会带上提交记录）
-        # 固定一个目录（不每次新建，免得 CLI 为每个目录建一份记忆）；每次运行一个子文件只放配置
+        # an empty temp directory outside the repo: the CLI sees no project files or git info
+        # (measured: inside the repo it picks up commit history)
+        # one fixed directory (not a new one each time, so the CLI does not keep a memory per
+        # directory); each run gets a sub-file holding only its config
         workdir = Path(tempfile.gettempdir()) / "aco_lw_agent_cli"
         workdir.mkdir(exist_ok=True)
         t = time.monotonic()
@@ -127,7 +129,7 @@ class AgentCLI:
 
     @staticmethod
     def _codex_error(stdout: str) -> str | None:
-        """codex exec --json 把错误放在事件流里（turn.failed / error），而不是 stderr。"""
+        """codex exec --json reports errors in the event stream (turn.failed / error), not on stderr."""
         for line in reversed(stdout.splitlines()):
             try:
                 ev = json.loads(line)
@@ -137,7 +139,7 @@ class AgentCLI:
                 msg = (
                     (ev.get("error") or {}).get("message") if ev.get("error") else ev.get("message")
                 )
-                try:  # 内层常常还是一段 JSON
+                try:  # the inner part is often JSON again
                     inner = json.loads(msg)
                     msg = (inner.get("error") or {}).get("message") or msg
                 except (TypeError, json.JSONDecodeError):

@@ -1,11 +1,11 @@
-"""Skill 库：兼容 Claude Code 的 SKILL.md 格式（YAML frontmatter + 说明正文 + references/）。
+"""Skill library: compatible with Claude Code's SKILL.md format (YAML frontmatter + body + references/).
 
-来源（后者覆盖前者的同名 skill）：
-- 内置：仓库 `skills/`
-- 用户：`data/skills/`（把外部 skill 目录拷进来即可；不默认扫描 ~/.claude/skills）
+Sources (later ones override same-named skills from earlier ones):
+- built-in: repo `skills/`
+- user: `data/skills/` (copy external skill directories in; ~/.claude/skills is not scanned by default)
 
-制片工作流的 skill 阶段按名字引用 skill。skill 只产出数据（按阶段声明的 JSON Schema 校验），
-不执行任何副作用；skill 目录里的脚本不会被运行。
+Skill stages of production workflows reference skills by name. A skill only produces data (validated against the stage's JSON Schema)
+and has no side effects; scripts inside a skill directory are never run.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ class Skill:
     meta: dict = field(default_factory=dict)
 
     def references(self) -> dict[str, str]:
-        """references/ 下的 Markdown，拼进提示词（skill 自带的背景资料）。"""
+        """Markdown under references/, appended to the prompt (the skill's own background material)."""
         ref = self.dir / "references"
         if not ref.is_dir():
             return {}

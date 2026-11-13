@@ -1,6 +1,6 @@
-"""参数校验与模板渲染：纯函数，不碰网络。
+"""Parameter validation and template rendering: pure functions, no network.
 
-档位决定尺寸/时长；生产任务只能选档。档位之外的尺寸类参数一律拒绝。
+Tiers decide size / duration; production tasks can only pick a tier. Size-like parameters outside a tier are refused.
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ def _coerce(name: str, slot: Slot, v):
 def resolve(
     t: Template, params: dict, tier: str | None = None, allow_unverified: bool = False
 ) -> tuple[str, dict]:
-    """合并档位与用户参数并校验，返回 (档位名, 完整参数)。"""
+    """Merge tier and user parameters and validate; returns (tier name, full parameters)."""
     tier = tier or t.default_tier
     if tier not in t.tiers:
         raise ParamError(f"{t.name} 没有档位 {tier}；可选：{', '.join(t.tiers)}")
@@ -73,7 +73,7 @@ def resolve(
 
 
 def render(t: Template, params: dict, output_prefix: str | None = None) -> dict:
-    """把参数写入节点槽位；image 槽位的值须已是 ComfyUI 上传后的文件名。"""
+    """Write parameters into node slots; an image slot's value must already be the filename ComfyUI gave after upload."""
     g = copy.deepcopy(t.graph)
     for name, v in params.items():
         s = t.slots[name]
@@ -84,13 +84,13 @@ def render(t: Template, params: dict, output_prefix: str | None = None) -> dict:
 
 
 def params_hash(template: Template, params: dict) -> str:
-    """查重键：模板版本 + 完整参数。"""
+    """Dedup key: template version + full parameters."""
     blob = json.dumps({"t": template.name, "sha": template.sha, "p": params}, sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
 def check_graph(graph: dict, object_info: dict) -> list[str]:
-    """按 ComfyUI /object_info 校验节点类型、字段与数值范围；返回问题列表。"""
+    """Validate node types, fields and value ranges against ComfyUI /object_info; returns a list of problems."""
     problems = []
     for nid, node in graph.items():
         info = object_info.get(node["class_type"])
@@ -101,15 +101,16 @@ def check_graph(graph: dict, object_info: dict) -> list[str]:
         for field, v in node["inputs"].items():
             head = field.split(".", 1)[0]
             if field not in spec and "." in field and head in spec:
-                # V3 动态输入（autogrow / dynamic combo 的子字段，如 ref_images.ref_image_0、format.codec）：
-                # /object_info 只列父字段；只校验连线
+                # V3 dynamic inputs (sub-fields of autogrow / dynamic combo, e.g.
+                # ref_images.ref_image_0, format.codec):
+                # /object_info lists only the parent field; only validate links
                 if isinstance(v, list) and v and str(v[0]) not in graph:
                     problems.append(f"节点 {nid}.{field} 连到不存在的节点 {v[0]}")
                 continue
             if field not in spec:
                 problems.append(f"节点 {nid}: {node['class_type']} 没有字段 {field}")
                 continue
-            if isinstance(v, list):  # 连线：必须指向存在的节点
+            if isinstance(v, list):  # link: must point to an existing node
                 if v and str(v[0]) not in graph:
                     problems.append(f"节点 {nid}.{field} 连到不存在的节点 {v[0]}")
                 continue

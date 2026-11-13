@@ -1,14 +1,14 @@
-"""制片的 film 阶段：镜头视频交给 FreeVideo 多镜头电影拍（角色卡做一致性、上一镜续拍做连贯）。
+"""A production's film stage: shot videos are shot as a FreeVideo multi-shot film (character cards for consistency, continuing from the previous shot for continuity).
 
-流程（审核仍在我们这边）：
-1. 角色卡（tool: freevideo_cards）：每个人物一张 FreeVideo 角色卡——优先用设置里指定的卡，
-   其次按名字复用卡库里已有的卡，否则用已通过的定妆图（和你提供的参考图）新建。
-2. 开拍：分镜 → 剧本（角色指向卡，台词带说话人，continue 表示接上一镜）→ FreeVideo plan 校验 → start。
-   每个镜头一个产物（status running，meta 里记 film / shot）。
-3. 轮询：某镜头的 take 都拍完 → 下载到任务目录，导入为一轮待审阅的候选（模板 freevideo-take）。
-4. 你在审阅里选中 → FreeVideo choose（之后的续拍镜头从这条的末帧接着拍）。
-   重做 / 带意见打回 → FreeVideo reshoot（意见原样交给它）；不带意见的打回同样 reshoot。
-5. 暂停时不推进；“立即停止”会取消还没拍完的 take（拍好的保留）。
+Flow (review still happens on our side):
+1. Character cards (tool: freevideo_cards): one FreeVideo character card per person — the card named in settings first,
+   then an existing card in the library with the same name, otherwise a new one from the approved casting image (and reference images you provided).
+2. Shoot: storyboard → script (characters point to cards, lines carry the speaker, continue means pick up from the previous shot) → FreeVideo plan validation → start.
+   One artifact per shot (status running, meta records film / shot).
+3. Polling: when all takes of a shot are done → download into the task directory and import as a round of candidates for review (template freevideo-take).
+4. You pick one in review → FreeVideo choose (later continuation shots continue from this take's last frame).
+   Redo / reject with a note → FreeVideo reshoot (the note is passed through as-is); a reject without a note also reshoots.
+5. Nothing advances while paused; "stop now" cancels takes not yet shot (finished ones are kept).
 """
 
 from __future__ import annotations
@@ -27,7 +27,8 @@ if TYPE_CHECKING:  # pragma: no cover
 TERMINAL_JOB = ("succeeded", "failed", "cancelled", "interrupted")
 TAKE_TEMPLATE = "freevideo-take"
 MIN_CONTINUE_S = 10.0
-RETRY_S = 60.0  # 等你在 FreeVideo 页面批准时，多久重发一次开拍请求
+# while waiting for your approval in the FreeVideo page, how often to resend the start request
+RETRY_S = 60.0
 _FIX = re.compile(r"Use /screenplay/shots/(\d+)/seconds ([\d.]+)")
 
 
@@ -36,11 +37,12 @@ TAKE_ACTIVE = ("queued", "running", "waiting")
 
 
 def film_active(film: dict) -> bool:
-    """还在拍（占内存）：没结束，且有 take 在排 / 在拍，或还有镜头一条 take 都没有。"""
+    """Still shooting (holds memory): not finished, and some take is queued / shooting, or some shot has no take yet."""
     if film.get("status") in FILM_DONE:
         return False
     shots = film.get("shots") or []
-    if film.get("status") == "needs_choice":  # 在等你选 take / 处理中断：FreeVideo 空闲
+    # waiting for you to pick a take / handle an interruption: FreeVideo is idle
+    if film.get("status") == "needs_choice":
         return any(t.get("state") in TAKE_ACTIVE for sh in shots for t in sh.get("takes") or [])
     return any(
         not sh.get("takes") or any(t.get("state") in TAKE_ACTIVE for t in sh["takes"])
@@ -56,11 +58,13 @@ class FilmDriver:
     def __init__(self, engine: Production, client):
         self.engine, self.fv = engine, client
         self.store = engine.store
-        self.notify_round = lambda rnd: None  # daemon 注入：导入的一轮推送到控制台 / Telegram
-        # daemon 注入：给你发一条提醒（例如去 FreeVideo 批准）
+        # injected by the daemon: push an imported round to the console / Telegram
+        self.notify_round = lambda rnd: None
+        # injected by the daemon: send you a reminder (e.g. to go approve in FreeVideo)
         self.notify_text = lambda prod, key: None
         self._last_retry: dict[str, float] = {}
-        # daemon 注入 ResourceManager：拍片独占内存（开拍前卸载 LLM，拍片期间不让它加载）
+        # the daemon injects the ResourceManager: shooting holds the memory (unload the LLM before
+        # shooting, keep it from loading meanwhile)
         self.resources = None
 
     def _make_room(self) -> None:
@@ -71,7 +75,7 @@ class FilmDriver:
         if self.resources is not None:
             self.resources.film_started(film_id)
 
-    # ---- 角色卡 ----
+    # ---- character cards ----
     def cards_tool(self, prod: dict, st: Stage, inputs: dict) -> dict:
         settings = prod["settings"]
         fixed = settings.get("cards") or {}
@@ -88,7 +92,7 @@ class FilmDriver:
             )
             or {}
         )
-        sheets = inputs.get("characters") or {}  # {key: 已通过的定妆产物 data}
+        sheets = inputs.get("characters") or {}  # {key: data of the approved casting artifact}
         library = {c.get("name", "").strip().lower(): c for c in self.fv.cards()}
         out: dict = {"characters": {}, "created": [], "reused": []}
         for c in bible.get("characters", []):
@@ -108,7 +112,9 @@ class FilmDriver:
                 if o.get("kind") == "image"
             ]
             if not pics:
-                continue  # 没有已通过的定妆图：这个人物在镜头里只靠文字（计划里会显示 cast_missing）
+                # no approved casting image: this person relies on text only in the shots (the plan
+                # shows cast_missing)
+                continue
             card = self.fv.create_card(
                 c.get("name") or key, c.get("look") or c.get("name") or key, pics[:6]
             )
@@ -116,14 +122,15 @@ class FilmDriver:
             out["created"].append(key)
         return out
 
-    # ---- 剧本 ----
+    # ---- script ----
     def screenplay(self, prod: dict, st: Stage, ctx: dict, keys: list[str] | None = None) -> dict:
         settings = prod["settings"]
         lang = (settings.get("language") or "English").strip() or "English"
         cast_map = (ctx.get(st.cast) or {}).get("characters", {}) if st.cast else {}
         bible = ctx.get("bible") or {}
         looks = {c["id"]: c for c in bible.get("characters", [])}
-        # 手写 / 导入的分镜可以带整片级的风格、人物造型、连续性、导演规则和负面描述：都要交给 FreeVideo
+        # hand-written / imported storyboards may carry film-wide style, character looks,
+        # continuity, director rules and negatives: all go to FreeVideo
         board = ctx.get(st.fan_out.items.split(".")[0]) if st.fan_out else None
         board = board if isinstance(board, dict) else {}
         board_looks = board.get("characters") if isinstance(board.get("characters"), dict) else {}
@@ -169,10 +176,11 @@ class FilmDriver:
                 sh["continue"] = True
                 sh["seconds"] = max(
                     float(sh["seconds"]), MIN_CONTINUE_S
-                )  # FreeVideo：续拍至少 10 秒
+                )  # FreeVideo: continuations are at least 10 seconds
             shots.append(sh)
         rules = board.get("directing_rules") or []
-        style = " ".join(  # 同一行：换行开头的 "Avoid:" 会被 H3 当成新的 section
+        # one line: an "Avoid:" at the start of a new line would be taken by H3 as a new section
+        style = " ".join(
             x
             for x in (
                 board.get("visual_style") or (bible.get("style") or {}).get("look", ""),
@@ -191,7 +199,7 @@ class FilmDriver:
             "shots": shots,
         }
 
-    # ---- 开拍 / 重拍 ----
+    # ---- shoot / reshoot ----
     def current_film(self, prod_id: str, stage_id: str) -> str | None:
         films = [
             a["meta"].get("film")
@@ -211,7 +219,7 @@ class FilmDriver:
         deps_for,
         overrides: dict | None = None,
     ) -> list[dict]:
-        """overrides：只对这一次开拍生效的 {quality, takes}（例如拿一个镜头试 high 档），不改制片设置。"""
+        """overrides: {quality, takes} for this shoot only (e.g. try one shot at high quality); production settings unchanged."""
         overrides = {k: v for k, v in (overrides or {}).items() if v}
         film_id = self.current_film(prod["id"], st.id)
         made = []
@@ -219,21 +227,24 @@ class FilmDriver:
         if film_id:
             try:
                 if self.fv.film(film_id).get("status") == "cancelled":
-                    film_id = None  # 取消了的片不再 reshoot：开新片
+                    film_id = None  # a cancelled film is not reshot: start a new one
             except FreeVideoError:
                 film_id = None
         if film_id and self._film_script(prod["id"], st.id, film_id) not in (None, script):
-            # 分镜 / 风格 / 人物造型改了：FreeVideo 的 reshoot 只会沿用旧剧本，所以给这些镜头开新片
+            # storyboard / style / character looks changed: FreeVideo's reshoot reuses the old
+            # script, so start a new film for these shots
             self.engine.log(f"film {film_id}: screenplay changed; starting a new film for {keys}")
             film_id = None
         if overrides:
-            film_id = None  # 档位 / take 数是整部片的参数：单独开一部
+            # quality / number of takes are film-wide parameters: start a separate film
+            film_id = None
         if film_id:
             try:
                 for key in keys:
                     made.append(self._reshoot(prod, st, film_id, key, note, deps_for(key)))
                 return made
-            except FreeVideoError as e:  # 电影已结束或已取消：为这些镜头开一部新的
+            # the film has ended or was cancelled: start a new one for these shots
+            except FreeVideoError as e:
                 self.engine.log(f"film {film_id}: reshoot failed ({e}); starting a new film")
                 made = []
         sp = self.screenplay(prod, st, ctx, keys)
@@ -241,7 +252,8 @@ class FilmDriver:
         if overrides.get("quality"):
             sp["quality"] = overrides["quality"]
         ref = f"aco-{prod['id']}-{st.id}-{int(time.time())}"
-        plan, fixed = self._validated_plan(sp, takes)  # 先校验（不提交）：写错的地方在这里就报出来
+        # validate first (no submit): mistakes surface here
+        plan, fixed = self._validated_plan(sp, takes)
         self._make_room()
         try:
             film = self.fv.start_film(sp, takes=takes, ref=ref)
@@ -250,7 +262,9 @@ class FilmDriver:
             if e.code != "needs_confirmation":
                 raise
             film = (
-                None  # FreeVideo 设置成开拍要你在它的页面上批准：挂起，批准后原样重发（同一个 ref）
+                # FreeVideo is set to require your approval in its page before shooting: park it and
+                # resend unchanged (same ref) once approved
+                None
             )
         pending = None if film else {"screenplay": sp, "takes": takes, "ref": ref}
         self.engine.log(
@@ -295,11 +309,11 @@ class FilmDriver:
         for a in reversed(self.store.artifacts(prod_id, stage_id)):
             if (a["meta"] or {}).get("film") == film_id and a["meta"].get("script"):
                 return a["meta"]["script"]
-        return None  # 旧版本开的片没有记录剧本：照旧 reshoot
+        return None  # films started by old versions recorded no script: reshoot as before
 
     def _validated_plan(self, sp: dict, takes: int) -> tuple[dict, dict]:
-        """plan 校验；FreeVideo 给出明确的时长建议时（例如续拍须 10–11 秒）按建议改一次再校验。
-        返回 (plan, 改过的镜头 {id: (原时长, 新时长)})。别的错误原样抛出给你看。"""
+        """Plan validation; when FreeVideo gives a clear duration suggestion (e.g. continuations must be 10–11 s) apply it once and validate again.
+        Returns (plan, changed shots {id: (old duration, new duration)}). Other errors are raised unchanged for you to see."""
         fixed: dict = {}
         for _ in range(2):
             try:
@@ -326,7 +340,7 @@ class FilmDriver:
                 if a["key"] == key and (a["meta"] or {}).get("film") == film_id
                 for job in (a["meta"] or {}).get("imported", [])
             }
-        )  # 之前导入过的 take 不再导入
+        )  # takes imported before are not imported again
         return self.store.add_artifact(
             prod["id"],
             st.id,
@@ -338,8 +352,8 @@ class FilmDriver:
         )
 
     def intercept_round(self, rnd: dict) -> bool:
-        """在审阅里对一轮 take 点重做 / 带意见打回 / 微调时，Studio 会照常派生一轮新的 freevideo-take
-        草稿：这里把它换成 FreeVideo reshoot（意见原样交给 FreeVideo），草稿作废。返回是否接管。"""
+        """When you redo / reject with a note / refine a round of takes in review, Studio derives a new freevideo-take
+        draft round as usual: here it is replaced by a FreeVideo reshoot (the note passed through as-is) and the draft dropped. Returns whether we took over."""
         if rnd.get("template") != TAKE_TEMPLATE or not rnd.get("parent_round"):
             return False
         parent = self.store.artifact_by_round(rnd["parent_round"])
@@ -384,18 +398,21 @@ class FilmDriver:
             except FreeVideoError as e:
                 self.engine.log(f"film {film_id}: cancel failed: {e}")
 
-    # ---- 轮询：拍完的 take 导入为待审阅的一轮 ----
+    # ---- polling: finished takes are imported as a round for review ----
     def tick(self) -> int:
         imported = 0
         shooting: set[str] = set()
         for prod in self.store.productions():
-            if prod["state"] == "paused":  # 暂停不推进，但 FreeVideo 可能还在拍：照样算占内存
+            # paused means no progress, but FreeVideo may still be shooting: still counts as holding
+            # memory
+            if prod["state"] == "paused":
                 shooting |= self._shooting(prod)
                 continue
             if prod["state"] != "active":
                 continue
             imported += self._tick_production(prod, shooting)
-        # 只在完整读完一轮后更新；中途出错（FreeVideo 不可达）保留上一轮的结论
+        # update only after reading a full pass; on errors midway (FreeVideo unreachable) keep the
+        # previous conclusion
         if self.resources is not None:
             self.resources.films_shooting(shooting)
         return imported
@@ -409,7 +426,7 @@ class FilmDriver:
         }:
             try:
                 film = self.fv.film(film_id)
-            except Exception:  # noqa: BLE001 — 读不到：保守地当作还在拍
+            except Exception:  # noqa: BLE001 — unreadable: conservatively assume still shooting
                 out.add(film_id)
                 continue
             if film_active(film):
@@ -429,7 +446,7 @@ class FilmDriver:
                 film = self.fv.film(film_id)
             except FreeVideoError as e:
                 self.engine.log(f"film {film_id}: read failed: {e}")
-                shooting.add(film_id)  # 读不到：保守地当作还在拍
+                shooting.add(film_id)  # unreadable: conservatively assume still shooting
                 continue
             if film_active(film):
                 shooting.add(film_id)
@@ -437,7 +454,8 @@ class FilmDriver:
                 art = arts.get(shot["id"])
                 if art is not None:
                     imported += self._import(prod, art, film, shot)
-            if film.get("status") == "cancelled":  # 片被取消：没拍完的镜头不会再有 take，标失败好让你重跑
+            # film cancelled: unfinished shots will get no takes, mark them failed so you can rerun
+            if film.get("status") == "cancelled":
                 for art in arts.values():
                     cur = self.store.get_artifact(art["id"])
                     if cur["status"] == "running" and not cur["round_id"]:
@@ -447,7 +465,7 @@ class FilmDriver:
         return imported
 
     def _retry_pending_start(self, prod: dict) -> None:
-        """开拍在等你于 FreeVideo 页面批准：原样重发同一个请求（同 ref，幂等）；批准后拿到电影 ID。"""
+        """The shoot is waiting for your approval in the FreeVideo page: resend the same request (same ref, idempotent); get the film ID once approved."""
         arts = [
             a
             for a in self.store.artifacts(prod["id"], None, "running")
@@ -459,14 +477,16 @@ class FilmDriver:
         req = head["meta"]["pending_start"]
         now = time.monotonic()
         if now - self._last_retry.get(req["ref"], 0) < RETRY_S:
-            return  # 别每轮都重发（每次都会在 FreeVideo 对话里记一条“需要确认”）
+            # do not resend every pass (each one logs a "needs confirmation" in the FreeVideo chat)
+            return
         self._last_retry[req["ref"]] = now
         try:
             self._make_room()
             film = self.fv.start_film(req["screenplay"], takes=req["takes"], ref=req["ref"])
             self._started(film["id"])
         except FreeVideoError as e:
-            if e.code != "needs_confirmation":  # 包括你点了拒绝（declined_by_user）：不再重发
+            # including your refusal (declined_by_user): stop resending
+            if e.code != "needs_confirmation":
                 self.engine.log(f"film start for {prod['id']} failed: {e}")
                 for a in arts:
                     self.store.update_artifact(a["id"], status="failed", note=str(e)[:500])
@@ -488,14 +508,17 @@ class FilmDriver:
             return 0
         jobs = {}
         if any(t.get("state") in ("queued", "running", "waiting") for t in takes):
-            return 0  # 这一镜还有 take 在拍：等齐了一起审（不必逐条查询）
+            # this shot still has takes shooting: review them together once all are in (no need to
+            # query one by one)
+            return 0
         for t in takes:
             if not t.get("task") and t.get("state") == "failed":
-                # 没生成任务就失败了（例如 continuation_unavailable）：没有 job 可查，错误在 take 里
+                # failed before a task was created (e.g. continuation_unavailable): no job to query,
+                # the error is in the take
                 err = t.get("error") or {}
                 jobs[t["take"]] = {"status": "failed", "error": err.get("error_zh") or err.get("message")}
                 continue
-            # take 的 job 是幂等键；真正的任务 ID 在 task 字段
+            # a take's job is the idempotency key; the real task ID is in the task field
             job = self.fv.call("GET", f"/jobs/{t.get('task') or t['job']}").get("job") or {}
             if job.get("status") not in TERMINAL_JOB:
                 return 0
@@ -559,7 +582,8 @@ class FilmDriver:
                             }
                         },
                     )
-                except Exception as e:  # noqa: BLE001 — 下载失败：这条标失败，别的照常
+                # download failed: mark this one failed, the others continue
+                except Exception as e:  # noqa: BLE001
                     self.store.update(
                         task["id"], state="failed", outputs=[], error=f"download failed: {e}"
                     )

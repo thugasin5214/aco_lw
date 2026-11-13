@@ -1,9 +1,9 @@
-"""规划器后端（S9）：会话、记忆、缓存逻辑与具体模型服务无关。
+"""Planner backends (S9): session, memory and cache logic are independent of the concrete model service.
 
-- `OpenAICompatBackend`：任何 OpenAI 兼容的 /v1/chat/completions（云端或本地）。
-- `LMStudioBackend`：在其上加本地模型的加载 / TTL / 预热管理（G0：加载约 15 s；前缀缓存实测有效）。
-- `FuncBackend`：测试用，包装一个函数。
-阶段 6 的 Anthropic / agent CLI 后端实现同一接口即可。
+- `OpenAICompatBackend`: any OpenAI-compatible /v1/chat/completions (cloud or local).
+- `LMStudioBackend`: adds local model load / TTL / prewarm management on top (G0: load ~15 s; prefix cache measured to work).
+- `FuncBackend`: for tests, wraps a function.
+Stage 6's Anthropic / agent CLI backends implement the same interface.
 """
 
 from __future__ import annotations
@@ -23,11 +23,16 @@ from . import llm
 class ChatResult:
     text: str
     tool_calls: list[dict] = field(default_factory=list)  # [{id, name, arguments(str)}]
-    reasoning: str = ""  # 模型的思考内容：同一次运行内回放它，历史才与生成时逐字一致（缓存）
+    # the model's thinking: replayed within the same run so history matches generation verbatim
+    # (cache)
+    reasoning: str = ""
     raw_content: list | None = (
-        None  # 在线后端的原始内容块（如 Claude 的 thinking 块），回放时原样传回
+        # raw content blocks of online backends (e.g. Claude's thinking blocks), sent back unchanged
+        # on replay
+        None
     )
-    cached_tokens: int | None = None  # 服务端报告的缓存命中 token（有则用它，不用估算）
+    # cache-hit tokens reported by the server (used instead of the estimate when present)
+    cached_tokens: int | None = None
     backend: str = ""
     prompt_tokens: int = 0
     completion_tokens: int = 0
@@ -39,7 +44,7 @@ class ChatResult:
     def cached_tokens_est(self) -> int:
         if self.cached_tokens is not None:
             return self.cached_tokens
-        """估算复用的前缀 token：总数减去首 token 时间内按冷算速度（G0 实测约 360 token/s）能算完的量。"""
+        """Estimate reused prefix tokens: total minus what cold computation (G0 measured ~360 tokens/s) could do within the time to first token."""
         return max(0, int(self.prompt_tokens - self.ttft_s * 360))
 
     @property
@@ -83,7 +88,8 @@ class OpenAICompatBackend:
         max_tokens: int,
         tools: list[dict] | None = None,
     ) -> dict:
-        keep_reasoning = self.name == "lmstudio"  # 只有本地模板认 reasoning_content
+        # only the local template understands reasoning_content
+        keep_reasoning = self.name == "lmstudio"
         messages = [
             {
                 k: v
@@ -100,7 +106,9 @@ class OpenAICompatBackend:
             "stream": True,
             "stream_options": {"include_usage": True},
         }
-        if self.name == "openai":  # OpenAI 官方 API：推理模型只认 max_completion_tokens、默认温度
+        # official OpenAI API: reasoning models only accept max_completion_tokens and the default
+        # temperature
+        if self.name == "openai":
             body.pop("temperature")
             body["max_completion_tokens"] = body.pop("max_tokens")
         if tools:
@@ -113,7 +121,7 @@ class OpenAICompatBackend:
         return body
 
     def prepare(self) -> float:
-        """调用前的准备（本地后端在此加载模型），返回耗时。"""
+        """Preparation before a call (the local backend loads the model here); returns the time spent."""
         return 0.0
 
     def chat(
@@ -132,7 +140,8 @@ class OpenAICompatBackend:
         calls: dict[int, dict] = {}
         body = self._body(messages, schema, max_tokens, tools)
         with self.http.stream("POST", url, json=body) as r:
-            if r.status_code >= 400:  # 带上服务端的原因（LM Studio 会说清楚哪里不对）
+            # include the server's reason (LM Studio says exactly what is wrong)
+            if r.status_code >= 400:
                 r.read()
                 raise httpx.HTTPStatusError(
                     f"{r.status_code} from {url}: {_error_text(r)}", request=r.request, response=r
@@ -147,7 +156,7 @@ class OpenAICompatBackend:
                     delta = ch.get("delta") or {}
                     parts.append(delta.get("content") or "")
                     thinking.append(delta.get("reasoning_content") or delta.get("reasoning") or "")
-                    for tc in delta.get("tool_calls") or []:  # 流式工具调用：按 index 拼接
+                    for tc in delta.get("tool_calls") or []:  # streamed tool calls: join by index
                         c = calls.setdefault(
                             tc.get("index", 0), {"id": None, "name": "", "arguments": ""}
                         )
@@ -159,7 +168,8 @@ class OpenAICompatBackend:
                     res.prompt_tokens = d["usage"].get("prompt_tokens", 0)
                     res.completion_tokens = d["usage"].get("completion_tokens", 0)
                     details = d["usage"].get("prompt_tokens_details") or {}
-                    if details.get("cached_tokens") is not None:  # 服务端报告的真实缓存命中
+                    # real cache hits reported by the server
+                    if details.get("cached_tokens") is not None:
                         res.cached_tokens = details["cached_tokens"]
         res.text = "".join(parts)
         res.reasoning = "".join(thinking)
@@ -169,7 +179,7 @@ class OpenAICompatBackend:
         return res
 
     def prewarm(self, messages: list[dict], tools: list[dict] | None = None) -> ChatResult:
-        """用当前前缀发一次 1 token 请求，把前缀写进缓存（tools 也属于前缀，必须一致）。"""
+        """Send a 1-token request with the current prefix to write it into the cache (tools are part of the prefix and must match)."""
         return self.chat(messages, None, max_tokens=1, tools=tools)
 
 
@@ -187,11 +197,13 @@ class LMStudioBackend(OpenAICompatBackend):
         cfg=None,
     ):
         super().__init__(base_url, model)
-        self.cfg = cfg  # 给了配置：模型 / 上下文 / GPU / 并发跟着设置窗口实时变
+        # with a config: model / context / GPU / parallel follow the settings window live
+        self.cfg = cfg
         self._context = context
-        self.ttl = ttl  # 由驻留模式与会话活跃度决定
+        self.ttl = ttl  # decided by the residency mode and session activity
         self.allowed = allowed
-        self.load_guard: Callable[[], str | None] | None = None  # 返回拒绝加载的原因
+        # returns the reason to refuse loading
+        self.load_guard: Callable[[], str | None] | None = None
 
     @property
     def model(self) -> str:
@@ -213,7 +225,9 @@ class LMStudioBackend(OpenAICompatBackend):
         if llm.loaded(self.model):
             return 0.0
         why = self.load_guard() if self.load_guard else None
-        if why:  # 加载前把关：独占渲染在跑时不加载（任何进程、任何路径都经过这里）
+        # gate before loading: no load while an exclusive render runs (every process and path passes
+        # here)
+        if why:
             from .planner import PlannerUnavailable
 
             raise PlannerUnavailable(f"not loading the LLM now: {why}")
@@ -232,7 +246,8 @@ class LMStudioBackend(OpenAICompatBackend):
         return llm.loaded(self.model) is not None
 
     def _body(self, messages, schema, max_tokens, tools=None):
-        if llm.supports_vision(self.model) is False:  # 换成了不支持图片的模型：图片换成文字说明
+        # switched to a model without vision: images become a text note
+        if llm.supports_vision(self.model) is False:
             messages = strip_images(messages, self.model)
         return super()._body(messages, schema, max_tokens, tools)
 
@@ -260,7 +275,7 @@ def _error_text(r: httpx.Response) -> str:
 
 
 class FuncBackend:
-    """测试用：fn(messages, schema) → 文本。默认扮演本地 LLM（受资源把关）。"""
+    """For tests: fn(messages, schema) → text. Plays a local LLM by default (subject to the resource gate)."""
 
     name = "func"
     local = True
@@ -272,7 +287,7 @@ class FuncBackend:
     def chat(self, messages, schema=None, max_tokens=4096, tools=None) -> ChatResult:
         self.calls.append(messages)
         out = self.fn(messages, schema) if tools is None else self.fn(messages, tools)
-        if isinstance(out, dict):  # 测试用：{"text": ..., "tool_calls": [...]}
+        if isinstance(out, dict):  # for tests: {"text": ..., "tool_calls": [...]}
             return ChatResult(
                 text=out.get("text", ""),
                 tool_calls=out.get("tool_calls", []),
@@ -292,12 +307,12 @@ _ID_RE = re.compile(r"[^A-Za-z0-9_-]")
 
 
 class AnthropicBackend:
-    """在线 Claude（Messages API + 原生工具调用）。
+    """Online Claude (Messages API + native tool calls).
 
-    - 输入沿用运行时的 OpenAI 风格消息；这里转换成 Messages API 的格式。
-    - Claude 自己生成的回合按原始内容块回放（含 thinking 块），保证历史只追加。
-    - 缓存：稳定前缀（工具 + system）打断点，再用顶层自动缓存覆盖最新一条。
-    - 安全分类器拒答时，默认由服务端回退到推荐模型（fallbacks="default"）。
+    - Input stays the runtime's OpenAI-style messages; converted to the Messages API format here.
+    - Turns Claude generated itself are replayed as their original content blocks (including thinking), so history only appends.
+    - Caching: a breakpoint on the stable prefix (tools + system), plus top-level automatic caching covering the latest message.
+    - When the safety classifier refuses, the server falls back to the recommended model by default (fallbacks="default").
     """
 
     name = "anthropic"
@@ -315,7 +330,7 @@ class AnthropicBackend:
         import anthropic
 
         self.model, self.effort, self.fallbacks = model, effort, fallbacks
-        # 不传 key 时由 SDK 按环境变量 / `ant auth login` 的配置自行解析凭据
+        # without a key, the SDK resolves credentials from environment variables / `ant auth login`
         self.client = client or (
             anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
         )
@@ -326,7 +341,7 @@ class AnthropicBackend:
 
     @staticmethod
     def _user_content(content):
-        """OpenAI 风格的内容块（text / image_url data URL）→ Claude 内容块。"""
+        """OpenAI-style content parts (text / image_url data URL) → Claude content blocks."""
         if not isinstance(content, list):
             return content
         out = []
@@ -349,7 +364,7 @@ class AnthropicBackend:
     def convert(cls, messages: list[dict], tools: list[dict] | None):
         system_parts, out, results = [], [], []
 
-        def flush():  # 同一轮的全部工具结果放进同一条 user 消息
+        def flush():  # all tool results of one turn go into a single user message
             if results:
                 out.append({"role": "user", "content": list(results)})
                 results.clear()
@@ -370,7 +385,8 @@ class AnthropicBackend:
                 continue
             flush()
             if role == "assistant":
-                if m.get("_anthropic"):  # 本后端生成的回合：原样回放（含 thinking 块）
+                # a turn this backend generated: replay it unchanged (including thinking blocks)
+                if m.get("_anthropic"):
                     out.append({"role": "assistant", "content": m["_anthropic"]})
                     continue
                 blocks = [{"type": "text", "text": m["content"]}] if m.get("content") else []
@@ -414,7 +430,7 @@ class AnthropicBackend:
         tools: list[dict] | None = None,
     ) -> ChatResult:
         system, msgs, atools = self.convert(messages, tools)
-        if schema:  # 简单模式的 JSON 输出：用说明约束，再由调用方校验
+        if schema:  # JSON output in simple mode: constrain with instructions, the caller validates
             system += (
                 "\n\nReply with a single JSON object matching this schema, nothing else:\n"
                 + json.dumps(schema, ensure_ascii=False)
@@ -461,4 +477,4 @@ class AnthropicBackend:
         )
 
     def prewarm(self, messages: list[dict], tools: list[dict] | None = None) -> None:
-        return None  # 在线缓存在真实请求时自动写入，不需要预热
+        return None  # the online cache is written automatically by real requests; no prewarm needed

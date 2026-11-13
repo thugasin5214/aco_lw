@@ -1,16 +1,16 @@
-"""制片流水线（阶段 3）：声明式工作流 + 带版本与过期传播的产物库 + 权威计划 + 阶段执行。
+"""Production pipeline (stage 3): declarative workflows + an artifact store with versions and staleness propagation + an authoritative plan + stage execution.
 
-小说 → 成片只是 `workflows/` 里的一套 YAML；换一套 YAML（广告片、MV……）不改代码。
+Novel → finished film is just one YAML set in `workflows/`; another set (ads, music videos, ...) needs no code change.
 
-- 工作流规格：阶段 DAG。阶段类型 input（用户给的原文）/ skill（LLM 按 SKILL.md 产出 JSON，
-  Schema 校验）/ render（按模板出图出视频，可按上游列表展开）/ assemble（把剪辑时间线交给 FFmpeg）。
-- 产物（artifact）：每个 (阶段, key) 有多个版本；记录生成时依赖的上游产物（版本或条目指纹）。
-  上游换了版本 → 依赖它的下游**算出来**是 stale，不需要级联写库；改一个角色只影响引用它的镜头。
-- 计划（plan）：由规格 + 产物确定性算出每阶段状态与 next_action。控制台、Telegram、agent、
-  Claude Code 看到的是同一份计划；agent 不自建状态机。
-- 渲染阶段复用现有“轮 / 候选 / 审阅”：选中即通过；重做、微调派生的新轮自动跟随到同一产物。
-- skill 阶段的 LLM 调用由调用方注入（daemon 按资源闸门与回退链选择后端）；资源不够时排队，
-  渲染结束后再跑。
+- Workflow spec: a DAG of stages. Stage kinds: input (text the user gives) / skill (the LLM produces JSON per SKILL.md,
+  schema-validated) / render (images / videos from templates, can fan out over an upstream list) / assemble (hands the edit timeline to FFmpeg).
+- Artifacts: each (stage, key) has several versions; each records the upstream artifacts it was made from (version or item fingerprint).
+  When an upstream gets a new version, dependants are **computed** as stale, no cascading writes; changing one character only affects the shots that use it.
+- Plan: each stage's state and next_action computed deterministically from spec + artifacts. The console, Telegram, the agent and
+  Claude Code all see the same plan; the agent keeps no state machine of its own.
+- Render stages reuse the existing "round / candidates / review": picking one approves it; new rounds from redo / refine automatically follow the same artifact.
+- The LLM call of skill stages is injected by the caller (the daemon picks a backend by resource gate and fallback chain); short of resources they queue
+  and run after the render ends.
 """
 
 from __future__ import annotations
@@ -34,11 +34,11 @@ from .executors.ffmpeg import probe_seconds
 RUNNING = ("queued", "running")
 
 
-# ---------------------------------------------------------------- 规格
+# ---------------------------------------------------------------- spec
 class FanOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    items: str  # 上游数据里的列表路径，例如 "bible.characters"
+    items: str  # list path in upstream data, e.g. "bible.characters"
     key: str = "id"
 
 
@@ -47,24 +47,25 @@ class RenderSpec(BaseModel):
 
     template: str
     params: dict[str, Any] = {}
-    tier: str | None = None  # 可写 "{settings.video_tier}"
+    tier: str | None = None  # may be "{settings.video_tier}"
     n: int | str | None = None
 
 
 class When(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    path: str  # 上下文里的路径，例如 ref.use
-    equals: Any = None  # 省略：路径的值为真即可
+    path: str  # path in the context, e.g. ref.use
+    equals: Any = None  # omitted: the path's value just has to be truthy
 
 
 class Alternative(BaseModel):
-    """渲染条目的条件分支（第一条匹配的生效）：直接采用一张图（provide），或换一种渲染。"""
+    """Conditional branches of a render item (the first match wins): take an image as-is (provide), or render differently."""
 
     model_config = ConfigDict(extra="forbid")
 
     when: When
-    provide: str | None = None  # 图片路径表达式，例如 "{ref.path}"：原样作为已通过的产物
+    # image path expression, e.g. "{ref.path}": used as-is as an approved artifact
+    provide: str | None = None
     render: RenderSpec | None = None
 
 
@@ -74,23 +75,28 @@ class Stage(BaseModel):
     id: str
     title: str = ""
     kind: Literal["input", "tool", "skill", "render", "assemble", "film"]
-    cast: str | None = None  # film：角色卡来自哪个阶段（{"characters": {key: card id}}）
-    tool: str | None = None  # tool 阶段：编排器里注册的确定性工具（例如 ingest）
+    # film: which stage the character cards come from ({"characters": {key: card id}})
+    cast: str | None = None
+    # tool stage: a deterministic tool registered in the orchestrator (e.g. ingest)
+    tool: str | None = None
     needs: list[str] = []
     skill: str | None = None
-    extra_skills: list[
-        str
-    ] = []  # 一并读的参考 skill（例如 MiniMax 官方 h3-prompt-writing）；没装就跳过
-    llm: str | None = None  # 指定后端（如 claude_code）；留空用制片设置 / 主后端
+    # reference skills read alongside (e.g. MiniMax's official h3-prompt-writing); skipped if not
+    # installed
+    extra_skills: list[str] = []
+    # a specific backend (e.g. claude_code); empty uses the production setting / primary backend
+    llm: str | None = None
     instructions: str = ""
     output_schema: dict | str | None = Field(None, alias="schema")
     fan_out: FanOut | None = None
     render: RenderSpec | None = None
     alternatives: list[Alternative] = []
-    timeline: str | None = None  # assemble：时间线来自哪个阶段
-    clips: str | None = None  # assemble：片段来自哪个阶段
+    timeline: str | None = None  # assemble: which stage the timeline comes from
+    clips: str | None = None  # assemble: which stage the clips come from
     gate: Literal["review", "auto"] = "review"
-    confirm: bool = False  # True：上一阶段通过后不自动开跑（例如视频，耗时以小时计），等你点开始
+    # True: do not start automatically after the previous stage is approved (e.g. video, hours
+    # long); wait for you to press start
+    confirm: bool = False
 
 
 class Workflow(BaseModel):
@@ -138,7 +144,8 @@ def load_workflows(*roots: Path | None) -> dict[str, Workflow]:
             continue
         for p in sorted(root.glob("*.yaml")):
             raw = yaml.safe_load(p.read_text())
-            for st in raw.get("stages", []):  # schema 可写文件名：workflows/schemas/<name>.json
+            # schema may be a file name: workflows/schemas/<name>.json
+            for st in raw.get("stages", []):
                 sch = st.get("schema")
                 if isinstance(sch, str):
                     st["schema"] = json.loads((root / "schemas" / f"{sch}.json").read_text())
@@ -147,7 +154,7 @@ def load_workflows(*roots: Path | None) -> dict[str, Workflow]:
     return out
 
 
-# ---------------------------------------------------------------- 表达式
+# ---------------------------------------------------------------- expressions
 _REF = re.compile(r"\{([A-Za-z_][\w.\-]*)\}")
 
 
@@ -166,7 +173,7 @@ def lookup(ctx: dict, path: str) -> Any:
 
 
 def interp(value: Any, ctx: dict) -> Any:
-    """字符串里的 {a.b.c} 用上下文替换；整个字符串就是一个引用时保留原类型。"""
+    """Replace {a.b.c} in a string from the context; when the whole string is one reference, keep the original type."""
     if isinstance(value, dict):
         return {k: interp(v, ctx) for k, v in value.items()}
     if isinstance(value, list):
@@ -193,7 +200,7 @@ def fingerprint(obj: Any) -> str:
 
 
 def extract_json(text: str) -> Any:
-    """模型回复里取出 JSON（容忍 ```json 围栏与前后说明文字）。"""
+    """Extract JSON from a model reply (tolerates ```json fences and surrounding text)."""
     t = text.strip()
     fence = re.search(r"```(?:json)?\s*(.+?)```", t, re.DOTALL)
     if fence:
@@ -208,16 +215,16 @@ def extract_json(text: str) -> Any:
 
 
 class Park(Exception):
-    """LLM 现在不能跑（资源不够且没有可用回退）：skill 作业留在队列里，资源释放后再试。"""
+    """The LLM cannot run now (short of resources and no usable fallback): the skill job stays queued and retries once resources free up."""
 
 
 class ProductionError(RuntimeError):
     pass
 
 
-# ---------------------------------------------------------------- 引擎
+# ---------------------------------------------------------------- engine
 class Production:
-    """制片引擎。`llm(stage, messages, schema) -> (text, stats)`；不能跑时抛 Park。"""
+    """Production engine. `llm(stage, messages, schema) -> (text, stats)`; raises Park when it cannot run."""
 
     def __init__(
         self,
@@ -231,9 +238,11 @@ class Production:
         freevideo=None,
     ):
         self.studio, self.store, self.skills = studio, studio.store, skills
-        # tool 阶段的确定性工具：fn(production, stage, inputs) -> data；可注册更多
+        # deterministic tools of tool stages: fn(production, stage, inputs) -> data; more can be
+        # registered
         self.tools: dict[str, Callable] = {"ingest": self._tool_ingest, **(tools or {})}
-        self.film = None  # film 阶段（FreeVideo 多镜头电影）；没有 FreeVideo 时这类阶段不能开跑
+        # film stage (FreeVideo multi-shot film); without FreeVideo these stages cannot start
+        self.film = None
         if freevideo is not None:
             from .film import FilmDriver
 
@@ -241,16 +250,17 @@ class Production:
             self.tools.setdefault("freevideo_cards", self.film.cards_tool)
         self.workflows, self.llm, self.log = workflows, llm, log
         self.work_dir = work_dir or (self.store.jobs_dir.parent / "productions")
-        self.listeners: list[Callable[[dict], None]] = []  # 阶段进入待审阅 / 失败 / 完成 → 通知
+        # a stage enters review / fails / completes → notify
+        self.listeners: list[Callable[[dict], None]] = []
         self.stop_running: Callable[[str], dict | None] = lambda pid: (
             None
-        )  # 由 daemon 注入：中断该制片正在跑的任务
+        )  # injected by the daemon: interrupt this production's running task
         self._lock = threading.RLock()
         self._wake = threading.Event()
         studio.round_listeners.append(self._on_round_created)
         studio.decision_listeners.append(self._on_round_decided)
 
-    # ---- 创建 ----
+    # ---- create ----
     def create(
         self,
         workflow: str,
@@ -274,19 +284,19 @@ class Production:
         return prod
 
     def update_settings(self, production_id: str, changes: dict) -> dict:
-        """改制片设置（例如对白语言、视频档位）。不会自动重跑已通过的产物——下次开跑的条目按新设置。"""
+        """Change production settings (e.g. dialogue language, video tier). Approved artifacts are not rerun automatically — items started next use the new settings."""
         prod = self._prod(production_id)
         return self.store.update_production(production_id, settings={**prod["settings"], **changes})
 
-    # ---- 暂停 / 继续 ----
+    # ---- pause / resume ----
     def task_production(self, task: dict) -> str | None:
         art = self.store.artifact_by_round(task["round_id"]) if task.get("round_id") else None
         return art and art["production_id"]
 
     def holds(self, task: dict) -> bool:
-        """Worker 取任务前问一句：所属制片暂停了就先不执行（队列保留，继续后照常跑）。"""
+        """The Worker asks before taking a task: if its production is paused, do not run it yet (the queue stays and runs after resume)."""
         if task.get("template") == "freevideo-take":
-            return True  # FreeVideo 的 take 由 FreeVideo 自己拍，不经 Worker
+            return True  # FreeVideo takes are shot by FreeVideo itself, not the Worker
         pid = self.task_production(task)
         if pid is None:
             return False
@@ -294,14 +304,14 @@ class Production:
         return bool(prod and prod["state"] == "paused")
 
     def pause(self, production_id: str, stop_running: bool = False) -> dict:
-        """暂停：不再开跑新条目、排着的渲染与 LLM 作业都先不执行；可选立即中断正在跑的那个。"""
+        """Pause: no new items start, queued renders and LLM jobs wait; optionally interrupt the running one right away."""
         prod = self._prod(production_id)
         if prod["state"] not in ("active", "done", "paused"):
             raise ProductionError(f"制片状态 {prod['state']}，不能暂停")
         prod = self.store.update_production(production_id, state="paused")
         stopped = self.stop_running(production_id) if stop_running else None
         if stop_running and self.film is not None:
-            self.film.cancel(production_id)  # 取消还没拍完的 take（拍好的保留）
+            self.film.cancel(production_id)  # cancel takes not yet shot (finished ones are kept)
         self.log(
             f"production {production_id}: paused"
             + (f", interrupted {stopped['id']}" if stopped else "")
@@ -313,8 +323,9 @@ class Production:
         if prod["state"] != "paused":
             raise ProductionError("这个制片没有暂停")
         prod = self.store.update_production(production_id, state="active")
-        plan = self.plan(production_id)  # 可能已经全部完成
-        for s in plan["stages"]:  # 暂停时被中断而失败的渲染条目：继续时重跑一次
+        plan = self.plan(production_id)  # may already be complete
+        # render items that failed because pausing interrupted them: rerun once on resume
+        for s in plan["stages"]:
             failed = [i["key"] for i in s["items"] if i["state"] == "failed"]
             if s["kind"] == "render" and failed and s["state"] != "blocked":
                 self.run_stage(production_id, s["id"], failed, "resumed after pause", "production")
@@ -332,9 +343,9 @@ class Production:
             raise ProductionError(f"找不到制片 {production_id}")
         return prod
 
-    # ---- 产物索引 ----
+    # ---- artifact index ----
     def _sync(self, art: dict) -> dict:
-        """渲染产物的状态从它的轮推导（审阅可能在控制台、Telegram、agent 任一处发生，也可能被重开）。"""
+        """A render artifact's status is derived from its round (review may happen in the console, Telegram or the agent, and may be reopened)."""
         if not art["round_id"] or art["status"] == "superseded":
             return art
         rnd = self.store.get_round(art["round_id"])
@@ -385,7 +396,7 @@ class Production:
         return live[-1] if live else None
 
     def _stage_data(self, wf: Workflow, idx, sid: str) -> Any:
-        """阶段的数据：单产物阶段给 data；展开的阶段给 {key: data}。"""
+        """A stage's data: single-artifact stages give data; fanned-out stages give {key: data}."""
         st = wf.stage(sid)
         if st.fan_out is None:
             cur = self._current(idx, sid)
@@ -399,7 +410,7 @@ class Production:
     def _ctx(self, prod: dict, wf: Workflow, idx) -> dict:
         lang = (prod["settings"].get("language") or "").strip()
         ctx = {
-            # speech_hint：由 language 派生，供视频提示词使用（H3 会生成人声）
+            # speech_hint: derived from language, used in video prompts (H3 generates voices)
             "settings": {
                 **prod["settings"],
                 "speech_hint": f" Dialogue and speech in {lang}." if lang else "",
@@ -430,7 +441,7 @@ class Production:
                 return True
         return False
 
-    # ---- 计划（权威、确定性） ----
+    # ---- plan (authoritative, deterministic) ----
     def plan(self, production_id: str) -> dict:
         with self._lock:
             prod = self._prod(production_id)
@@ -471,7 +482,8 @@ class Production:
                 states = {i["state"] for i in items}
                 if blocked_by:
                     sstate = "blocked"
-                elif st.fan_out and not items:  # 上游没有条目（例如没有人物）：视为完成
+                # upstream has no items (e.g. no characters): counts as complete
+                elif st.fan_out and not items:
                     sstate = "completed"
                     completed.add(st.id)
                 elif states & {"running"}:
@@ -508,7 +520,8 @@ class Production:
                 ]
                 stale = [i["key"] for i in s["items"] if i["state"] == "stale"]
                 if s["kind"] == "skill" and stale and s["state"] == "ready":
-                    # 上游变了：保留（确认仍然适用）还是重跑，由你决定——重跑会改动下游
+                    # upstream changed: keep it (confirm it still applies) or rerun — your call,
+                    # since rerunning changes downstream
                     nxt = {"type": "stale", "stage": s["id"], "options": ["keep", "redo"]}
                 elif s["state"] == "review" or (s["state"] == "active" and not todo):
                     kind = "review" if s["state"] == "review" else "wait"
@@ -526,9 +539,10 @@ class Production:
             done = all(s["state"] == "completed" for s in stages)
             if done and prod["state"] == "active":
                 prod = self.store.update_production(production_id, state="done")
-            elif not done and prod["state"] == "done":  # 完成后又重跑 / 换图 / 加了阶段：回到进行中
+            # rerun / replaced image / added stage after completion: back to active
+            elif not done and prod["state"] == "done":
                 prod = self.store.update_production(production_id, state="active")
-                self._wake.set()  # 它排着的作业现在可以执行了
+                self._wake.set()  # its queued jobs can run now
             return {
                 "production": prod,
                 "workflow": {"name": wf.name, "title": wf.title},
@@ -537,7 +551,7 @@ class Production:
                 "done": done,
             }
 
-    # ---- 执行 ----
+    # ---- execute ----
     def run_stage(
         self,
         production_id: str,
@@ -547,8 +561,8 @@ class Production:
         origin: str = "web",
         overrides: dict | None = None,
     ) -> list[dict]:
-        """开跑一个阶段（默认只跑缺失 / 过期 / 失败的条目）。返回新建的产物。
-        overrides（film 阶段）：只对这次生效的 {quality, takes}；这时待审阅的条目也可以再拍一版来对比。"""
+        """Start a stage (by default only missing / stale / failed items). Returns the new artifacts.
+        overrides (film stage): {quality, takes} for this run only; then items in review can also be shot again for comparison."""
         with self._lock:
             prod = self._prod(production_id)
             wf = self._wf(prod)
@@ -598,14 +612,16 @@ class Production:
                     made.append(self._start_assemble(prod, wf, st, idx, ctx, origin))
             self.log(f"production {production_id}: {stage_id} started ({len(made)} item(s))")
             self._wake.set()
-            if any(m["status"] == "current" for m in made):  # 有条目直接采用了你的图：可能已能推进
+            # some item took your image directly: may already be able to advance
+            if any(m["status"] == "current" for m in made):
                 self.advance(production_id)
             return made
 
     def _whole_deps(self, wf: Workflow, st: Stage, idx) -> list[dict]:
         deps = []
         for n in st.needs:
-            # 规划阶段读的是展开渲染阶段的“有哪些已通过的条目”，不是像素：换一张定妆图不让分镜过期
+            # planning stages read "which items are approved" from fanned-out render stages, not the
+            # pixels: replacing a casting image does not make the storyboard stale
             loose = wf.stage(n).kind in ("render", "assemble") and wf.stage(n).fan_out is not None
             for s, k in idx:
                 if s == n and self._current(idx, s, k):
@@ -617,7 +633,7 @@ class Production:
                         )
         return deps
 
-    # skill：排队，由 skill 工作线程在 LLM 可用时执行
+    # skill: queued; the skill worker thread runs it when the LLM is available
     def _queue_skill(self, prod, wf, st, idx, note) -> dict:
         prev = self._latest(idx, st.id, "main")
         meta = {"note": note, "previous": prev["id"] if prev and note else None}
@@ -668,7 +684,7 @@ class Production:
         ]
 
     def run_skill_job(self, art: dict) -> dict:
-        """执行一个排队的 skill 作业。LLM 不可用时抛 Park（作业仍在队列里）。"""
+        """Run one queued skill job. Raises Park when the LLM is unavailable (the job stays queued)."""
         prod = self._prod(art["production_id"])
         st = self._wf(prod).stage(art["stage"])
         if st.kind == "tool":
@@ -684,7 +700,8 @@ class Production:
                 data = extract_json(text)
                 jsonschema.validate(data, st.output_schema)
             except (json.JSONDecodeError, jsonschema.ValidationError) as e:
-                # 一次显式的修复机会：把违约原样告诉模型（策略：只修一次，不改任务语义）
+                # one explicit repair chance: tell the model exactly what was violated (policy:
+                # repair once, do not change what the task means)
                 msg = e.message if isinstance(e, jsonschema.ValidationError) else str(e)
                 messages += [
                     {"role": "assistant", "content": text},
@@ -711,7 +728,7 @@ class Production:
         except Park:
             self.store.update_artifact(art["id"], status="queued")
             raise
-        except Exception as e:  # noqa: BLE001 — 记下原因，等你决定重跑
+        except Exception as e:  # noqa: BLE001 — record the reason; you decide whether to rerun
             art = self.store.update_artifact(art["id"], status="failed", note=str(e)[:500])
             self._emit(prod, st, art, "failed")
             return art
@@ -732,7 +749,7 @@ class Production:
             data = self.tools[st.tool](prod, st, {n: ctx[n] for n in st.needs})
             if st.output_schema:
                 jsonschema.validate(data, st.output_schema)
-        except Exception as e:  # noqa: BLE001 — 记下原因，等你决定重跑
+        except Exception as e:  # noqa: BLE001 — record the reason; you decide whether to rerun
             art = self.store.update_artifact(art["id"], status="failed", note=str(e)[:500])
             self._emit(prod, st, art, "failed")
             return art
@@ -769,7 +786,7 @@ class Production:
         return sorted(jobs, key=lambda a: a["created"])
 
     def recover(self) -> int:
-        """进程重启：跑到一半的 skill 作业回到队列（LLM 调用无副作用，重跑安全）。"""
+        """Process restart: skill jobs that were halfway go back to the queue (LLM calls have no side effects, rerunning is safe)."""
         n = 0
         for prod in self.store.productions():
             wf = self.workflows.get(prod["workflow"])
@@ -778,13 +795,13 @@ class Production:
                 if not a["round_id"] and kind in (
                     "skill",
                     "tool",
-                ):  # 电影镜头等外部作业保持 running
+                ):  # external jobs such as film shots stay running
                     self.store.update_artifact(a["id"], status="queued")
                     n += 1
         return n
 
     def work(self, stop: threading.Event, idle_s: float = 30.0) -> None:
-        """skill 工作线程：依次执行排队作业；LLM 不可用时等渲染结束（wake）或超时再试。"""
+        """Skill worker thread: runs queued jobs in order; when the LLM is unavailable, waits for the render to end (wake) or a timeout and retries."""
         while not stop.is_set():
             parked = False
             filming = 0
@@ -792,7 +809,8 @@ class Production:
                 try:
                     self.film.tick()
                     filming = len(self._films_waiting())
-                except Exception as e:  # noqa: BLE001 — FreeVideo 暂时不可达：下轮再看
+                # FreeVideo temporarily unreachable: check again next pass
+                except Exception as e:  # noqa: BLE001
                     self.log(f"film poll failed: {e}")
             for art in self.pending_skill_jobs():
                 try:
@@ -801,7 +819,8 @@ class Production:
                     self.log(f"skill {art['stage']} parked: {e}")
                     parked = True
                     break
-                except Exception as e:  # noqa: BLE001 — 单个作业出错不能让整个后台线程退出
+                # one failing job must not stop the whole background thread
+                except Exception as e:  # noqa: BLE001
                     self.log(f"job {art['stage']}/{art['key']} failed: {e}")
                     self.store.update_artifact(art["id"], status="failed", note=str(e)[:500])
             idle = min(idle_s, 10.0) if filming else idle_s
@@ -824,7 +843,7 @@ class Production:
         self._wake.set()
 
     def _item_deps(self, prod, st, idx, ctx, key) -> list[dict]:
-        """展开阶段某个条目的依赖：它在上游列表里的那一项（按内容指纹）+ 其余上游阶段（宽松）。"""
+        """Dependencies of one item of a fanned-out stage: its entry in the upstream list (by content fingerprint) + the other upstream stages (loosely)."""
         item = dict(self._items(st, ctx)).get(key, {})
         src_stage = st.fan_out.items.split(".")[0]
         cur = self._current(idx, src_stage, "main")
@@ -844,7 +863,7 @@ class Production:
             deps.append({"stage": st.cast, "key": "main", "version": c and c["version"]})
         return deps
 
-    # render：一轮候选，选中即通过
+    # render: one round of candidates; picking one approves it
     def _start_render(self, prod, st, idx, ctx, key, origin) -> dict:
         items = dict(self._items(st, ctx)) if st.fan_out else {}
         item = items.get(key, {})
@@ -875,7 +894,8 @@ class Production:
         for alt in st.alternatives:
             v = lookup(local, alt.when.path)
             if (v == alt.when.equals) if alt.when.equals is not None else bool(v):
-                if alt.provide:  # 原样采用（例如你提供的定妆照）：直接作为已通过的产物
+                # taken as-is (e.g. a casting photo you provided): directly an approved artifact
+                if alt.provide:
                     return self._provided(
                         prod, st.id, key, interp(alt.provide, local), deps, "provided by reference"
                     )
@@ -900,7 +920,8 @@ class Production:
             origin=origin,
             request=f"production:{prod['id']}:{st.id}:{key}",
             project_id=prod["project_id"],
-            allow_unverified=True,  # 档位来自你创建制片时的设置（视为显式指定）
+            # the tier comes from your settings when you created the production (counts as explicit)
+            allow_unverified=True,
         )
         return self.store.artifact_by_round(rnd["id"]) or self._adopt(
             rnd, prod["id"], st.id, key, deps
@@ -908,7 +929,7 @@ class Production:
 
     @staticmethod
     def _reference(ctx: dict, ref_id: str | None) -> tuple[str | None, dict | None]:
-        """条目上的 reference（素材包里的参考图 ID）→ (所在阶段, 参考图)。"""
+        """An item's reference (a reference image ID in the material pack) → (its stage, the reference image)."""
         if not ref_id:
             return None, None
         for sid, data in ctx.items():
@@ -919,7 +940,7 @@ class Production:
         return None, None
 
     def _art_ref(self, idx, ref: str) -> tuple[str, dict]:
-        """@art:阶段/key → 该产物当前版本选中的任务（@task:ID）或你提供的文件，并记作依赖。"""
+        """@art:stage/key → the task picked in that artifact's current version (@task:ID) or the file you provided, recorded as a dependency."""
         stage, _, key = ref[len("@art:") :].partition("/")
         cur = self._current(idx, stage, key or "main")
         if cur is None or not (cur.get("task_id") or (cur.get("data") or {}).get("provided")):
@@ -961,7 +982,7 @@ class Production:
     def provide(
         self, production_id: str, stage_id: str, key: str, path: str, note: str | None = None
     ) -> dict:
-        """用你自己的图片 / 视频作为某个渲染条目（例如定妆照），视为已通过；下游照常按依赖过期。"""
+        """Use your own image / video as a render item (e.g. a casting photo), counted as approved; downstream goes stale by dependency as usual."""
         with self._lock:
             prod = self._prod(production_id)
             st = self._wf(prod).stage(stage_id)
@@ -980,7 +1001,7 @@ class Production:
             production_id, stage, key, "running", deps=deps, round_id=rnd["id"]
         )
 
-    # assemble：剪辑时间线 + 已通过的镜头 → FFmpeg
+    # assemble: edit timeline + approved shots → FFmpeg
     def _start_assemble(self, prod, wf, st, idx, ctx, origin) -> dict:
         tl_art = self._current(idx, st.timeline)
         tl = tl_art["data"]
@@ -1015,7 +1036,7 @@ class Production:
 
     @staticmethod
     def materialize(tl: dict, clip_arts: dict[str, dict | None], settings: dict) -> dict:
-        """剪辑 skill 的时间线（按镜头 ID）→ FFmpeg 时间线（文件路径 + 绝对字幕时间）。"""
+        """The edit skill's timeline (by shot ID) → an FFmpeg timeline (file paths + absolute subtitle times)."""
         clips, subs, t = [], [], 0.0
         trans = tl.get("transition") or {}
         overlap = (
@@ -1048,12 +1069,12 @@ class Production:
             out["transition"] = {"type": trans["type"], "seconds": overlap}
         return out
 
-    # ---- 轮的回调：跟随重做 / 微调派生的轮；决定后推进 ----
+    # ---- round callbacks: follow rounds derived by redo / refine; advance after a decision ----
     def _on_round_created(self, rnd: dict) -> None:
         if not rnd.get("parent_round") or self.store.artifact_by_round(rnd["id"]):
             return
         if self.film is not None and self.film.intercept_round(rnd):
-            return  # FreeVideo take 的重做 / 打回：转成 FreeVideo reshoot
+            return  # redo / reject of a FreeVideo take: turned into a FreeVideo reshoot
         parent = self.store.artifact_by_round(rnd["parent_round"])
         if parent is None:
             return
@@ -1067,13 +1088,15 @@ class Production:
         prod = self._prod(art["production_id"])
         if art["status"] == "current":
             if self.film is not None:
-                self.film.on_chosen(art, rnd)  # FreeVideo：选中这条，后面的续拍从它接着拍
+                # FreeVideo: pick this take; later continuations continue from it
+                self.film.on_chosen(art, rnd)
             self._supersede(art)
             self.advance(prod["id"])
             return
         d = rnd.get("decision") or {}
         if d.get("action") == "reject" and not d.get("note") and prod["state"] == "active":
-            # 制片里的条目不能空着：不带意见的打回 = 换种子重出（带意见的由规划器改参数后派生新轮）
+            # items in a production cannot stay empty: a reject without a note = rerun with new
+            # seeds (with a note, the planner changes parameters and derives a new round)
             self.log(f"production {prod['id']}: {art['stage']}/{art['key']} rejected → re-render")
             try:
                 self.run_stage(prod["id"], art["stage"], [art["key"]], origin="production")
@@ -1081,7 +1104,7 @@ class Production:
                 self.log(f"production {prod['id']}: re-render of {art['key']} not started: {e}")
 
     def on_round_ready(self, rnd: dict) -> None:
-        """一轮候选出完：自动通过的阶段（gate: auto）直接选第一个成功的候选。"""
+        """A round of candidates finished: auto-approved stages (gate: auto) pick the first successful candidate directly."""
         art = self.store.artifact_by_round(rnd["id"])
         if art is None:
             return
@@ -1099,7 +1122,7 @@ class Production:
             if a["key"] == art["key"] and a["id"] != art["id"] and a["version"] < art["version"]:
                 self.store.update_artifact(a["id"], status="superseded")
 
-    # ---- 审核（skill 阶段；渲染阶段在轮上审） ----
+    # ---- review (skill stages; render stages are reviewed on rounds) ----
     def review(
         self,
         production_id: str,
@@ -1119,7 +1142,9 @@ class Production:
                 raise ProductionError(f"{stage_id}/{key} 还没有产物")
             if art["round_id"]:
                 raise ProductionError("渲染阶段在候选轮上审阅（选中 / 重做 / 微调 / 打回）")
-            if action == "keep":  # 上游变了但这份仍然适用：按当前上游重新盖章，不改内容
+            # upstream changed but this version still applies: re-stamp against the current
+            # upstream, content unchanged
+            if action == "keep":
                 cur = self._current(idx, stage_id, key)
                 if cur is None:
                     raise ProductionError(f"{stage_id} 没有已通过的版本可保留")
@@ -1131,7 +1156,8 @@ class Production:
             if action == "approve":
                 if art["status"] not in ("review", "invalid") and data is None:
                     raise ProductionError(f"{stage_id} 当前状态 {art['status']}，没有待审内容")
-                if data is not None:  # 你手改过的内容：校验后作为新版本通过
+                # content you edited by hand: validated and approved as a new version
+                if data is not None:
                     jsonschema.validate(data, st.output_schema)
                     art = self.store.add_artifact(
                         production_id,
@@ -1151,7 +1177,8 @@ class Production:
                 self.advance(production_id)
                 return art
             if action == "redo":
-                # 已通过的版本在新版本通过前继续有效（下游不受影响）；待审 / 无效的那份作废
+                # the approved version stays valid until a new one is approved (downstream
+                # unaffected); the pending / invalid one is discarded
                 if art["status"] != "current":
                     self.store.update_artifact(art["id"], status="rejected", note=note)
                 return self.run_stage(production_id, stage_id, [key], note or "redo", origin)[0]
@@ -1159,7 +1186,7 @@ class Production:
             return self.store.get_artifact(art["id"])
 
     def pending_reviews(self, project_id: str | None = None) -> list[dict]:
-        """所有进行中制片里等你处理的规划阶段（待审核 / 未通过校验 / 上游变了）。渲染阶段在轮上审。"""
+        """Planning stages waiting for you in all active productions (pending review / failed validation / upstream changed). Render stages are reviewed on rounds."""
         out = []
         for prod in self.store.productions(project_id):
             if prod["state"] != "active":
@@ -1188,7 +1215,8 @@ class Production:
                         )
         return out
 
-    # ---- 推进：上一阶段通过后，自动开跑下一批就绪阶段（confirm 的阶段等你点开始） ----
+    # ---- advance: after a stage is approved, start the next ready stages automatically (confirm
+    # stages wait for you to press start) ----
     def advance(self, production_id: str) -> list[str]:
         prod = self._prod(production_id)
         if not prod["settings"].get("auto_advance", True) or prod["state"] != "active":
@@ -1201,11 +1229,11 @@ class Production:
             auto = ("missing",) if s["kind"] == "skill" else ("missing", "stale")
             fresh = [i["key"] for i in s["items"] if i["state"] in auto]
             if not fresh:
-                continue  # 失败 / 打回的条目等你决定，不自动重跑
+                continue  # failed / rejected items wait for your decision, not rerun automatically
             try:
                 self.run_stage(production_id, s["id"], fresh, origin="production")
                 started.append(s["id"])
-            except Exception as e:  # noqa: BLE001 — 记下来，计划里会显示为就绪
+            except Exception as e:  # noqa: BLE001 — recorded; the plan will show it as ready
                 self.log(f"production {production_id}: auto-start {s['id']} failed: {e}")
         return started
 

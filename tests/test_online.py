@@ -1,16 +1,16 @@
-"""在线后端与本机 agent CLI：转换、回退配置、委托执行、MCP 协议。"""
+"""Online backends and local agent CLIs: conversion, fallback config, delegated execution, MCP protocol."""
 
 import json
 from types import SimpleNamespace
 
 import pytest
-from test_agent import call, env, last_run, run_all  # noqa: F401 — 复用夹具
+from test_agent import call, env, last_run, run_all  # noqa: F401 — reused fixtures
 
 from video_agent.backends import AnthropicBackend, ChatResult, OpenAICompatBackend
 from video_agent.mcp_server import Server
 
 
-# ---------------- Anthropic 后端 ----------------
+# ---------------- Anthropic backend ----------------
 def test_anthropic_convert_groups_results_and_replays_raw():
     msgs = [
         {"role": "system", "content": "SYS"},
@@ -62,9 +62,10 @@ def test_anthropic_convert_groups_results_and_replays_raw():
         "id": "call_1",
         "name": "get_status",
         "input": {},
-    }  # id 清洗成 API 接受的字符
-    assert [b["tool_use_id"] for b in out[2]["content"]] == ["call_1", "c2"]  # 结果合进一条消息
-    assert out[3]["content"][0]["signature"] == "sig"  # Claude 的回合原样回放
+    }  # ids cleaned to characters the API accepts
+    # results merged into one message
+    assert [b["tool_use_id"] for b in out[2]["content"]] == ["call_1", "c2"]
+    assert out[3]["content"][0]["signature"] == "sig"  # Claude's turn replayed unchanged
 
 
 class _Block(SimpleNamespace):
@@ -127,7 +128,7 @@ def test_openai_compatible_strips_private_and_local_fields():
     assert body["messages"] == [{"role": "assistant", "content": "x"}]
 
 
-# ---------------- 回退配置 ----------------
+# ---------------- fallback config ----------------
 class FakeOnline:
     name, local = "anthropic", False
 
@@ -178,14 +179,15 @@ def test_online_api_takes_over_when_local_is_busy(env):  # noqa: F811
     a.inbound("web", "status?", lambda t, b=None: None)
     run_all(a)
     assert last_run(studio)["status"] == "done" and said[-1][0] == "answered online"
-    assert script.seen == []  # 本地 LLM 一次都没被调用
+    assert script.seen == []  # the local LLM was never called
     second = online.seen[1]
-    assert second[-2]["_anthropic"] == [{"type": "text", "text": "raw"}]  # Claude 的回合原样回放
+    # Claude's turn replayed unchanged
+    assert second[-2]["_anthropic"] == [{"type": "text", "text": "raw"}]
     logs = [m["text"] for m in studio.store.messages() if m["channel"] == "agent"]
     assert any("local LLM unavailable" in x for x in logs)
 
 
-# ---------------- 委托给本机 agent CLI ----------------
+# ---------------- delegating to a local agent CLI ----------------
 def test_delegate_to_cli_agent_runs_tools_through_policy(env, monkeypatch):  # noqa: F811
     studio, make, said = env
     studio.orch.cfg.llm_fallback = ["claude_code"]
@@ -204,12 +206,14 @@ def test_delegate_to_cli_agent_runs_tools_through_policy(env, monkeypatch):  # n
             return "done via Claude Code", {"via": "claude_code", "cost_usd": 0.01}
 
     a.runtime.cli_runner = lambda name: FakeCLI()
-    monkeypatch.setattr("threading.Thread.start", lambda self: self.run())  # 同步跑委托线程
+    # run the delegation thread synchronously
+    monkeypatch.setattr("threading.Thread.start", lambda self: self.run())
     a.inbound("web", "make something", lambda t, b=None: None)
     run_all(a)
     assert script.seen == []
     assert "memory_free_gib" in results["status"]
-    assert "exceeds the policy limit" in results["too_many"]["error"]  # 执行策略照样生效
+    # execution policy still applies
+    assert "exceeds the policy limit" in results["too_many"]["error"]
     run = last_run(studio)
     assert run["status"] == "done" and said[-1][0] == "done via Claude Code"
     assert a.runtime.external_tool(run["id"], "get_status", {})["error"].startswith("this run")
@@ -220,7 +224,7 @@ def test_cli_commands_are_locked_down(env, tmp_path):  # noqa: F811
 
     studio, _, _ = env
     cmd = AgentCLI("claude_code", studio.orch.cfg).command("r1", "http://x", tmp_path)
-    assert cmd[cmd.index("--tools") + 1] == ""  # 没有任何内置工具
+    assert cmd[cmd.index("--tools") + 1] == ""  # no built-in tools at all
     assert "--strict-mcp-config" in cmd and cmd[cmd.index("--allowedTools") + 1] == "mcp__aco_lw"
     mcp = json.loads((tmp_path / "r1.mcp.json").read_text())["mcpServers"]["aco_lw"]
     assert mcp["args"][:2] == ["-m", "video_agent.mcp_server"]
@@ -228,7 +232,7 @@ def test_cli_commands_are_locked_down(env, tmp_path):  # noqa: F811
     assert cx[cx.index("-s") + 1] == "read-only" and cx[-1] == "-"
 
 
-# ---------------- MCP 协议 ----------------
+# ---------------- MCP protocol ----------------
 class FakeHTTP:
     def __init__(self):
         self.posts = []
@@ -359,7 +363,7 @@ def test_codex_error_is_read_from_event_stream():
     assert AgentCLI._codex_error('{"type":"turn.completed"}') is None
 
 
-# ---------------- 交给 FreeVideo agent ----------------
+# ---------------- handing off to the FreeVideo agent ----------------
 def test_freevideo_agent_cli_gets_both_mcp_servers(env, tmp_path):  # noqa: F811
     from video_agent.agent_cli import AgentCLI
 
@@ -386,8 +390,9 @@ def test_fv_command_needs_its_online_switch_then_hands_over(env, monkeypatch):  
     monkeypatch.setattr("threading.Thread.start", lambda self: self.run())
     replies = []
     a.inbound("web", "/fv dance video", lambda t, b=None: replies.append(t))
-    assert "freevideo_agent_online" in replies[-1] and "name" not in seen  # 没打开：不发出去
-    studio.orch.cfg.freevideo_agent_online = True  # 只为这条路线放行在线
+    # not enabled: nothing goes out
+    assert "freevideo_agent_online" in replies[-1] and "name" not in seen
+    studio.orch.cfg.freevideo_agent_online = True  # allow online for this route only
     assert studio.orch.cfg.allow_online is False
     a.inbound("web", "/fv dance video", lambda t, b=None: None)
     assert seen["name"] == "freevideo" and "FreeVideo agent" in seen["prompt"]
@@ -412,7 +417,7 @@ def test_local_agent_hands_over_after_approval_and_gets_the_report(env, monkeypa
     a.inbound("web", "make a film with cast cards", lambda t, b=None: None)
     run_all(a)
     parent = studio.store.runs(None)[0]
-    assert parent["status"] == "waiting_user"  # 先问你同不同意交出去
+    assert parent["status"] == "waiting_user"  # asks whether you agree to hand it over first
     m = next(
         x
         for x in studio.store.agent_msgs(parent["id"])
@@ -427,7 +432,8 @@ def test_local_agent_hands_over_after_approval_and_gets_the_report(env, monkeypa
     assert said[-1][0] == "FreeVideo says: film ready"
 
 
-# ---------------- 在线大脑：/model 切换、OpenAI 官方 API、交给 Claude Code / Codex ----------------
+# ---------------- online brains: /model switching, the official OpenAI API, handing to Claude Code
+# / Codex ----------------
 def test_openai_backend_uses_reasoning_model_params(env, monkeypatch):  # noqa: F811
     from video_agent.planner import PlannerUnavailable, make_named_backend
 
@@ -461,8 +467,9 @@ def test_model_command_switches_brain_only_when_online_is_allowed(env):  # noqa:
     assert a.runtime.brain() == "openrouter"
     a.inbound("web", "hi", lambda t, b=None: None)
     run_all(a)
-    assert said[-1][0] == "from openrouter" and script.seen == []  # 本地没被调用
-    studio.orch.cfg.allow_online = False  # 之后关掉在线：自动退回本地，不往外发
+    assert said[-1][0] == "from openrouter" and script.seen == []  # local was not called
+    # then online is turned off: automatically back to local, nothing goes out
+    studio.orch.cfg.allow_online = False
     script.steps.append({"text": "local again"})
     a.inbound("web", "hi", lambda t, b=None: None)
     run_all(a)
@@ -495,7 +502,8 @@ def test_local_agent_delegates_subtask_to_claude_code_after_approval(env, monkey
     )
     a.inbound("web", "hard bug", lambda t, b=None: None)
     run_all(a)
-    assert said[-1][0].startswith("noted: Online")  # 在线没开：不弹审批，直接告诉 agent
+    # online not enabled: no approval prompt, the agent is told directly
+    assert said[-1][0].startswith("noted: Online")
     studio.orch.cfg.allow_online = True
     a2, _ = make(
         {"tool_calls": [call("delegate_agent", {"agent": "claude_code", "task": "debug it"})]},

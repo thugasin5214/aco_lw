@@ -1,7 +1,7 @@
-"""模板注册表与模型注册表。
+"""Template registry and model registry.
 
-模板目录 `templates/<name>/`：`api.json`（ComfyUI API 格式）+ `template.yaml`（槽位、档位）。
-新模型 = 新模板目录 + `models.yaml` 一条实测记录，编排器代码不变。
+Template directory `templates/<name>/`: `api.json` (ComfyUI API format) + `template.yaml` (slots, tiers).
+A new model = a new template directory + one measured entry in `models.yaml`; orchestrator code does not change.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ class Template(BaseModel):
     kind: Literal["image", "video"]
     model: str
     source: str = ""
-    executor: str = "comfy"  # 由哪个执行端运行（executors/）
+    executor: str = "comfy"  # which executor runs it (executors/)
     release_after: Literal["keep", "free"] = "free"
     output_prefix: NodeField | None = None
     slots: dict[str, Slot]
@@ -57,8 +57,9 @@ class Template(BaseModel):
     default_tier: str
     graph: dict = {}
     sha: str = ""
-    origin: Literal["builtin", "user", "variant"] = "builtin"  # 内置 / 用户晋升 / 候选变体
-    meta: dict = {}  # 变体的元数据（基础模板、项目、状态、差异、试跑结果）
+    # built-in / promoted by the user / candidate variant
+    origin: Literal["builtin", "user", "variant"] = "builtin"
+    meta: dict = {}  # variant metadata (base template, project, status, diff, trial results)
 
 
 class ModelInfo(BaseModel):
@@ -66,9 +67,10 @@ class ModelInfo(BaseModel):
     peak_gib: float
     measured: bool = False
     exclusive_llm: bool = False
-    adaptive: bool = False  # 引擎按可用内存自适应（如 FreeVideo）：实测峰值≠最低需求
-    resource: Literal["memory", "cpu"] = "memory"  # cpu：不经内存闸门（如 FFmpeg）
-    exec_s: float | None = None  # 没有历史时的默认耗时（估算）
+    # engine adapts to available memory (e.g. FreeVideo): measured peak != minimum requirement
+    adaptive: bool = False
+    resource: Literal["memory", "cpu"] = "memory"  # cpu: skips the memory gate (e.g. FFmpeg)
+    exec_s: float | None = None  # default duration when there is no history (estimate)
 
 
 def load_template(dir_: Path, origin: str = "builtin") -> Template:
@@ -89,9 +91,9 @@ def load_template(dir_: Path, origin: str = "builtin") -> Template:
 
 
 class Registry:
-    """内置模板（仓库 templates/）+ 用户晋升的模板（data/templates/）+ 候选变体（data/variants/）。
+    """Built-in templates (repo templates/) + user-promoted templates (data/templates/) + candidate variants (data/variants/).
 
-    候选变体只在状态为 candidate / trial_ok 时加载；规划器默认看不到它们（见 builtin_and_user）。
+    Candidate variants load only in state candidate / trial_ok; the planner does not see them by default (see builtin_and_user).
     """
 
     def __init__(
@@ -129,7 +131,7 @@ class Registry:
         self.templates = templates
 
     def builtin_and_user(self) -> dict[str, Template]:
-        """规划器可用的模板：不含未晋升的候选变体。"""
+        """Templates available to the planner: excludes unpromoted candidate variants."""
         return {k: t for k, t in self.templates.items() if t.origin != "variant"}
 
     def template(self, name: str) -> Template:

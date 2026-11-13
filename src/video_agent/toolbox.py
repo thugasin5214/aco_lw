@@ -1,15 +1,15 @@
-"""通用工具层：agent 是大脑，只提出 tool call；编排器（这里）执行，结果落库后择机交回。
+"""Generic tool layer: the agent is the brain and only proposes tool calls; the orchestrator (here) executes them, stores the result and hands it back when it can.
 
-- 慢的工具（读网页、执行命令）放进后台工具队列（ToolJobs），不占 agent 线程、不需要 LLM 在线：
-  跑完把结果写进对应的工具消息；LLM 此时若被卸载（视频渲染占内存），运行停在 waiting_resources，
-  内存空出来再把结果交回去（与等渲染完全同一条路径）。
-- 执行命令一律先经你批准（Telegram / 控制台按钮），除非命令以 policies.yaml 里
-  `run_command.auto_allow` 列出的前缀开头（默认空）。批准后仍拒绝：直连 ComfyUI / FreeVideo、
-  读 FreeVideo token——生成相关的副作用只走编排器的生成工具（资源闸门、只动自己的任务）。
-- 文件：读限于 data/ 与 skill 目录；写限于本次运行的工作目录 data/agent-work/<run>/。
-- skill：兼容 Claude Code 的 SKILL.md（内置 skills/、data/skills/、`agent_skill_dirs`，默认含
-  ~/.claude/skills）。系统提示只列名字与描述，agent 需要时 load_skill 读全文，按其中说明用工具执行。
-- 记忆：agent 自己的长期记忆 data/agent_memory/*.md（MEMORY.md 为索引，进系统提示）。
+- Slow tools (reading web pages, running commands) go to the background tool queue (ToolJobs); they do not hold the agent thread or need the LLM online:
+  when done the result is written into the matching tool message; if the LLM is unloaded at that moment (a video render needs the memory), the run waits in waiting_resources
+  and gets the result once memory frees up (exactly the same path as waiting for a render).
+- Commands always need your approval first (Telegram / console buttons), unless the command starts with a prefix listed in
+  `run_command.auto_allow` in policies.yaml (empty by default). Still refused after approval: direct access to ComfyUI / FreeVideo,
+  reading the FreeVideo token — generation side effects only go through the orchestrator's generation tools (resource gate, only our own tasks).
+- Files: reads limited to data/ and skill directories; writes limited to this run's work directory data/agent-work/<run>/.
+- Skills: compatible with Claude Code's SKILL.md (built-in skills/, data/skills/, `agent_skill_dirs`, which by default includes
+  ~/.claude/skills). The system prompt lists only names and descriptions; the agent load_skill's the full text when needed and follows it with tools.
+- Memory: the agent's own long-term memory in data/agent_memory/*.md (MEMORY.md is the index and goes into the system prompt).
 """
 
 from __future__ import annotations
@@ -25,10 +25,12 @@ from pathlib import Path
 
 log = logging.getLogger("aco_lw.toolbox")
 
-OUT_TAIL = 6000  # 交回 LLM 的输出尾部字符数；全文留在日志文件
+# characters of output tail handed back to the LLM; the full text stays in the log file
+OUT_TAIL = 6000
 MAX_TIMEOUT_S = 3600
 MAX_READ_CHARS = 20000
-# 批准了也不执行：生成的副作用只走编排器；token 只在编排器进程内读取
+# never executed even when approved: generation side effects only go through the orchestrator; the
+# token is read only inside the orchestrator process
 BLOCKED = [
     (
         re.compile(r"(127\.0\.0\.1|localhost|0\.0\.0\.0)?:8188\b"),
@@ -52,7 +54,7 @@ def _tail(text: str, n: int = OUT_TAIL) -> str:
 
 
 class ToolJobs:
-    """后台工具队列：慢工具在这里跑，跑完调用 done(key, result)。"""
+    """Background tool queue: slow tools run here and call done(key, result) when finished."""
 
     def __init__(self, done: Callable[[str, dict], object], workers: int = 2):
         self.done = done
@@ -91,7 +93,7 @@ class Toolbox:
 
         self.mcp = MCPHub(cfg)
 
-    # ---- 路径 ----
+    # ---- paths ----
     def workdir(self, run_id: str) -> Path:
         d = self.work_root / run_id
         d.mkdir(parents=True, exist_ok=True)
@@ -105,7 +107,7 @@ class Toolbox:
     def _resolve(self, run_id: str, path: str) -> Path:
         path = path.strip()
         store = self.rt.studio.store
-        if path.startswith("@task:"):  # 任务产物：第一个输出文件
+        if path.startswith("@task:"):  # task output: the first output file
             task = store.get(path[len("@task:") :])
             if not task or not task["outputs"]:
                 raise ValueError(f"{path}: no such task or it has no output")
@@ -133,11 +135,12 @@ class Toolbox:
             raise ValueError(f"只能写本次运行的工作目录 {self.workdir(run_id)}：{p}")
         return p
 
-    # ---- 命令 ----
+    # ---- commands ----
     def auto_allowed(self, command: str) -> bool:
         prefixes = self.rt.policies.tool("run_command").get("auto_allow") or []
         c = command.strip()
-        # 有管道 / 串联 / 重定向 / 子命令的不自动放行：前缀只对单条命令有意义
+        # pipes / chaining / redirects / subshells are never auto-allowed: a prefix only means
+        # something for a single command
         if re.search(r"[;&|`$<>]|\n", c):
             return False
         return any(c == p or c.startswith(p + " ") for p in prefixes)
@@ -155,7 +158,9 @@ class Toolbox:
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
-                errors="replace",  # 输出可能截断在多字节字符中间（如 head -c），不能让整条命令失败
+                # output may be cut inside a multi-byte character (e.g. head -c); that must not fail
+                # the whole command
+                errors="replace",
                 timeout=min(max(timeout_s, 1), MAX_TIMEOUT_S),
                 stdin=subprocess.DEVNULL,
             )
@@ -185,7 +190,7 @@ class Toolbox:
             "log": str(logf),
         }
 
-    # ---- 网页 ----
+    # ---- web pages ----
     def web_fetch(self, run_id: str, url: str, max_chars: int) -> dict:
         import httpx
         import trafilatura
@@ -228,7 +233,7 @@ class Toolbox:
             "try a skill such as agent-reach via run_command)",
         }
 
-    # ---- 文件 ----
+    # ---- files ----
     def read_file(self, run_id: str, path: str, offset: int, limit: int) -> dict:
         p = self.readable(run_id, path)
         if p.is_dir():
@@ -291,7 +296,7 @@ class Toolbox:
             "skill's commands with run_command",
         }
 
-    # ---- 记忆 ----
+    # ---- memory ----
     def memory_index(self) -> str:
         idx = self.memory_dir / "MEMORY.md"
         return idx.read_text().strip() if idx.exists() else ""
@@ -327,8 +332,9 @@ class Toolbox:
         idx.write_text("\n".join(lines) + ("\n" if lines else ""))
         return {"name": slug, action: True}
 
-    # ---- 媒体 ----
-    # ---- 看图：编排器把图 / 视频帧缩小后交给视觉 LLM ----
+    # ---- media ----
+    # ---- look: the orchestrator shrinks images / video frames and hands them to the vision LLM
+    # ----
     LOOK_MAX = 8
     IMAGE_EXT = frozenset({".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"})
     VIDEO_EXT = frozenset({".mp4", ".mov", ".webm", ".mkv", ".m4v"})
@@ -338,7 +344,7 @@ class Toolbox:
         out: list[str] = []
         for r in refs:
             r = r.strip()
-            if r.startswith("@round:"):  # 整轮：每个成功任务的第一个产物
+            if r.startswith("@round:"):  # a whole round: the first output of each successful task
                 rid = r[len("@round:") :]
                 if store.get_round(rid) is None:
                     raise ValueError(f"{r}: no such round")
@@ -348,7 +354,7 @@ class Toolbox:
         return out
 
     def look(self, run_id: str, refs: list[str], max_side: int = 1024) -> dict:
-        """准备给 LLM 看的图：图片缩到长边 max_side；视频抽 6 帧拼成一张。"""
+        """Prepare images for the LLM: images scaled to max_side on the long edge; videos become one sheet of 6 frames."""
         refs = self._expand_look(refs)
         dest = self.workdir(run_id) / "look"
         dest.mkdir(parents=True, exist_ok=True)

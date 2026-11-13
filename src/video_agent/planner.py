@@ -1,12 +1,12 @@
-"""LLM 规划器（可选、按需唤醒）：把自然语言翻译成受约束的数据。
+"""LLM planner (optional, woken on demand): translates natural language into constrained data.
 
-- 只产出数据（动作、模板、参数、回复、记忆提议），一律再经模板槽位校验；不碰 ComfyUI 或 shell。
-- 上下文按缓存友好顺序组装（S8，实测前缀命中 0.3–0.5 s vs 冷算约 48 s / 17k token）：
-    system = 规则 + 模板说明（静态）+ 项目记忆（少变）+ 会话摘要（压缩时才变）
-    history = 会话消息原文（只追加）
-    final user = 实时状态（易变）+ 本次输入
-- 会话变长时把较早的消息压缩进会话摘要（S4），压缩后预热。
-- 后端可替换（S9）：本地 LM Studio、OpenAI 兼容接口；阶段 6 再加在线 agent。
+- Produces data only (action, template, parameters, reply, memory proposals), always re-validated against template slots; never touches ComfyUI or a shell.
+- Context is assembled in a cache-friendly order (S8, measured prefix hit 0.3–0.5 s vs ~48 s cold for 17k tokens):
+    system = rules + template docs (static) + project memory (changes rarely) + session summary (changes only on compaction)
+    history = session messages verbatim (append-only)
+    final user = live status (volatile) + this input
+- When a session grows, older messages are compacted into the session summary (S4), then the cache is prewarmed.
+- Backends are swappable (S9): local LM Studio, OpenAI-compatible APIs; online agents came in stage 6.
 """
 
 from __future__ import annotations
@@ -78,7 +78,8 @@ SUMMARY_SCHEMA = {
     "required": ["summary"],
 }
 
-RULES_FILE = ROOT / "prompts" / "planner_rules.md"  # 可直接编辑；改动会让前缀缓存失效一次
+# editable; a change invalidates the prefix cache once
+RULES_FILE = ROOT / "prompts" / "planner_rules.md"
 
 
 def load_rules() -> str:
@@ -110,11 +111,11 @@ AGENT_CLIS = ("claude_code", "codex")
 
 ONLINE_APIS = ("openai", "openrouter", "anthropic", "openai_compatible")
 AGENT_CLIS = ("claude_code", "codex")
-BRAINS = ("local", *ONLINE_APIS, *AGENT_CLIS)  # /model 可选的大脑
+BRAINS = ("local", *ONLINE_APIS, *AGENT_CLIS)  # brains selectable with /model
 
 
 def make_named_backend(cfg: Settings, store: Store, name: str):
-    """按名字建后端：lmstudio（本地）、openai_compatible、anthropic（在线）。"""
+    """Build a backend by name: lmstudio (local), openai_compatible, anthropic (online)."""
     if name == "openai_compatible":
         return OpenAICompatBackend(cfg.openai_base_url, cfg.openai_model, cfg.openai_api_key)
     if name == "openai":
@@ -136,7 +137,8 @@ def make_named_backend(cfg: Settings, store: Store, name: str):
         key = cfg.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY")
         b = OpenAICompatBackend(cfg.openrouter_base_url, cfg.openrouter_model, key)
         b.name = "openrouter"
-        b.http.headers["X-Title"] = "aco_lw"  # OpenRouter 用来标注来源应用（可选）
+        # OpenRouter uses it to label the calling app (optional)
+        b.http.headers["X-Title"] = "aco_lw"
         return b
     if name == "anthropic":
         from .backends import AnthropicBackend
@@ -189,12 +191,12 @@ class Planner:
 
     @resources.setter
     def resources(self, rm) -> None:
-        """注入 ResourceManager，并让本地后端每次加载模型前都先问它（跨进程把关）。"""
+        """Inject the ResourceManager and make the local backend ask it before every model load (cross-process gate)."""
         self._resources = rm
         if rm is not None and hasattr(self.backend, "load_guard"):
             self.backend.load_guard = lambda: None if rm.llm_admit()[0] else rm.llm_admit()[1]
 
-    # ---- 驻留 ----
+    # ---- residency ----
     @property
     def mode(self) -> str:
         return self.store.get_kv("llm_mode", "on_demand")
@@ -213,7 +215,7 @@ class Planner:
     def available(self) -> bool:
         return self.mode != "command_only"
 
-    # ---- 上下文组装 ----
+    # ---- context assembly ----
     def _templates_text(self) -> str:
         lines = []
         for t in self.registry.builtin_and_user().values():
@@ -229,7 +231,7 @@ class Planner:
     def system_prompt(
         self, project_id: str | None, session: dict | None, rules: str | None = None
     ) -> str:
-        """稳定前缀：规则 + 模板（静态）→ 项目记忆 → 会话摘要。不放任何易变内容。"""
+        """Stable prefix: rules + templates (static) → project memory → session summary. Nothing volatile."""
         parts = [rules or load_rules(), "## 可用模板\n" + self._templates_text()]
         if project_id:
             p = self.store.get_project(project_id)
@@ -251,17 +253,17 @@ class Planner:
         return m["text"] + (f"\n[动作] {json.dumps(act, ensure_ascii=False)}" if act else "")
 
     def _pairs(self, session: dict, before_id: int | None = None) -> list[tuple[dict, dict]]:
-        """会话里每次规划调用的 (当时发出的 user 原文, 规划器回复) 对。
+        """The (user text as sent at the time, planner reply) pairs of every planning call in the session.
 
-        实测（docs/baseline.md）：该模型的前缀缓存只能“延长”，不能截断复用，
-        所以历史必须逐字复现当时发出的内容，下一次请求才是上一次的延长。
+        Measured (docs/baseline.md): this model's prefix cache can only be "extended", not reused after truncation,
+        so history must reproduce exactly what was sent; then the next request is an extension of the previous one.
         """
         pairs, last_user = [], "（接续之前的会话）"
         for m in self.store.session_messages(session["id"], session["summary_upto"]):
             if before_id is not None and m["id"] >= before_id:
                 break
             if m["direction"] == "in" and m["channel"] in ("web", "telegram", "cli"):
-                last_user = m["text"]  # 旧消息没有 sent_tail 时的回退
+                last_user = m["text"]  # fallback for old messages without sent_tail
             if m["channel"] == "llm" and m["meta"].get("purpose") in ("plan", "note"):
                 tail = m["meta"].get("sent_tail") or last_user
                 pairs.append((m, {"role": "user", "content": tail}))
@@ -290,7 +292,8 @@ class Planner:
             )
         else:
             lines.append("基准包：空")
-        # 精简：待审阅轮给完整 prompt（可能要改它），生成中只给一行，已决定的只留最近 2 轮的决定
+        # trimmed: rounds in review get the full prompt (it may need editing), generating ones one
+        # line, decided ones only the last 2 decisions
         rounds = self.store.rounds(project_id)
         closed = [r for r in rounds if r["state"] == "closed"][:2]
         for r in [r for r in rounds if r["state"] != "closed"] + closed:
@@ -325,7 +328,7 @@ class Planner:
         msgs.append({"role": "user", "content": final})
         return msgs
 
-    # ---- 调用 ----
+    # ---- calls ----
     def _call(
         self,
         purpose: str,
@@ -336,7 +339,8 @@ class Planner:
         log: bool = True,
     ) -> dict:
         inflight = self.resources.llm.inference() if self.resources else contextlib.nullcontext()
-        with inflight:  # 推理进行中，渲染把关会等它答完再卸载 LLM
+        # inference in progress: the render gate waits for the answer before unloading the LLM
+        with inflight:
             res: ChatResult = self.backend.chat(messages, schema)
         data = _parse_json(res.text)
         if log:
@@ -397,7 +401,7 @@ class Planner:
         session_id: str | None = None,
         before_id: int | None = None,
     ) -> tuple[dict, str, list[str]]:
-        """批注 → 参数增量（只允许模板槽位里的非尺寸、非图片参数）。"""
+        """Note → parameter delta (only non-size, non-image parameters in the template's slots)."""
         t = self.registry.template(template)
         editable = [n for n, s in t.slots.items() if n not in TIER_KEYS and s.type != "image"]
         shown = {k: v for k, v in base_params.items() if k in editable}
@@ -418,7 +422,8 @@ class Planner:
         if data.get("prompt"):
             delta["prompt"] = data["prompt"]
         if data.get("steps") and steps:
-            try:  # 越界或模板不支持的 steps 直接忽略，保留 prompt 的修改
+            # out-of-range steps, or a template without steps: ignore it, keep the prompt change
+            try:
                 self._validate(template, {**shown, "steps": data["steps"]}, None, partial=True)
                 delta["steps"] = data["steps"]
             except ParamError:
@@ -428,9 +433,9 @@ class Planner:
         mems = [m for m in data.get("memories") or [] if m.strip()][:3]
         return delta, data.get("reply", ""), mems
 
-    # ---- 会话摘要与预热 ----
+    # ---- session summary and prewarm ----
     def maybe_summarize(self, session_id: str | None, force: bool = False) -> bool:
-        """上一次调用的 prompt 超过阈值时，把较早的消息压缩进会话摘要（唯一的前缀重写点）。"""
+        """When the last call's prompt exceeded the threshold, compact older messages into the session summary (the only point where the prefix is rewritten)."""
         last = getattr(self, "_last", None)
         if not session_id or (
             not force and (not last or last.prompt_tokens < self.cfg.session_summary_tokens)
@@ -438,7 +443,8 @@ class Planner:
             return False
         session = self.store.get_session(session_id)
         pairs = self._pairs(session)
-        keep = max(1, self.cfg.session_keep_messages // 2)  # 按“轮”保留：一问一答
+        # keep whole exchanges: one question, one answer
+        keep = max(1, self.cfg.session_keep_messages // 2)
         if len(pairs) <= keep:
             return False
         old, upto = pairs[:-keep], pairs[-keep - 1][0]["id"]
@@ -473,7 +479,7 @@ class Planner:
         return True
 
     def prewarm(self, session_id: str | None) -> ChatResult | None:
-        """重发上一次规划请求的完整内容，把它写回缓存；下一次请求正好是它的延长。"""
+        """Resend the last planning request in full to write it back into the cache; the next request is exactly its extension."""
         if not session_id or not self.available():
             return None
         s = self.store.get_session(session_id)
@@ -493,7 +499,8 @@ class Planner:
             raise ParamError(f"规划器选了未知模板 {template}")
         t = self.registry.template(template)
         check = {k: v for k, v in params.items() if not (isinstance(v, str) and v.startswith("@"))}
-        for name, s in t.slots.items():  # 引用类图片参数在创建任务时再解析
+        # reference-type image parameters are resolved when the task is created
+        for name, s in t.slots.items():
             if s.required and name not in check:
                 check[name] = "placeholder"
         if partial:

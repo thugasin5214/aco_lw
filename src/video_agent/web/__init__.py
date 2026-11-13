@@ -1,7 +1,7 @@
-"""Web 控制台：进度（DAG / 流水线 / 产物）、审阅操作、项目与对话历史。
+"""Web console: progress (DAG / pipeline / outputs), review actions, projects and chat history.
 
-审阅与对话走 Actions（与 Telegram 相同的函数）；需要 LLM 的批注进规划器队列，结果写入对话历史。
-由 `va daemon` 启动时与 Worker 同进程；`va serve` 单独启动时没有 Worker，排队任务不会执行。
+Review and chat go through Actions (the same functions as Telegram); notes that need the LLM go to the planner queue and results land in chat history.
+Started by `va daemon` it shares the process with the Worker; started alone by `va serve` there is no Worker and queued tasks do not run.
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ TASK_KEYS = (
 
 
 def create_app(cfg: Settings, actions=None) -> FastAPI:
-    if actions is None:  # 独立运行：自带规划器线程，但没有 Worker
+    if actions is None:  # standalone: its own planner thread, but no Worker
         from ..daemon import Actions
         from ..planner import Planner
         from ..scheduler import Orchestrator
@@ -101,13 +101,13 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
         except jsonschema.ValidationError as e:
             raise HTTPException(400, f"schema: {e.message}") from e
 
-    # ---- 页面 ----
+    # ---- pages ----
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
         return STATIC.read_text()
 
     def _doc(name: str, ext: str, lang: str | None) -> Path:
-        """英文为主文件；lang=zh 时优先 *.zh-CN.<ext>。"""
+        """English is the main file; with lang=zh prefer *.zh-CN.<ext>."""
         zh = ROOT / "docs" / f"{name}.zh-CN.{ext}"
         if (lang or cfg.language).startswith("zh") and zh.exists():
             return zh
@@ -140,7 +140,7 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
             'lang="zh-CN"', 'lang="zh-CN"' if (lang or "").startswith("zh") else 'lang="en"'
         )
 
-    # ---- 状态 ----
+    # ---- status ----
     @app.get("/api/system")
     def system() -> dict:
         comfy = {"online": False}
@@ -189,7 +189,7 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
             },
         }
 
-    # ---- 任务 ----
+    # ---- tasks ----
     @app.get("/api/tasks")
     def tasks(project: str | None = None) -> list[dict]:
         return [slim(t) for t in store.list(500, project)]
@@ -202,7 +202,7 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
         t["events"] = store.events(task_id)
         return t
 
-    # ---- DAG：轮为节点（含候选缩略图），独立任务也是节点 ----
+    # ---- DAG: rounds are nodes (with candidate thumbnails); standalone tasks are nodes too ----
     def _production_graph(project: str | None) -> tuple[dict[str, list[str]], list[dict]]:
         engine = getattr(actions, "production", None)
         extra: dict[str, list[str]] = {}
@@ -226,7 +226,8 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
                 out = []
                 for d in a["deps"]:
                     dep = by_ver.get((d["stage"], d["key"], d.get("version")))
-                    if dep is None:  # 按条目指纹记的依赖：连到该阶段的节点
+                    # dependency recorded by item fingerprint: link to that stage's node
+                    if dep is None:
                         dep = latest.get((d["stage"], d["key"]))
                     if dep is not None:
                         out.append(node_id(dep))
@@ -282,12 +283,15 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
                     "tasks": [slim(c) for c in cands],
                 }
             )
-        # 制片：规划阶段也是节点；渲染轮按产物依赖连到上游（设定 → 定妆 → 分镜 → 关键帧 → 视频 → 剪辑 → 成片）
+        # productions: planning stages are nodes too; render rounds link upstream by artifact
+        # dependency (bible → casting → storyboard → keyframes → video → edit → final)
         extra, stage_nodes = _production_graph(project)
         for n in nodes:
             n["parents"] = sorted(set(n["parents"]) | set(extra.get(n["id"], [])))
             art = store.artifact_by_round(n["id"])
-            if art:  # 制片的渲染轮：带上所属阶段与条目（控制台可手动重跑）
+            # a production's render round: attach its stage and item (the console can rerun it by
+            # hand)
+            if art:
                 n.update(production_id=art["production_id"], stage=art["stage"], key=art["key"])
         nodes += stage_nodes
         for t in ts:
@@ -309,7 +313,7 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
             )
         return nodes
 
-    # ---- 项目与历史 ----
+    # ---- projects and history ----
     @app.get("/api/projects")
     def projects() -> list[dict]:
         out = []
@@ -359,7 +363,7 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
     def finish_project(project_id: str) -> dict:
         return guard(lambda: studio.finish_project(project_id))
 
-    # ---- 审阅 ----
+    # ---- review ----
     @app.get("/api/review")
     def review_queue() -> list[dict]:
         items = [
@@ -389,7 +393,7 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
             guard(lambda: studio.lock(rnd["decision"]["task_id"], role))
         return rnd
 
-    # ---- 删除产物（连同 data/jobs 与 ComfyUI 里本系统生成的原图） ----
+    # ---- delete outputs (with data/jobs and the originals this system generated in ComfyUI) ----
     @app.post("/api/rounds/{round_id}/delete")
     def delete_round(round_id: str) -> dict:
         return guard(lambda: studio.delete_round(round_id))
@@ -450,9 +454,10 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
     def redo_task(task_id: str) -> dict:
         return guard(lambda: studio.redo_task(task_id, origin="web"))
 
-    # ---- 控制台对话（与 Telegram 同一套命令 / 自由文本） ----
+    # ---- console chat (same commands / free text as Telegram) ----
     @app.post("/api/chat")
-    def chat(text: str = Body(...), attachments: list[str] = Body(default_factory=list)) -> dict:  # noqa: B008 — FastAPI 请求体声明
+    # FastAPI body declaration
+    def chat(text: str = Body(...), attachments: list[str] = Body(default_factory=list)) -> dict:  # noqa: B008
         out, reply = collect()
         atts = []
         for uid in attachments:
@@ -464,12 +469,12 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
 
     @app.post("/api/action")
     def action(data: str = Body(..., embed=True)) -> dict:
-        """控制台对话里的按钮（与 Telegram callback_data 相同格式）。"""
+        """Buttons in the console chat (same format as Telegram callback_data)."""
         out, reply = collect()
         guard(lambda: actions.button("web", data, reply))
         return {"messages": out}
 
-    # ---- 会话 ----
+    # ---- sessions ----
     @app.get("/api/sessions/{session_id}/messages")
     def session_messages(session_id: str, after: int = 0) -> list[dict]:
         return store.session_messages(session_id, after)
@@ -498,7 +503,7 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
 
     @app.get("/api/sessions/{session_id}/context")
     def session_context(session_id: str) -> dict:
-        """下一次调用 LLM 时会发送的完整上下文（最后一条为预览占位）。"""
+        """The full context the next LLM call will send (the last message is a preview placeholder)."""
         s = store.get_session(session_id)
         if s is None:
             raise HTTPException(404)
@@ -511,7 +516,7 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
             "rules_file": "prompts/planner_rules.md",
         }
 
-    # ---- 项目记忆 ----
+    # ---- project memory ----
     @app.post("/api/memories")
     def add_memory(text: str = Body(..., embed=True)) -> dict:
         return guard(lambda: studio.add_memory(text))
@@ -520,7 +525,7 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
     def memory_op(memory_id: int, op: str, text: str | None = Body(None, embed=True)) -> dict:
         return guard(lambda: studio.set_memory(memory_id, op, text))
 
-    # ---- 上传参考图（请求体即文件内容，避免额外依赖） ----
+    # ---- upload reference images (request body is the file itself, no extra dependency) ----
     @app.post("/api/upload")
     async def upload(request: Request, name: str) -> dict:
         data = await request.body()
@@ -536,7 +541,7 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
             raise HTTPException(404)
         return _safe_file(store.jobs_dir.parent / "uploads", Path(up["path"]))
 
-    # ---- 手动微调（W1） ----
+    # ---- manual tweaks (W1) ----
     @app.get("/api/templates/{name}")
     def template_info(name: str) -> dict:
         t = guard(lambda: registry.template(name))
@@ -551,13 +556,13 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
     @app.post("/api/tasks/{task_id}/tweak")
     def tweak(
         task_id: str,
-        params: dict = Body(...),  # noqa: B008 — FastAPI 请求体声明
+        params: dict = Body(...),  # noqa: B008 — FastAPI body declaration
         tier: str | None = Body(None),
         n: int = Body(1),
     ) -> dict:
         return guard(lambda: studio.tweak(task_id, params, tier, n))
 
-    # ---- 调度与 agent 运行（U1 / A3） ----
+    # ---- scheduling and agent runs (U1 / A3) ----
     @app.get("/api/queue")
     def queue_view() -> dict:
         rm = studio.orch.resources
@@ -597,7 +602,7 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
             "history": list(rm.history)[-360:],
         }
 
-    # ---- 给本机 agent CLI 的 MCP 服务用（只接受已委托出去的运行） ----
+    # ---- for the local agent CLIs' MCP server (only accepts runs that were delegated out) ----
     @app.get("/api/agent/tools")
     def agent_tools() -> list[dict]:
         return [t["function"] for t in actions.runtime.spec]
@@ -606,7 +611,7 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
     def agent_tool(
         run_id: str = Body(...),
         name: str = Body(...),
-        arguments: dict = Body(default_factory=dict),  # noqa: B008 — FastAPI 请求体声明
+        arguments: dict = Body(default_factory=dict),  # noqa: B008 — FastAPI body declaration
     ) -> dict:
         return actions.runtime.external_tool(
             run_id, name, arguments, timeout=cfg.agent_cli_timeout_s
@@ -627,7 +632,7 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
         actions.runtime.cancel(run_id)
         return {"ok": True}
 
-    # ---- 制片流水线（阶段 3） ----
+    # ---- production pipeline (stage 3) ----
     def _stage_reviews() -> list[dict]:
         prod = getattr(actions, "production", None)
         return prod.pending_reviews() if prod else []
@@ -678,7 +683,7 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
     def create_production(
         workflow: str = Body(...),
         title: str = Body(...),
-        inputs: dict = Body(...),  # noqa: B008 — 例如 {"source": "小说原文"}
+        inputs: dict = Body(...),  # noqa: B008 — e.g. {"source": "novel text"}
         settings: dict = Body(default_factory=dict),  # noqa: B008
         project_id: str | None = Body(None),
     ) -> dict:
@@ -721,7 +726,7 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
 
     @app.get("/api/artifacts/{aid}/file/{i}")
     def artifact_file(aid: str, i: int) -> FileResponse:
-        """制片产物里不属于任何任务的文件（你提供的图、素材包里的参考图）。"""
+        """Files of production artifacts that belong to no task (images you provided, reference images in the material pack)."""
         art = store.get_artifact(aid)
         if art is None:
             raise HTTPException(404)
@@ -732,7 +737,7 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
         if not 0 <= i < len(files):
             raise HTTPException(404)
         path = Path(files[i])
-        base = store.jobs_dir.parent  # data/：上传、制片目录都在这里面
+        base = store.jobs_dir.parent  # data/: uploads and production directories live here
         if base.resolve() not in path.resolve().parents:
             raise HTTPException(404)
         return _safe_file(base, path)
@@ -747,7 +752,7 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
 
     @app.post("/api/pause")
     def pause_all(stop_running: bool = Body(False, embed=True)) -> dict:
-        """全局暂停：Worker 不再取新任务（队列保留）；stop_running 时中断正在跑的那个。"""
+        """Global pause: the Worker takes no new tasks (the queue stays); with stop_running the running one is interrupted."""
         store.set_kv("paused", True)
         cur = actions.worker.stop_current() if stop_running and actions and actions.worker else None
         return {"paused": True, "interrupted": cur and cur["id"]}
@@ -776,7 +781,7 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
     def settings() -> dict:
         return {"language": cfg.language, "comfy_url": cfg.comfy_url}
 
-    # ---- 设置窗口：config.toml 的可编辑项 + 运行时开关 + 本地 LLM 加载 ----
+    # ---- settings window: editable config.toml keys + runtime switches + local LLM loading ----
     llm_job: dict = {"state": "idle", "error": None}
 
     def _runtime_cfg() -> dict:
@@ -840,7 +845,7 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
         clean = {}
         for name, v in values.items():
             if name in config.SECRET and (v is None or v == ""):
-                continue  # 密钥留空 = 不改
+                continue  # empty secret = leave unchanged
             clean[name] = guard(lambda n=name, v=v: config.coerce(n, v))
         restart = [n for n in clean if {e[1]: e[3] for e in config.EDITABLE}[n] == "restart"]
         if clean:
@@ -864,7 +869,7 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
             mode = runtime["llm_mode"]
             if mode not in MODES:
                 raise HTTPException(400, f"unknown mode {mode}")
-            store.set_kv("llm_mode", mode)  # 常驻模式会加载 LLM：放后台
+            store.set_kv("llm_mode", mode)  # resident modes load the LLM: do it in the background
             threading.Thread(
                 target=_llm_bg, args=(lambda: actions.planner.set_mode(mode),), daemon=True
             ).start()
@@ -875,12 +880,12 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
         try:
             fn()
             llm_job.update(state="idle")
-        except Exception as e:  # noqa: BLE001 — 结果显示在设置窗口
+        except Exception as e:  # noqa: BLE001 — the result shows in the settings window
             llm_job.update(state="error", error=str(e))
 
     @app.post("/api/llm/load")
     def llm_load(reload: bool = Body(False, embed=True)) -> dict:
-        """按当前设置加载（reload：先卸载再按新选项加载）。推理中 / 渲染独占时拒绝。"""
+        """Load with the current settings (reload: unload first, then load with the new options). Refused during inference / an exclusive render."""
         rm = studio.orch.resources
         if llm_job["state"] == "working":
             raise HTTPException(409, "上一次加载 / 卸载还没结束")
@@ -912,7 +917,8 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
         guard(rm.llm.unload)
         return {"state": "unloaded"}
 
-    # ---- W2：导出到 ComfyUI 编辑、导回为候选变体、试跑、晋升 ----
+    # ---- W2: export to ComfyUI for editing, import back as a candidate variant, trial, promote
+    # ----
     workshop = Workshop(studio)
 
     @app.get("/api/tasks/{task_id}/workflow")
@@ -951,7 +957,7 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
         pid = project or studio.current_project()["id"]
         return [m for m in store.messages(pid) if m["id"] > after]
 
-    # ---- 文件 ----
+    # ---- files ----
     @app.get("/files/{task_id}/{name}")
     def file(task_id: str, name: str) -> FileResponse:
         return _safe_file(cfg.jobs_dir, cfg.jobs_dir / task_id / name)

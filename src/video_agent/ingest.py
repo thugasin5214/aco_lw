@@ -1,13 +1,13 @@
-"""素材整理（制片的 brief 阶段）：把一组来源整理成一份素材包，供后面的 skill 读取。
+"""Material intake (a production's brief stage): turn a set of sources into one material pack for the later skills.
 
-来源：
-- text：小说原文或一句话构想
-- image：你提供的图片（upload ID 或本地路径），带名字、类型（character / location / style / prop）
-  和用法（stylize：以它为参考按片子风格重画；as_is：原样作为定妆图）
-- url：网页——正文（trafilatura，不执行页面脚本）+ 主图（og:image）
-- youtube：标题、简介、章节、字幕（人工或自动）、缩略图；可选按设置抽几帧作风格参考
+Sources:
+- text: novel text or a one-line idea
+- image: images you provide (upload ID or local path), with name, type (character / location / style / prop)
+  and usage (stylize: redraw in the film's style using it as reference; as_is: use as-is as the casting image)
+- url: a web page — body text (trafilatura, page scripts are not run) + main image (og:image)
+- youtube: title, description, chapters, subtitles (manual or automatic), thumbnail; optionally a few frames as style reference
 
-抓取在编排器里做：有超时与大小上限；某个来源失败只标出原因，不影响其他来源。
+Fetching happens in the orchestrator, with timeouts and size limits; one failing source is only marked with the reason and does not affect the others.
 """
 
 from __future__ import annotations
@@ -24,7 +24,8 @@ import httpx
 MAX_PAGE_BYTES = 5 * 2**20
 MAX_IMAGE_BYTES = 15 * 2**20
 MAX_TEXT_CHARS = 20000
-UA = "aco_lw/0.1 (local video agent; fetches pages the user links)"  # 如实标明，不伪装浏览器
+# honest about who we are, not posing as a browser
+UA = "aco_lw/0.1 (local video agent; fetches pages the user links)"
 YT_HOSTS = ("youtube.com", "youtu.be", "m.youtube.com", "www.youtube.com", "music.youtube.com")
 SUB_LANGS = ["zh-Hans", "zh-CN", "zh", "zh-Hant", "en", "en-US"]
 ROLES = ("character", "location", "style", "prop")
@@ -36,7 +37,7 @@ def classify(url: str) -> str:
 
 
 def vtt_to_text(vtt: str) -> str:
-    """字幕转纯文本：去掉时间轴与样式标签，合并自动字幕里逐词滚动造成的重复行。"""
+    """Subtitles to plain text: drop timings and style tags, merge the duplicate lines from word-by-word scrolling in auto subtitles."""
     out: list[str] = []
     for line in vtt.splitlines():
         line = line.strip()
@@ -63,10 +64,10 @@ class Ingest:
         self.http = http or httpx.Client(
             timeout=20, follow_redirects=True, headers={"User-Agent": UA}
         )
-        self.ytdl = ytdl  # 测试注入；默认用 yt_dlp.YoutubeDL
+        self.ytdl = ytdl  # injected by tests; defaults to yt_dlp.YoutubeDL
 
     def __call__(self, source, settings: dict) -> dict:
-        """source：旧格式是一段文字；新格式 {"text": ..., "sources": [...]}。"""
+        """source: the old format is a piece of text; the new format is {"text": ..., "sources": [...]}."""
         if isinstance(source, str):
             source = {"text": source, "sources": []}
         self.work_dir.mkdir(parents=True, exist_ok=True)
@@ -117,7 +118,7 @@ class Ingest:
                         )
                 else:
                     raise ValueError(f"unknown source kind {kind}")
-            except Exception as e:  # noqa: BLE001 — 单个来源失败不影响其他来源
+            except Exception as e:  # noqa: BLE001 — one failing source does not affect the others
                 entry.update(status="failed", error=str(e)[:300], url=src.get("url"))
             report.append(entry)
         if not texts and not refs:
@@ -125,7 +126,7 @@ class Ingest:
         body = "\n\n".join(f"## {h}\n\n{t}" for h, t in texts)
         return {"text": body[: MAX_TEXT_CHARS * 2], "references": refs, "sources": report}
 
-    # ---- 图片 ----
+    # ---- images ----
     def _ref(self, n: int, path: str, label: str, role: str, use: str, origin: str = "") -> dict:
         return {
             "id": f"r{n}",
@@ -164,7 +165,7 @@ class Ingest:
         out.write_bytes(data)
         return str(out)
 
-    # ---- 网页 ----
+    # ---- web pages ----
     def _page(self, url: str, n: int) -> tuple[str, str, str | None]:
         import trafilatura
 
@@ -197,7 +198,7 @@ class Ingest:
                 img = self._download(
                     str(httpx.URL(url).join(m.group(1))), self.work_dir / f"web{n}"
                 )
-            except Exception:  # noqa: BLE001 — 主图拿不到不影响正文
+            except Exception:  # noqa: BLE001 — a missing main image does not affect the body text
                 img = None
         return title, text[:MAX_TEXT_CHARS], img
 
@@ -215,7 +216,8 @@ class Ingest:
             "subtitlesformat": "vtt",
             "outtmpl": str(d / "%(id)s.%(ext)s"),
             "noplaylist": True,
-            "ignore_no_formats_error": True,  # 只要元数据与字幕，不因视频格式不可用而失败
+            # we only want metadata and subtitles; do not fail because video formats are unavailable
+            "ignore_no_formats_error": True,
         }
         info = self._ydl(opts).extract_info(url, download=True)
         title = info.get("title") or url
@@ -244,7 +246,7 @@ class Ingest:
             )
         imgs: list[str] = []
         if info.get("thumbnail"):
-            with contextlib.suppress(Exception):  # 缩略图拿不到不影响文字
+            with contextlib.suppress(Exception):  # a missing thumbnail does not affect the text
                 img = self._download(info["thumbnail"], d / "thumbnail")
                 if img:
                     imgs.append(img)
@@ -252,7 +254,8 @@ class Ingest:
         if frames > 0:
             try:
                 imgs += self._frames(url, d, frames, info.get("duration") or 0)
-            except Exception as e:  # noqa: BLE001 — 抽帧失败不影响文字与缩略图
+            # failing to grab frames does not affect text and thumbnail
+            except Exception as e:  # noqa: BLE001
                 parts.append(f"(Frames unavailable: {str(e)[:200]})")
         return title, "\n\n".join(parts), imgs
 
@@ -264,11 +267,12 @@ class Ingest:
         return yt_dlp.YoutubeDL(opts)
 
     def _frames(self, url: str, d: Path, n: int, duration: float) -> list[str]:
-        """下载低清纯视频流（≤ 360p、≤ 200 MB），均匀抽 n 帧作风格参考，用完即删。"""
+        """Download a low-res video-only stream (≤ 360p, ≤ 200 MB), grab n evenly spaced frames as style reference, then delete it."""
         opts = {
             "quiet": True,
             "no_warnings": True,
-            # 抽帧只要画面：≤ 360p 的纯视频流（YouTube 多数只提供音视频分离的流）
+            # frames only need the picture: a video-only stream ≤ 360p (YouTube mostly serves audio
+            # and video separately)
             "format": "bv*[height<=360][ext=mp4]/bv*[height<=360]/wv*/worst",
             "max_filesize": 200 * 2**20,
             "noprogress": True,

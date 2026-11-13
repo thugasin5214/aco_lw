@@ -1,11 +1,11 @@
-"""通用工具层：agent 提出 → 编排器执行（命令先经批准、后台跑）→ 结果按内存情况交回 LLM。"""
+"""Generic tool layer: the agent proposes → the orchestrator executes (commands approved first, run in the background) → results go back to the LLM as memory allows."""
 
 import json
 import time
 from pathlib import Path
 
 import pytest
-from test_agent import call, env, last_run, run_all  # noqa: F401 — env 是 fixture
+from test_agent import call, env, last_run, run_all  # noqa: F401 — env is a fixture
 
 from video_agent.toolbox import blocked
 
@@ -49,11 +49,12 @@ def test_command_needs_approval_runs_in_background_and_resumes(env):  # noqa: F8
     a.inbound("web", "run it", lambda t, b=None: None)
     run_all(a)
     run = last_run(studio)
-    assert run["status"] == "waiting_user"  # 等你批准，命令还没跑
-    assert any("echo hi" in t and b for t, b in said)  # 原样展示命令 + 按钮
+    assert run["status"] == "waiting_user"  # waiting for your approval; the command has not run
+    assert any("echo hi" in t and b for t, b in said)  # the command shown verbatim + buttons
     m = pending_approval(studio, run["id"])
     a.runtime.on_approval(m["id"], True)
-    assert wait_until(lambda: a.jobs.qsize() > 0)  # 跑完：排一步把结果交回 LLM
+    # done: a step is queued to hand the result to the LLM
+    assert wait_until(lambda: a.jobs.qsize() > 0)
     run_all(a)
     assert last_run(studio)["status"] == "done"
     res = tool_result(studio, run["id"], "run_command")
@@ -91,7 +92,7 @@ def test_generation_and_llm_side_effects_are_refused_even_before_approval(env): 
     run_all(a)
     run = last_run(studio)
     assert "refused" in tool_result(studio, run["id"], "run_command")["error"]
-    assert not any(b for _, b in said)  # 没有发审批按钮
+    assert not any(b for _, b in said)  # no approval buttons were sent
     assert blocked("cat ~/x/FreeVideo-local/agent/token")
     assert blocked("lms unload --all") and blocked("pkill -f ComfyUI")
     assert blocked("ffmpeg -i a.mp4 b.mp4") is None
@@ -109,7 +110,7 @@ def test_auto_allow_only_for_single_commands(env):  # noqa: F811
 
 
 def test_job_result_waits_for_memory_before_reaching_llm(env):  # noqa: F811
-    """命令跑完时 LLM 被卸载（在拍片）：结果暂存，内存空出来再交回。"""
+    """The LLM is unloaded when the command finishes (a film is shooting): the result is parked and handed back once memory frees up."""
     studio, make, said = env
     a, script = make(
         {"tool_calls": [call("run_command", {"command": "echo late", "reason": "x"})]},
@@ -124,7 +125,7 @@ def test_job_result_waits_for_memory_before_reaching_llm(env):  # noqa: F811
     assert wait_until(lambda: a.jobs.qsize() > 0)
     run_all(a)
     assert last_run(studio)["status"] == "waiting_resources" and len(script.seen) == 1
-    assert "late" in tool_result(studio, run["id"], "run_command")["stdout"]  # 已落库
+    assert "late" in tool_result(studio, run["id"], "run_command")["stdout"]  # stored
     rm.films_shooting(set())
     run_all(a)
     assert last_run(studio)["status"] == "done" and said[-1][0] == "got it"
@@ -163,7 +164,8 @@ def test_files_skills_memory_and_media(env, tmp_path):  # noqa: F811
     (tb.workdir("r1") / "clip.mp4").write_bytes(b"v")
     up = tb.add_media("r1", "clip.mp4", None)
     assert up["upload"].startswith("@upload:") and up["kind"] == "video"
-    assert tb.readable("r1", up["upload"]) == Path(up["path"]).resolve()  # @upload:ID 当路径用
+    # @upload:ID works as a path
+    assert tb.readable("r1", up["upload"]) == Path(up["path"]).resolve()
     with pytest.raises(ValueError):
         tb.readable("r1", "@task:nope")
 
@@ -178,7 +180,8 @@ def test_restart_reports_interrupted_jobs(env):  # noqa: F811
     run_all(a)
     run = last_run(studio)
     m = pending_approval(studio, run["id"])
-    # 模拟：批准后改成等后台结果，但 daemon 在跑完前重启（job 没在这个进程里）
+    # simulate: after approval it switches to waiting for the background result, but the daemon
+    # restarts before it finishes (the job is not in this process)
     studio.store.update_agent_msg(m["id"], meta={"key": f"job:{run['id']}:x", "kind": "event"})
     studio.store.update_run(run["id"], status="waiting_event")
     a.runtime.recover()
@@ -214,14 +217,16 @@ def test_mcp_read_only_runs_directly_others_need_approval(env):  # noqa: F811
     )
     a.inbound("web", "go", lambda t, b=None: None)
 
-    def pump():  # mcp_list、search 在后台跑，各自交回：一直推进到停下等批准
+    # mcp_list and search run in the background and report back each: advance until it stops for
+    # approval
+    def pump():
         run_all(a)
         return last_run(studio)["status"] == "waiting_user"
 
     assert wait_until(pump)
     run = last_run(studio)
     assert "search: Search things" in json.dumps(tool_result(studio, run["id"], "mcp_list"))
-    assert run["status"] == "waiting_user"  # post 不是只读：等批准
+    assert run["status"] == "waiting_user"  # post is not read-only: waits for approval
     assert any("fake.post" in t for t, b in said if b)
     a.runtime.on_approval(pending_approval(studio, run["id"])["id"], True)
     assert wait_until(lambda: run_all(a) or last_run(studio)["status"] == "done")
@@ -235,7 +240,7 @@ def test_mcp_read_only_runs_directly_others_need_approval(env):  # noqa: F811
 
 
 def test_look_sends_images_to_the_vision_llm(env):  # noqa: F811
-    """look：编排器把图缩小、视频抽帧，紧跟在工具结果后作为图片交给 LLM。"""
+    """look: the orchestrator shrinks images and grabs video frames, handing them to the LLM as images right after the tool result."""
     import subprocess
 
     studio, make, _ = env
@@ -308,7 +313,7 @@ def test_always_allow_rule_skips_the_next_approval(env):  # noqa: F811
         run_all(a)
         return last_run(studio)["status"] == "waiting_user"
 
-    assert wait_until(pump)  # echo two 自动放行；带管道的 echo | cat 仍然要问
+    assert wait_until(pump)  # echo two is auto-allowed; the piped echo | cat still asks
     texts = [
         json.loads(m["content"])
         for m in studio.store.agent_msgs(run["id"])
@@ -341,7 +346,7 @@ def test_bypass_mode_runs_without_asking_but_hard_refusals_stay(env):  # noqa: F
     first = next(m for m in studio.store.agent_msgs(run["id"]) if m["role"] == "tool")
     assert first["meta"]["info"]["auto"] == "bypass"
     assert "refused" in res[1]["error"]
-    assert not any(b for _, b in said)  # 没有任何审批按钮
+    assert not any(b for _, b in said)  # no approval buttons at all
     assert any("Auto-approved" in t for t, _ in said)
 
 
@@ -363,6 +368,7 @@ def test_permissions_command(env):  # noqa: F811
 def test_command_output_cut_inside_a_utf8_char_does_not_fail(env):  # noqa: F811
     _studio, make, _said = env
     a, _ = make()
-    # “中”是 3 个字节，只输出前 2 个：以前整条命令报 UnicodeDecodeError
+    # "中" is 3 bytes and only the first 2 are printed: this used to fail the whole command with
+    # UnicodeDecodeError
     res = a.runtime.toolbox.run_command("r-utf8", "printf '中文\\xe4\\xb8'", 10)
     assert res["exit_code"] == 0 and res["stdout"].startswith("中文")

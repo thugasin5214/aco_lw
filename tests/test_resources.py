@@ -1,4 +1,4 @@
-"""R1 + Q1：资源把关、学习的估计、排队策略。"""
+"""R1 + Q1: resource gating, learned estimates, queue policy."""
 
 import threading
 import time
@@ -43,20 +43,21 @@ def test_llm_gate_during_video_vs_image(rm):
     reg = rm.registry
     assert rm.llm_admit()[0]
     gate = rm.prepare_render(reg.template("h3-t2v"), "smoke", Ex(), "t1")
-    assert gate.ok and gate.unloaded_llm  # 视频独占：卸载 LLM
+    assert gate.ok and gate.unloaded_llm  # video is exclusive: unload the LLM
     ok, why = rm.llm_admit()
-    assert not ok and "video" in why  # 视频渲染中，LLM 不能加载
+    assert not ok and "video" in why  # while a video renders, the LLM cannot load
     called = []
     rm.listeners.append(lambda: called.append(1))
     rm.render_done(reg.template("h3-t2v"), released=True, unloaded_llm=False)
-    assert rm.llm_admit()[0] and called == [1]  # 渲染结束 → 唤醒等待者
+    assert rm.llm_admit()[0] and called == [1]  # render finished → wake the waiters
     rm.state["loaded"] = True
     gate = rm.prepare_render(reg.template("flux2-t2i"), "standard", Ex(), "t2")
-    assert gate.ok and not gate.unloaded_llm and rm.llm_admit()[0]  # 图片可与 LLM 共存
+    # images can coexist with the LLM
+    assert gate.ok and not gate.unloaded_llm and rm.llm_admit()[0]
 
 
 def test_render_waits_for_answer_in_progress(rm):
-    """LLM 正在写回答时到来的视频渲染：等回答写完再卸载，绝不打断。"""
+    """A video render arriving while the LLM is writing an answer: wait for the answer, then unload; never interrupt."""
     order = []
 
     def answering():
@@ -95,11 +96,12 @@ def test_choose_next_priority_family_and_aging(rm):
     }
     rm.resident_family = "flux2-klein-4b-q8"
     drafts = [d("bg", "flux2-t2i", 0), d("you", "h3-t2v", 2), d("agent", "flux2-t2i", 1)]
-    assert rm.choose_next(drafts)["id"] == "you"  # 你的请求优先
+    assert rm.choose_next(drafts)["id"] == "you"  # your request first
     drafts = [d("img", "flux2-t2i", 1), d("vid", "h3-t2v", 1)]
-    assert rm.choose_next(drafts)["id"] == "img"  # 同族优先，省一次切换
+    assert rm.choose_next(drafts)["id"] == "img"  # same family first, saves a switch
     drafts = [d("new", "flux2-t2i", 1), d("old-bg", "flux2-t2i", 0, age=3600)]
-    assert rm.choose_next(drafts)["id"] == "old-bg"  # 等太久的后台任务不会饿死
+    # background tasks that waited too long do not starve
+    assert rm.choose_next(drafts)["id"] == "old-bg"
 
 
 def test_estimates_learned_from_history(rm):
@@ -121,7 +123,7 @@ def test_estimates_learned_from_history(rm):
     o.transition(task["id"], "review")
     e = rm.estimator.estimate(t, "standard")
     assert e.exec_s == 12.0 and e.source == "history n=1"
-    e = rm.estimator.estimate(t, "preview")  # 896×512 vs 1280×720 按成本比例外推
+    e = rm.estimator.estimate(t, "preview")  # 896×512 vs 1280×720 extrapolated by cost ratio
     assert e.source == "scaled from standard" and 5 < e.exec_s < 7
 
 
@@ -141,23 +143,24 @@ def test_plan_gives_eta_with_switch_cost(rm):
     rm.resident_family = "flux2-klein-4b-q8"
     plan = rm.plan(drafts)
     assert [p["task_id"] for p in plan] == ["a", "b"]
-    assert plan[1]["start"] - plan[0]["end"] == pytest.approx(15.0)  # 换族代价
-    assert rm.resident_family == "flux2-klein-4b-q8"  # 模拟不改共享状态
+    assert plan[1]["start"] - plan[0]["end"] == pytest.approx(15.0)  # family switch cost
+    assert rm.resident_family == "flux2-klein-4b-q8"  # the simulation does not change shared state
 
 
 def test_cross_process_gate_sees_other_peoples_video(rm, fake):
-    """别的进程 / 你在 ComfyUI 网页手动提交的视频也要挡住 LLM 加载（跨进程把关）。"""
+    """Videos submitted by another process / by you in the ComfyUI page must also block LLM loading (cross-process gate)."""
     from video_agent.backends import LMStudioBackend
     from video_agent.planner import Planner, PlannerUnavailable
 
     video_graph = {"3": {"class_type": "FreeVideoGenerate", "inputs": {}}}
-    fake.prompts["someone-else"] = video_graph  # 不是本系统提交的
+    fake.prompts["someone-else"] = video_graph  # not submitted by this system
     rm.state["loaded"] = False
     ok, why = rm.llm_admit()
     assert not ok and "video render" in why
     rm.state["loaded"] = True
     rm._ext_cache = None
-    assert rm.llm_admit()[0]  # 已加载的 LLM 不在这里被卸载，只阻止重新加载
+    # an already-loaded LLM is not unloaded here; this only blocks reloading
+    assert rm.llm_admit()[0]
 
     rm.state["loaded"] = False
     rm._ext_cache = None
@@ -192,21 +195,24 @@ def test_peak_is_per_tier_and_adaptive_uses_registry(rm):
     done("h3-i2v", "smoke", 320, 54.9)
     done("h3-i2v", "hd-60s", 18908, 98.4)
     t = rm.registry.template("h3-i2v")
-    assert rm.estimator.estimate(t, "smoke").peak_gib == 54  # 自适应：用注册表值，不被 98.4 抬高
+    # adaptive: uses the registry value, not raised by 98.4
+    assert rm.estimator.estimate(t, "smoke").peak_gib == 54
     assert rm.estimator.estimate(t, "hd-60s").exec_s == 18908
     rm.registry.models["freevideo-h3"].adaptive = False
-    assert rm.estimator.estimate(t, "smoke").peak_gib == 54.9  # 非自适应：按本档位实测
+    # not adaptive: this tier's measurement
+    assert rm.estimator.estimate(t, "smoke").peak_gib == 54.9
     assert _j
 
 
 def test_film_shooting_unloads_llm_and_blocks_it(rm):
-    """FreeVideo 电影不经 prepare_render：开拍前卸载 LLM，拍片期间不准加载，拍完唤醒等待者。"""
+    """FreeVideo films skip prepare_render: unload the LLM before shooting, no loading while shooting, wake the waiters when done."""
     acts = rm.prepare_film()
     assert rm.state["unloads"] == 1 and acts
     rm.film_started("f1")
     ok, why = rm.llm_admit()
     assert not ok and "film" in why
-    rm.state["loaded"] = True  # 拍片途中别处又加载了 LLM（或 daemon 重启后接着拍）
+    # the LLM got loaded elsewhere mid-shoot (or the shoot continued after a daemon restart)
+    rm.state["loaded"] = True
     rm.films_shooting({"f1"})
     assert rm.state["unloads"] == 2 and not rm.llm_admit()[0]
     called = []
