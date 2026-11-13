@@ -1,4 +1,4 @@
-# Model registry: peaks are G0 measurements (docs/baseline.md); measure a new model before registering it.
+# Model registry: peaks are G0 measurements; measure a new model before registering it.
 flux2-klein-4b-q8:
   kind: image
   peak_gib: 16      # cold-start ComfyUI RSS 15.7 GiB

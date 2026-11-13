@@ -1,6 +1,6 @@
 # video-agent
 
-Local video agent. Plan and progress: `PLAN.md`; design rationale: `docs/design.html`.
+Local video agent. Plan and progress: `internal/PLAN.md`; design rationale: `internal/docs/design.html`; measurements: `internal/docs/baseline.md` (each with a `.zh-CN` version). `internal/` is gitignored and stays on this machine only — never commit it or quote it into tracked files.
 
 ## Hard rules
 - The orchestrator is the hub: the agent (LLM) only proposes tool calls; the orchestrator (`src/video_agent/`) executes them and hands the results back when it can (results are parked while the LLM is unloaded). Every ComfyUI / FreeVideo side effect goes only through the orchestrator's generation tools. Generic tools (reading web pages, running commands, reading/writing files, skills, agent memory, MCP servers; see `toolbox.py` / `mcp_hub.py`) are also executed by the orchestrator. Actions that need approval (commands, non-read-only MCP, delegating to an external agent, unmeasured video tiers) need the user's approval for each item by default; the user can press "Always allow" to store a rule, or skip all approvals with `/permissions bypass` (`run_command.auto_allow` in `policies.yaml` can also allow single-command prefixes). In every mode, refuse: direct access to :8188, reading the FreeVideo token, killing processes, loading/unloading the LLM. Installing nodes / downloading models still asks every time under bypass (user decision 2026-11-07).

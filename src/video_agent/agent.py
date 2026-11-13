@@ -1696,7 +1696,7 @@ class AgentRuntime:
     def prewarm(self, session_id: str) -> None:
         """Prewarm the cache for the next message.
 
-        Measured (docs/baseline.md): the engine keeps a checkpoint "before the last message" of each request; a new request reuses it only if it
+        Measured (G0 baseline): the engine keeps a checkpoint "before the last message" of each request; a new request reuses it only if it
         matches an old request all the way up to there. Here we send [stable prefix + compacted history + placeholder user message] once,
         so your next message hits the checkpoint "before the placeholder". Skipped when resources do not allow (never competes with a render).
         """

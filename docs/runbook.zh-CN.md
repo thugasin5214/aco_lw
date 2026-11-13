@@ -2,7 +2,7 @@
 
 更新于 2026-11-07 · 适用于 `va daemon` + 控制台 + Telegram + 通用 agent（工具、看图、MCP、在线大脑、权限模式）· English: [runbook.md](runbook.md)
 
-本手册回答三件事：**怎么开 / 关**、**日常怎么用**、**出问题怎么查**。设计取舍见 `docs/design.zh-CN.html`，计划与进度见 `PLAN.zh-CN.md` / `docs/progress.html`，实测数据见 `docs/baseline.zh-CN.md`，架构图与流程图见 `docs/architecture.zh-CN.html`（控制台 →「架构」）。
+本手册回答三件事：**怎么开 / 关**、**日常怎么用**、**出问题怎么查**。进度见 `docs/progress.zh-CN.html`，架构图与流程图见 `docs/architecture.zh-CN.html`（控制台 →「架构」）。
 
 ---
 

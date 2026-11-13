@@ -255,7 +255,7 @@ class Planner:
     def _pairs(self, session: dict, before_id: int | None = None) -> list[tuple[dict, dict]]:
         """The (user text as sent at the time, planner reply) pairs of every planning call in the session.
 
-        Measured (docs/baseline.md): this model's prefix cache can only be "extended", not reused after truncation,
+        Measured (G0 baseline): this model's prefix cache can only be "extended", not reused after truncation,
         so history must reproduce exactly what was sent; then the next request is an extension of the previous one.
         """
         pairs, last_user = [], "（接续之前的会话）"
