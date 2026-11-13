@@ -103,7 +103,13 @@ class Studio:
         tasks = [t for t in self.store.list(1_000_000, project_id) if t["state"] in states]
         rounds = {t["round_id"] for t in tasks if t["round_id"]}
         used = self.store.active_production_refs(list(rounds), [t["id"] for t in tasks])
-        skip_r = {a["round_id"] for a in used if a["round_id"]}
+        # 制片采用的版本（current + task_id）：只留被选中的那个候选，同轮其他没选的照删；
+        # 还在审阅 / 生成的版本：整轮保留
+        skip_r = {
+            a["round_id"]
+            for a in used
+            if a["round_id"] and not (a["status"] == "current" and a["task_id"])
+        }
         skip_t = {a["task_id"] for a in used if a["task_id"]}
         tasks = [t for t in tasks if t["id"] not in skip_t and t["round_id"] not in skip_r]
         ids = {t["id"] for t in tasks}
@@ -112,7 +118,13 @@ class Studio:
         ]
         out = self._delete(tasks, empty)
         out["kept_for_productions"] = len(skip_r) + len(skip_t)
-        self.log("system", "out", tr("log_deleted", **out), project_id)
+        out["kept_productions"] = sorted({a["production_title"] for a in used})
+        text = tr("log_deleted", **out)
+        if out["kept_for_productions"]:
+            text += tr(
+                "log_kept", n=out["kept_for_productions"], p="、".join(out["kept_productions"])
+            )
+        self.log("system", "out", text, project_id)
         return out
 
     # ---- 项目 ----

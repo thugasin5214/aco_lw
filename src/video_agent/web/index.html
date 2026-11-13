@@ -380,6 +380,7 @@ const I18N = {
     "purge.review.q": "Delete every candidate still waiting for review in “{p}”, with its files? Approved ones are kept.",
     "purge.unsel": "🗑 Clean up project", "purge.unsel.q": "Delete everything in “{p}” that was not approved (pending, rejected, failed, timed out), with its files? Approved and baseline-pack items are kept.",
     "deleted": "Deleted {rounds} round(s), {tasks} task(s), {freed_mb} MB",
+    "kept.prod": "; kept {n} still used by production: {p} (pause or finish it to clean them up)",
     approve: "✅ Approve", redo: "🎲 Redo", "redo.round": "🎲 Redo round", reject: "↩️ Reject", "reject.note": "↩️ Reject + note",
     refine: "🔧 Tweak w/ note", send: "Send", "no.lock": "Don't lock", "goto.review": "Go to review →",
     "note.refine": "What to change in #{n}, e.g. softer eyes, light from the side",
@@ -487,6 +488,7 @@ const I18N = {
     "purge.review.q": "删除「{p}」里所有待审阅的候选及其文件？已通过的保留。",
     "purge.unsel": "🗑 清理本项目", "purge.unsel.q": "删除「{p}」里所有没通过的产物（待审阅、打回、失败、超时）及其文件？已通过的和基准包里的保留。",
     "deleted": "已删除 {rounds} 轮、{tasks} 个任务，释放 {freed_mb} MB",
+    "kept.prod": "；保留了 {n} 项进行中制片仍在使用的：{p}（暂停或完成该制片后可再清理）",
     approve: "✅ 通过", redo: "🎲 重做", "redo.round": "🎲 整轮重做", reject: "↩️ 打回", "reject.note": "↩️ 打回+批注",
     refine: "🔧 微调", send: "发送", "no.lock": "不锁定", "goto.review": "去审阅 →",
     "note.refine": "对 #{n} 的微调说明，例如：眼神更柔和，光打侧面",
@@ -1033,7 +1035,7 @@ async function purge(pid, scope){
   const p = PROJECTS.find(x => x.id === pid) || {name: pid};
   const n = REVIEW.filter(it => it.project_id === pid).reduce((a, it) => a + it.tasks.length, 0);
   if (!confirm(t(scope === "review" ? "purge.review.q" : "purge.unsel.q", {p: p.name, n}))) return;
-  try { const r = await api(`/api/projects/${encodeURIComponent(pid)}/purge`, {scope}); toast(t("deleted", r)); refreshAll(true); }
+  try { const r = await api(`/api/projects/${encodeURIComponent(pid)}/purge`, {scope}); toast(t("deleted", r) + (r.kept_for_productions ? t("kept.prod", {n: r.kept_for_productions, p: (r.kept_productions || []).join(", ")}) : "")); refreshAll(true); }
   catch(e){ toast(t("not.done") + e.message, true); }
 }
 function renderReviewTools(){

@@ -257,6 +257,10 @@ class TransitionError(RuntimeError):
     pass
 
 
+DEAD_ARTIFACT = ("failed", "rejected", "superseded")  # 制片里的旧版本：不再被使用
+DEAD_ARTIFACT_SQL = ",".join(f"'{x}'" for x in DEAD_ARTIFACT)
+
+
 def _new_id() -> str:
     return datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
 
@@ -554,7 +558,9 @@ class Store:
 
     @_locked
     def active_production_refs(self, round_ids: list[str], task_ids: list[str]) -> list[dict]:
-        """进行中的制片还在用的产物（删了会让制片缺图）。"""
+        """进行中的制片还在用的产物（删了会让制片缺图）。
+
+        制片里已失败 / 打回 / 被替代的旧版本不算“在用”：它们只是历史，删掉不影响制片。"""
         ids = [*round_ids, *task_ids]
         if not ids:
             return []
@@ -562,7 +568,8 @@ class Store:
         return self._rows(
             "SELECT a.*, p.title AS production_title FROM artifacts a"
             " JOIN productions p ON p.id = a.production_id"
-            f" WHERE p.state = 'active' AND (a.round_id IN ({rm}) OR a.task_id IN ({tm}))",
+            f" WHERE p.state = 'active' AND a.status NOT IN ({DEAD_ARTIFACT_SQL})"
+            f" AND (a.round_id IN ({rm}) OR a.task_id IN ({tm}))",
             (*round_ids, *task_ids),
         )
 
