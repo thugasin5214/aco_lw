@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>轻量本地视频 Agent · 设计文档</title><style>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Lightweight local video agent · Design doc</title><style>
 :root{--bg:#f6f8fb;--card:#ffffff;--line:#c9d3e0;--text:#152030;--muted:#526175;--accent:#1f5f99;--acc-tint:rgba(31,95,153,.10);--axis:#8a97a8;--warn:#9a5b00;color-scheme:light}
 @media (prefers-color-scheme:dark){:root{--bg:#10151e;--card:#1a2331;--line:#344258;--text:#e7edf7;--muted:#a9b8cc;--accent:#8ecbff;--acc-tint:rgba(142,203,255,.12);--axis:#6f819b;--warn:#f0c27a;color-scheme:dark}}
 *{box-sizing:border-box}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;background:var(--bg);color:var(--text);font:17px/1.85 system-ui,-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
@@ -19,241 +19,241 @@ footer{border-top:1px solid var(--line);margin-top:56px;padding-top:20px;color:v
 @media(max-width:700px){main{padding:25px 18px 60px}th,td{min-width:120px}}
 @media print{:root{--bg:#fff;--card:#f3f6fa;--text:#111;--muted:#444;--accent:#18466d;--line:#bbb;--axis:#777}nav{display:none}h2{break-after:avoid}.box,tr,figure{break-inside:avoid}figure svg{min-width:0}}
 </style></head><body><main>
-<a href="lightweight-video-agent-plan.html">← 轻量本地视频 Agent · 实施计划</a>
-<p><span class="badge">设计稿 · 评审后修订</span> <span class="muted small">2026-10-26 · Sirius Li</span></p>
-<h1>轻量本地视频 Agent<br>设计文档：评审、架构与人在回路</h1>
-<p class="muted">基于《本地接管试验报告（已核对）》与《轻量本地视频 Agent · 实施计划》。Telegram + 自建服务为主入口，确定性编排器掌握一切副作用，LLM 按需唤醒，OpenClaw 作为可调用的子 agent。</p>
-<nav><a href="#scope">背景</a><a href="#review">计划评审</a><a href="#feasibility">可行性</a><a href="#concerns">Concern</a><a href="#design">设计建议</a><a href="#architecture">目标架构</a><a href="#agent-now">通用 agent 现状</a><a href="#hitl">人在回路</a><a href="#roadmap">里程碑</a><a href="#open">待决问题</a></nav>
+<a href="lightweight-video-agent-plan.html">← Lightweight local video agent · Implementation plan</a> · <a href="design.zh-CN.html">中文</a>
+<p><span class="badge">Design doc · revised after review</span> <span class="muted small">2026-10-26 · Sirius Li</span></p>
+<h1>Lightweight local video agent<br>Design doc: review, architecture and human in the loop</h1>
+<p class="muted">Based on the "Local takeover trial report (verified)" and "Lightweight local video agent · Implementation plan". Telegram + our own service are the main entry, a deterministic orchestrator owns every side effect, the LLM is woken on demand, and OpenClaw is a callable sub-agent.</p>
+<nav><a href="#scope">Background</a><a href="#review">Plan review</a><a href="#feasibility">Feasibility</a><a href="#concerns">Concerns</a><a href="#design">Design advice</a><a href="#architecture">Target architecture</a><a href="#agent-now">General agent today</a><a href="#hitl">Human in the loop</a><a href="#roadmap">Milestones</a><a href="#open">Open questions</a></nav>
 
-<h2 id="scope">1. 背景与范围</h2>
-<p class="lead">结论：用本地 27B 模型做“控制面”、ComfyUI 做“执行面”的方向可行，但目前只证明了最容易的一环（读事实写报告）。真正的风险点——自主改工作流、视频端到端、生成峰值内存——全部未验证。建议先把 LLM 从关键路径上拿掉，做一个确定性的编排器，再把 LLM 作为可选的规划器接入。</p>
-<p>本文依据《本地接管试验报告（已核对）》和《轻量本地视频 Agent · 实施计划》（计划稿，尚未实施）。第 2 节对计划逐项评审，其余章节是在评审基础上的设计建议。</p>
-<h3>试验已确认的事实</h3>
+<h2 id="scope">1. Background and scope</h2>
+<p class="lead">Conclusion: using a local 27B model as the "control plane" and ComfyUI as the "execution plane" is workable, but so far only the easiest part has been proven (reading facts and writing a report). The real risks — autonomously editing workflows, video end to end, peak generation memory — are all unverified. Recommendation: take the LLM off the critical path first, build a deterministic orchestrator, then add the LLM as an optional planner.</p>
+<p>This doc is based on the "Local takeover trial report (verified)" and "Lightweight local video agent · Implementation plan" (a draft plan, not yet implemented). Section 2 reviews the plan item by item; the remaining sections are design advice built on that review.</p>
+<h3>Facts confirmed by the trial</h3>
 <ul>
-<li>OpenClaw 用 lmstudio/qwen3.8-27b-splash 单次 agent exec 成功，耗时 85.2 秒，退出码 0，无 --deliver、无付费兜底。</li>
-<li>ComfyUI 队列查询、空闲时 /free 释放、忙队列拒绝释放的逻辑已验证；/free 后进程 RSS 约 9.3 GiB → 0.82 GiB。</li>
-<li>机器总内存 128 GiB；ComfyUI 报告可用约 58.9 GiB，/free 后系统可用约 54 GiB（受其他进程干扰）。</li>
-<li>工具隔离在 workflows/openclaw-local-media，未改全局配置、未装常驻组件。</li>
+<li>OpenClaw with lmstudio/qwen3.8-27b-splash completed one agent exec in 85.2 s, exit code 0, no --deliver, no paid fallback.</li>
+<li>ComfyUI queue queries, /free when idle and refusing to release on a busy queue are verified; after /free the process RSS went from about 9.3 GiB → 0.82 GiB.</li>
+<li>Total machine memory 128 GiB; ComfyUI reported about 58.9 GiB available, about 54 GiB system available after /free (affected by other processes).</li>
+<li>The tooling is isolated in workflows/openclaw-local-media; no global config was changed, no resident components installed.</li>
 </ul>
-<p class="muted small">本文不覆盖：具体模型选型与量化方案、ComfyUI 节点级调参、OpenClaw 数据库的 SQLite 警告修复。</p>
+<p class="muted small">Not covered here: concrete model choice and quantisation, ComfyUI node-level tuning, fixing the SQLite warnings in OpenClaw's database.</p>
 
-<h2 id="review">2. 对实施计划的评审</h2>
-<p class="lead">计划的核心判断是对的：以模型调度器为中心、确认释放、只动自己的模型、从获准定妆出发、最终审美由人决定。主要问题有三个：范围偏大，实际是在重建一个 OpenClaw；严格错峰会让每轮迭代背上多次模型加载，和快速选版冲突；最大的未知（视频峰值内存）排到第 3 阶段才验证。</p>
-<h3>计划做得好的地方</h3>
+<h2 id="review">2. Review of the implementation plan</h2>
+<p class="lead">The plan's core judgements are right: centre on a model scheduler, confirm releases, only touch our own models, start from an approved casting, leave final aesthetics to people. Three main problems: the scope is too big — it effectively rebuilds OpenClaw; strict staggering puts several model loads on every iteration, which conflicts with fast picking; and the biggest unknown (peak video memory) is only verified in stage 3.</p>
+<h3>What the plan does well</h3>
 <ul>
-<li>状态机把“释放控制模型”“释放生成模型”写成显式状态，并要求结合内存观测确认释放，不只信接口返回。</li>
-<li>模型所有权与“尊重手动任务”两条，正好覆盖本文 Concern #5 的竞态问题。</li>
-<li>保存 ComfyUI job ID 用于重启恢复，避免重复生成。</li>
-<li>候选图区分“临时试验”和“用户批准的定妆”，每轮从获准基准出发，与本文的导演基准包一致。</li>
-<li>每阶段都有完成标准；隔离做法（独立目录、虚拟环境、数据库，先手动启动）稳妥。</li>
+<li>The state machine makes "release the control model" and "release the generation model" explicit states, and requires confirming releases with memory observations instead of trusting the API response.</li>
+<li>Model ownership and "respect manual tasks" cover exactly the race in concern #5 below.</li>
+<li>Saving ComfyUI job IDs for restart recovery avoids duplicate generation.</li>
+<li>Candidate images distinguish "temporary experiments" from "user-approved casting", and each round starts from the approved baseline — consistent with this doc's director's baseline pack.</li>
+<li>Every stage has completion criteria; the isolation (own directory, virtual environment, database, started by hand first) is sound.</li>
 </ul>
-<h3>主要问题与建议</h3>
-<div class="table"><table><thead><tr><th>#</th><th>问题</th><th>计划中的位置</th><th>建议</th></tr></thead><tbody>
-<tr><td>1</td><td>范围偏大：Telegram、持久记忆、搜索、Skills、MCP、视觉检查加在一起，等于重建 OpenClaw，“轻量”很难成立，维护面也大</td><td>§1、§5、阶段 4</td><td>首版只做调度器 + SQLite + ComfyUI + Telegram；搜索、Skills、MCP 交给 OpenClaw 子 agent，不自建</td></tr>
-<tr><td>2</td><td>严格错峰的切换成本：一轮要卸载 LLM、加载生成模型、卸载、加载视觉模型、再加载 LLM 汇报，每次加载都要读入数十 GiB 权重，多轮迭代时切换可能比生成还慢</td><td>§3 状态机、统一资源锁</td><td>第 0 阶段实测各模型加载与卸载耗时；按实测制定驻留策略：审阅会话期间生成模型常驻，小视觉模型可与之共存，汇报用模板文字，不为一句话重载 LLM</td></tr>
-<tr><td>3</td><td>最大的未知排得太晚：视频峰值内存第 3 阶段才测，但它决定错峰是否必要、档位上限在哪</td><td>§7 阶段 3</td><td>第 0 阶段加入一次手动视频冒烟（640×384、3 秒），记录峰值内存与耗时</td></tr>
-<tr><td>4</td><td>Telegram 当审阅台有局限：图片默认被压缩，标准 Bot API 上传约 50 MB 上限，难以并排对比、逐帧看视频；定妆照会经过 Telegram 服务器，不再完全本地</td><td>§6</td><td>Telegram 负责通知与快速选择（按钮选版）；细看对比用本地审阅网页；图片以文件方式发送；涉及真人肖像先确认能否上云</td></tr>
-<tr><td>5</td><td>“视觉模型检查”没有定义：查什么、阈值多少都未写；用视觉大模型判断五官一致既不可靠，又要多加载一个大模型</td><td>§2 第 6 步、阶段 2</td><td>身份一致用人脸特征相似度，风格一致用图像嵌入相似度；视觉模型只写差异说明；分数只用于排序，不自动淘汰</td></tr>
-<tr><td>6</td><td>“在已授权范围内继续”没有边界</td><td>§2 第 7 步</td><td>明确自主等级（见“探索机制”L1–L5）和 /budget 的轮数、时长上限；替换定妆、下载模型、安装 Skill 一律要人确认</td></tr>
-<tr><td>7</td><td>LLM 规划的输出没有约束：没写 LLM 怎样修改工作流、错了怎么拦</td><td>§2、§3</td><td>参数和工作流变体先经 schema 与 ComfyUI /object_info 校验，再低档试跑</td></tr>
-<tr><td>8</td><td>记忆污染：LLM 自动写入的摘要和实验结论可能出错，之后会被当成事实</td><td>§4</td><td>项目设定只能由用户批准写入；实验结论附来源 job ID；/memory 支持回滚</td></tr>
-<tr><td>9</td><td>单进程异步的阻塞风险：模型加载、大文件读写、MCP 子进程若在事件循环里同步执行，/status 会失去响应</td><td>§1</td><td>重活放子进程或线程池；调度器状态落库；主循环只处理消息与轮询</td></tr>
-<tr><td>10</td><td>Skills 与 MCP 的安全：第三方 SKILL 脚本等同任意代码执行</td><td>§5</td><td>白名单加人工确认安装；子进程限定工作目录，能限制网络就限制</td></tr>
+<h3>Main problems and recommendations</h3>
+<div class="table"><table><thead><tr><th>#</th><th>Problem</th><th>Where in the plan</th><th>Recommendation</th></tr></thead><tbody>
+<tr><td>1</td><td>Scope too big: Telegram, persistent memory, search, skills, MCP and visual checks together amount to rebuilding OpenClaw; "lightweight" hardly holds and the maintenance surface is large</td><td>§1, §5, stage 4</td><td>First version: only scheduler + SQLite + ComfyUI + Telegram; search, skills and MCP go to an OpenClaw sub-agent instead of being built</td></tr>
+<tr><td>2</td><td>Cost of strict staggering: one round unloads the LLM, loads the generation model, unloads, loads a vision model, then reloads the LLM to report; each load reads tens of GiB of weights, so over many iterations switching may be slower than generating</td><td>§3 state machine, unified resource lock</td><td>Measure every model's load and unload time in stage 0; set the residency policy from the measurements: keep the generation model resident during a review session, a small vision model may coexist with it, reports use template text, never reload the LLM for one sentence</td></tr>
+<tr><td>3</td><td>The biggest unknown comes too late: peak video memory is only measured in stage 3, but it decides whether staggering is needed and where the tier ceiling is</td><td>§7 stage 3</td><td>Add one manual video smoke test to stage 0 (640×384, 3 s), recording peak memory and time</td></tr>
+<tr><td>4</td><td>Telegram has limits as a review console: images are compressed by default, the standard Bot API uploads cap at about 50 MB, side-by-side comparison and frame-by-frame video are hard; casting photos pass through Telegram's servers and are no longer fully local</td><td>§6</td><td>Telegram handles notifications and quick choices (button picking); close comparison uses a local review page; images are sent as files; confirm first whether real people's portraits may go to the cloud</td></tr>
+<tr><td>5</td><td>"Vision model check" is undefined: what to check and which thresholds are not written; judging facial consistency with a large vision model is unreliable and loads yet another big model</td><td>§2 step 6, stage 2</td><td>Identity consistency by face-embedding similarity, style consistency by image-embedding similarity; the vision model only writes difference notes; scores only rank, never auto-eliminate</td></tr>
+<tr><td>6</td><td>"Continue within the authorised scope" has no boundary</td><td>§2 step 7</td><td>Define autonomy levels (see "Exploration" L1–L5) and /budget limits on rounds and time; replacing the casting, downloading models and installing skills always need human confirmation</td></tr>
+<tr><td>7</td><td>The LLM's planning output is unconstrained: how the LLM edits workflows and how mistakes are caught is not written</td><td>§2, §3</td><td>Parameters and workflow variants are validated against a schema and ComfyUI /object_info first, then trial-run at a low tier</td></tr>
+<tr><td>8</td><td>Memory pollution: summaries and experiment conclusions the LLM writes automatically may be wrong and later be treated as facts</td><td>§4</td><td>Project settings are written only with the user's approval; experiment conclusions carry their source job ID; /memory supports rollback</td></tr>
+<tr><td>9</td><td>Blocking in a single async process: model loading, large file I/O and MCP subprocesses run synchronously on the event loop would make /status unresponsive</td><td>§1</td><td>Heavy work in subprocesses or a thread pool; scheduler state stored in the database; the main loop only handles messages and polling</td></tr>
+<tr><td>10</td><td>Safety of skills and MCP: third-party SKILL scripts amount to arbitrary code execution</td><td>§5</td><td>Whitelist plus manual install confirmation; subprocesses confined to a work directory, network restricted where possible</td></tr>
 </tbody></table></div>
-<p>建议的阶段顺序：先把核心闭环和最大未知做实，扩展能力最后加，见第 8 节。</p>
+<p>Recommended stage order: first make the core loop and the biggest unknowns solid, add extensions last; see section 8.</p>
 
-<h2 id="feasibility">3. 可行性分析</h2>
-<p class="lead">总体判断：有条件可行。“串行 + API 驱动 + 模板化参数”这条路技术上没有障碍；“LLM 自主修改并提交工作流”和“LLM 与视频模型常驻共存”是两个需要实测才能下结论的条件。</p>
-<div class="table"><table><thead><tr><th>维度</th><th>结论</th><th>置信度</th><th>依据与缺口</th></tr></thead><tbody>
-<tr><td>编排技术（ComfyUI API）</td><td>可行</td><td>高</td><td>/prompt、/queue、/history、/free 均为标准接口，队列与释放逻辑已实测；工作流 JSON 按节点 ID 改参是确定性操作</td></tr>
-<tr><td>LLM 控制面（27B）</td><td>文本任务可行；自主改工作流未知</td><td>中→低</td><td>只验证了“读事实写报告”；27B 本地模型直接编辑节点图易出错（错节点 ID、类型不符、越界参数）</td></tr>
-<tr><td>内存共存</td><td>未知，可能偏紧</td><td>低</td><td>128 GiB 统一内存，后测可用约 54 GiB；LLM 权重实际占用未测；视频模型峰值未测；虚拟机约 14.7 GiB 常驻</td></tr>
-<tr><td>时延</td><td>批处理可接受，交互不可接受</td><td>中</td><td>单轮 LLM 85.2 秒；多轮 agent 循环每任务额外数分钟；Mac 上视频生成本身也以分钟计</td></tr>
-<tr><td>稳定性</td><td>未知</td><td>低</td><td>仅一次成功运行；CLI 有 SQLite 维护警告；无长期运行数据</td></tr>
-<tr><td>成本</td><td>边际成本为零</td><td>高</td><td>无付费兜底；代价是只能串行、吞吐低</td></tr>
+<h2 id="feasibility">3. Feasibility</h2>
+<p class="lead">Overall: feasible with conditions. "Serial + API-driven + templated parameters" has no technical obstacle; "the LLM autonomously edits and submits workflows" and "the LLM and the video model stay resident together" are two conditions that need measurements before any conclusion.</p>
+<div class="table"><table><thead><tr><th>Dimension</th><th>Conclusion</th><th>Confidence</th><th>Basis and gaps</th></tr></thead><tbody>
+<tr><td>Orchestration (ComfyUI API)</td><td>Feasible</td><td>High</td><td>/prompt, /queue, /history and /free are standard endpoints, queue and release logic measured; editing workflow JSON parameters by node ID is deterministic</td></tr>
+<tr><td>LLM control plane (27B)</td><td>Text tasks feasible; autonomous workflow editing unknown</td><td>Medium → low</td><td>Only "read facts, write a report" was verified; a local 27B editing node graphs directly is error-prone (wrong node IDs, type mismatches, out-of-range parameters)</td></tr>
+<tr><td>Memory coexistence</td><td>Unknown, probably tight</td><td>Low</td><td>128 GiB unified memory, about 54 GiB available as measured later; actual LLM weight footprint not measured; peak video model memory not measured; the VM keeps about 14.7 GiB resident</td></tr>
+<tr><td>Latency</td><td>Acceptable for batches, not for interaction</td><td>Medium</td><td>85.2 s per LLM turn; multi-turn agent loops add minutes per task; video generation on a Mac also takes minutes</td></tr>
+<tr><td>Stability</td><td>Unknown</td><td>Low</td><td>Only one successful run; the CLI has SQLite maintenance warnings; no long-running data</td></tr>
+<tr><td>Cost</td><td>Zero marginal cost</td><td>High</td><td>No paid fallback; the price is serial-only, low throughput</td></tr>
 </tbody></table></div>
-<p>内存粗算（近似值，未实测）：27B 模型在 Q4 量化约 16–18 GiB、Q8 约 28–30 GiB；报告原文“BF16 占 54 GiB”已被标为未验证。若 LLM 用 Q8 常驻，加上虚拟机与系统开销，留给视频模型的空间可能只有 30–40 GiB，足够 640×384 短视频但不宽裕。这正是需要第一个实测的数字。</p>
+<p>Rough memory estimate (approximate, not measured): a 27B model is about 16–18 GiB at Q4 and 28–30 GiB at Q8; the report's "BF16 takes 54 GiB" has been marked unverified. With a resident Q8 LLM plus the VM and system overhead, maybe only 30–40 GiB remain for the video model — enough for short 640×384 videos but not generous. That is exactly the first number to measure.</p>
 
-<h2 id="concerns">4. 主要 Concern</h2>
-<p class="lead">最大的三个风险：LLM 处在每一步的关键路径上、内存共存没有实测、视频链路从未端到端跑通。</p>
-<div class="table"><table><thead><tr><th>#</th><th>Concern</th><th>严重度</th><th>缓解措施</th></tr></thead><tbody>
-<tr><td>1</td><td>LLM 在关键路径：每轮约 85 秒，且输出不确定；让 27B 模型直接改工作流 JSON，容易写错节点 ID、类型或越界参数</td><td class="sev-h">高</td><td>LLM 产出的参数或工作流变体先经图校验与低档试跑，再进入生产</td></tr>
-<tr><td>2</td><td>内存争用：LLM、视频模型、虚拟机同时驻留，macOS 进入内存压力后大量 swap，整机变慢甚至 ComfyUI 崩溃</td><td class="sev-h">高</td><td>提交前做内存门控；LLM 按需加载、空闲卸载；记录每次峰值</td></tr>
-<tr><td>3</td><td>视频链路未验证：640×384、3 秒模板从未端到端执行，生成峰值内存和耗时都是空白</td><td class="sev-h">高</td><td>把“视频冒烟测试”列为第一个里程碑的退出条件</td></tr>
-<tr><td>4</td><td>安全边界靠提示词：“不关应用、不改配置、不下载模型”目前只是约定，agent 有 exec 能力就有越界可能</td><td class="sev-h">高</td><td>用工具白名单强制：只开放编排器的几条命令，不给通用 shell</td></tr>
-<tr><td>5</td><td>释放缓存的竞态：检查队列为空到发出 /free 之间，用户可能手动提交了任务</td><td>中</td><td>释放前二次确认队列；只释放本系统加载的模型；或由用户触发</td></tr>
-<tr><td>6</td><td>失败恢复缺失：生成中途失败、超时、ComfyUI 重启后，没有任务记录，可能重复提交或丢结果</td><td>中</td><td>每个任务一个持久化记录（状态、prompt_id、参数），提交前查重</td></tr>
-<tr><td>7</td><td>可观测性不足：没有记录参数、种子、耗时、峰值内存，结果无法复现，也无法调参</td><td>中</td><td>每次任务写一份 manifest.json，和产物放在一起</td></tr>
-<tr><td>8</td><td>OpenClaw 自身：SQLite 维护警告、网关约 3.7 GiB 常驻、临时状态与日志，版本升级可能改变行为</td><td>中</td><td>锁定版本；把 OpenClaw 当按需调用的子 agent，而不是系统核心</td></tr>
-<tr><td>9</td><td>身份一致性：是否需要因任务而异，效果也未验证</td><td>中</td><td>需求澄清时询问；需要时作为任务级约束（定妆参考图 + 一致性评分）挂到模板上，架构不变；效果仍需实测</td></tr>
-<tr><td>10</td><td>前提污染：原始报告的未验证推断（机型、BF16 占用、回退成本为零）可能被后续计划沿用</td><td>低</td><td>每个数字标注“实测/估算”，估算项列入验证清单</td></tr>
+<h2 id="concerns">4. Main concerns</h2>
+<p class="lead">The three biggest risks: the LLM is on the critical path of every step, memory coexistence is unmeasured, and the video path has never run end to end.</p>
+<div class="table"><table><thead><tr><th>#</th><th>Concern</th><th>Severity</th><th>Mitigation</th></tr></thead><tbody>
+<tr><td>1</td><td>The LLM on the critical path: about 85 s per turn with nondeterministic output; a 27B editing workflow JSON directly easily gets node IDs, types or parameter ranges wrong</td><td class="sev-h">High</td><td>Parameters or workflow variants from the LLM go through graph validation and low-tier trials before production</td></tr>
+<tr><td>2</td><td>Memory contention: the LLM, the video model and the VM resident together; once macOS hits memory pressure it swaps heavily, the whole machine slows down or ComfyUI even crashes</td><td class="sev-h">High</td><td>Memory gate before submitting; load the LLM on demand and unload when idle; record every peak</td></tr>
+<tr><td>3</td><td>Video path unverified: the 640×384, 3 s template has never run end to end; peak memory and time are blank</td><td class="sev-h">High</td><td>Make a "video smoke test" the exit condition of the first milestone</td></tr>
+<tr><td>4</td><td>Safety boundaries rely on prompts: "don't close apps, don't change config, don't download models" is only a convention; an agent with exec ability can cross it</td><td class="sev-h">High</td><td>Enforce with a tool whitelist: only the orchestrator's few commands, no general shell</td></tr>
+<tr><td>5</td><td>Race when releasing the cache: between seeing an empty queue and sending /free, the user may have submitted a task by hand</td><td>Medium</td><td>Confirm the queue twice before releasing; only release models this system loaded; or let the user trigger it</td></tr>
+<tr><td>6</td><td>No failure recovery: after a failure mid-generation, a timeout or a ComfyUI restart there is no task record, so tasks may be resubmitted or results lost</td><td>Medium</td><td>One persisted record per task (state, prompt_id, parameters), dedup before submitting</td></tr>
+<tr><td>7</td><td>Poor observability: parameters, seeds, durations and peak memory are not recorded, so results cannot be reproduced or tuned</td><td>Medium</td><td>Write a manifest.json for every task, next to its outputs</td></tr>
+<tr><td>8</td><td>OpenClaw itself: SQLite maintenance warnings, the gateway keeps about 3.7 GiB resident, temporary state and logs; upgrades may change behaviour</td><td>Medium</td><td>Pin the version; treat OpenClaw as an on-demand sub-agent, not the core of the system</td></tr>
+<tr><td>9</td><td>Identity consistency: whether it is needed varies by task, and its effect is unverified</td><td>Medium</td><td>Ask when clarifying the request; when needed, attach it to the template as a task-level constraint (casting reference image + consistency score) without changing the architecture; the effect still needs measuring</td></tr>
+<tr><td>10</td><td>Premise pollution: unverified inferences in the original report (machine model, BF16 footprint, zero fallback cost) may be carried into later plans</td><td>Low</td><td>Label every number "measured / estimated"; estimates go on the verification list</td></tr>
 </tbody></table></div>
 
-<h2 id="design">5. 高层设计建议</h2>
-<p class="lead">核心建议：把系统拆成“确定性编排器 + 可选 LLM 规划器”。编排器负责一切有副作用的操作，LLM 只负责把自然语言需求翻译成受约束的方案；没有 LLM 时系统照样能跑。</p>
-<h3>设计原则</h3>
+<h2 id="design">5. High-level design advice</h2>
+<p class="lead">Core advice: split the system into "a deterministic orchestrator + an optional LLM planner". The orchestrator does every operation with side effects; the LLM only translates natural-language requests into constrained plans; without the LLM the system still runs.</p>
+<h3>Design principles</h3>
 <ul>
-<li>确定性优先：提交、轮询、释放、重试全部由 Python 代码完成，LLM 不直接接触 ComfyUI API 或 shell。（2026-11-07 修订：agent 可以<em>请求</em>执行命令、读网页、读写文件、用 skill，由编排器执行；命令默认每条经用户批准，可“始终允许”某类或打开 bypass 模式；生成相关副作用仍只走生成工具。）</li>
-<li>受控探索：agent 可以探索不同的模板、模型和工作流，但所有新组合都要先过校验与低档试跑，生产任务只用已晋升的模板。</li>
-<li>内存是一等资源：每次提交前检查可用内存，LLM 与生成模型分时使用，不追求同时常驻。</li>
-<li>每个任务可复现：参数、种子、模板版本、约束配置、耗时、峰值内存写进 manifest，与产物同目录。</li>
-<li>最小权限：越界行为在工具层被拒绝，而不是靠提示词约束。</li>
+<li>Determinism first: submitting, polling, releasing and retrying are all done by Python code; the LLM never touches the ComfyUI API or a shell directly. (Revised 2026-11-07: the agent may <em>request</em> running commands, reading web pages, reading / writing files and using skills, executed by the orchestrator; commands need the user's approval per item by default, with "always allow" per kind or bypass mode; generation side effects still only go through the generation tools.)</li>
+<li>Controlled exploration: the agent may explore different templates, models and workflows, but every new combination passes validation and a low-tier trial first; production tasks only use promoted templates.</li>
+<li>Memory is a first-class resource: check available memory before every submit; the LLM and generation models take turns instead of aiming to stay resident together.</li>
+<li>Every task is reproducible: parameters, seed, template version, constraint config, duration and peak memory go into the manifest, in the same directory as the outputs.</li>
+<li>Least privilege: out-of-bounds behaviour is refused at the tool layer, not by prompt instructions.</li>
 </ul>
-<h3>关键设计决策</h3>
-<div class="table"><table><thead><tr><th>决策点</th><th>建议</th><th>理由</th><th>放弃的方案</th></tr></thead><tbody>
-<tr><td>LLM 的角色</td><td>规划器 + 探索者：选模板/模型、生成工作流变体，全部经校验与试跑</td><td>把不确定性限制在一处，错误可被拦截</td><td>LLM 直接提交未经校验的工作流</td></tr>
-<tr><td>LLM 与生成模型的调度</td><td>默认按需唤醒；可切换为会话常驻、始终常驻或纯命令模式，内存门控优先</td><td>内存最紧的时刻只放一个大模型</td><td>两者常驻</td></tr>
-<tr><td>任务入口</td><td>Telegram + 自建服务为主；本地 CLI + 任务文件作为无 LLM 的批量入口</td><td>不依赖 agent 也能批量跑；方便调试</td><td>只能通过对话触发</td></tr>
-<tr><td>等待方式</td><td>Python 轮询 /history 或订阅 websocket，带超时</td><td>等待期间零 token 消耗</td><td>LLM 循环查询状态</td></tr>
-<tr><td>缓存释放</td><td>默认“任务结束且队列空闲才释放”，连续同模型任务可配置保留</td><td>兼顾内存与速度</td><td>每次强制释放</td></tr>
-<tr><td>参数档位</td><td>预设档位（图片 1280×720；视频 640×384×3s → 逐级上调），生产任务只能选档，探索变体先在最低档试跑</td><td>避免越界组合导致 OOM</td><td>任意分辨率与帧数</td></tr>
-<tr><td>状态存储</td><td>每任务一个目录 + manifest.json，SQLite 做索引</td><td>简单、可读、易恢复</td><td>依赖 OpenClaw 内部状态</td></tr>
-<tr><td>OpenClaw 定位</td><td>由编排器按需调用的子 agent（搜索、Skills、MCP）</td><td>不重建这些能力，也降低对其版本和 SQLite 问题的依赖</td><td>作为系统核心</td></tr>
+<h3>Key design decisions</h3>
+<div class="table"><table><thead><tr><th>Decision</th><th>Recommendation</th><th>Reason</th><th>Rejected option</th></tr></thead><tbody>
+<tr><td>Role of the LLM</td><td>Planner + explorer: picks templates / models, generates workflow variants, all validated and trial-run</td><td>Confines uncertainty to one place where errors can be caught</td><td>The LLM submits unvalidated workflows directly</td></tr>
+<tr><td>Scheduling the LLM and generation models</td><td>Wake on demand by default; switchable to session resident, always resident or commands only; the memory gate takes precedence</td><td>Only one big model at the tightest moment</td><td>Both resident</td></tr>
+<tr><td>Task entry</td><td>Telegram + our own service primarily; local CLI + task files as an LLM-free batch entry</td><td>Batches run without an agent; easier to debug</td><td>Triggered only through chat</td></tr>
+<tr><td>Waiting</td><td>Python polls /history or subscribes to the websocket, with timeouts</td><td>Zero tokens spent while waiting</td><td>The LLM polls status in a loop</td></tr>
+<tr><td>Cache release</td><td>By default "release only when the task is over and the queue is idle"; consecutive same-model tasks can keep it loaded</td><td>Balances memory and speed</td><td>Force a release every time</td></tr>
+<tr><td>Parameter tiers</td><td>Preset tiers (images 1280×720; video 640×384×3 s → raised step by step); production tasks can only pick a tier, exploration variants trial at the lowest tier first</td><td>Avoids out-of-range combinations causing OOM</td><td>Arbitrary resolution and frame count</td></tr>
+<tr><td>State storage</td><td>One directory + manifest.json per task, SQLite as the index</td><td>Simple, readable, easy to recover</td><td>Rely on OpenClaw's internal state</td></tr>
+<tr><td>OpenClaw's position</td><td>A sub-agent the orchestrator calls on demand (search, skills, MCP)</td><td>We do not rebuild these abilities, and depend less on its versions and SQLite problems</td><td>As the core of the system</td></tr>
 </tbody></table></div>
 
-<h3>探索机制：分级的受控探索</h3>
-<p>agent 的探索范围按风险分五级，越往下护栏越重。前四级 agent 可以自主进行，只有“晋升为正式模板”和“引入新资源”需要人确认。</p>
-<div class="table"><table><thead><tr><th>层级</th><th>agent 能做什么</th><th>护栏</th><th>需要人确认</th></tr></thead><tbody>
-<tr><td>L1 参数</td><td>改 prompt、种子、采样器、步数、CFG</td><td>schema 范围约束</td><td>否</td></tr>
-<tr><td>L2 模板</td><td>在模板库中选择、组合模板</td><td>模板注册表，标注能力与适用场景</td><td>否</td></tr>
-<tr><td>L3 模型</td><td>在本地已有的 checkpoint、LoRA、VAE 间切换</td><td>模型注册表记录大小与实测峰值内存；提交前内存门控</td><td>否</td></tr>
-<tr><td>L4 工作流</td><td>增删节点、改连线、编写新工作流</td><td>按 ComfyUI /object_info 校验节点类型与连线；最低档试跑；输出写入沙盒目录</td><td>晋升为正式模板时需要</td></tr>
-<tr><td>L5 新资源</td><td>下载模型、安装自定义节点</td><td>沿用试验报告的约束：默认不下载、不装常驻组件</td><td>每次都需要</td></tr>
+<h3>Exploration: tiered, controlled exploration</h3>
+<p>The agent's exploration scope has five levels by risk, with heavier guard rails further down. The agent may do the first four on its own; only "promote to a real template" and "bring in new resources" need human confirmation.</p>
+<div class="table"><table><thead><tr><th>Level</th><th>What the agent can do</th><th>Guard rails</th><th>Human confirmation</th></tr></thead><tbody>
+<tr><td>L1 Parameters</td><td>Change prompt, seed, sampler, steps, CFG</td><td>Schema range constraints</td><td>No</td></tr>
+<tr><td>L2 Templates</td><td>Choose and combine templates from the library</td><td>Template registry, labelled with capabilities and use cases</td><td>No</td></tr>
+<tr><td>L3 Models</td><td>Switch between local checkpoints, LoRAs and VAEs</td><td>The model registry records size and measured peak memory; memory gate before submitting</td><td>No</td></tr>
+<tr><td>L4 Workflows</td><td>Add / remove nodes, rewire, write new workflows</td><td>Node types and links validated against ComfyUI /object_info; trial at the lowest tier; outputs written to a sandbox directory</td><td>When promoting to a real template</td></tr>
+<tr><td>L5 New resources</td><td>Download models, install custom nodes</td><td>Keep the trial report's constraints: no downloads, no resident components by default</td><td>Every time</td></tr>
 </tbody></table></div>
-<p>新工作流的生命周期：候选 → 图校验 → 最低档试跑 → 评估 → 人工确认后晋升进模板库。每次探索都写一条实验记录（模板、模型、改动、耗时、峰值内存、结果评分），agent 下次探索先查这份记录，避免重复踩坑。</p>
-<p>探索要设预算：每轮限定试跑次数或总时长，因为 Mac 上一次视频试跑就以分钟计，加上 27B 每轮约 85 秒。结果评估是待定点：人工打分最可靠，用视觉模型自动评分则会再占一份内存。</p>
+<p>Life cycle of a new workflow: candidate → graph validation → lowest-tier trial → evaluation → promoted into the template library after human confirmation. Every exploration writes an experiment record (template, model, change, duration, peak memory, result score); the agent checks these records before exploring again to avoid repeating mistakes.</p>
+<p>Exploration needs a budget: each round limits the number of trials or the total time, because one video trial on a Mac takes minutes, plus about 85 s per 27B turn. Evaluating results is an open point: human scoring is most reliable, automatic scoring by a vision model takes another chunk of memory.</p>
 
-<h3>按需唤醒：LLM 不常驻，收到消息才启动</h3>
-<p>常驻的只有一个不加载模型的消息监听器。命令和按钮由它直接处理；只有需要理解的自由文本才加载 LLM，处理完进入空闲计时，到期卸载。这样人随时可以介入，又不占内存。</p>
-<figure><svg viewBox="0 0 760 684" role="img" aria-label="只有需要理解的消息才唤醒 LLM，空闲后自动卸载" font-size="13">
+<h3>Wake on demand: the LLM is not resident and starts when a message arrives</h3>
+<p>Only a message listener that loads no model stays resident. It handles commands and buttons itself; only free text that needs understanding loads the LLM, which then starts an idle timer and unloads when it expires. People can step in any time without the memory cost.</p>
+<figure><svg viewBox="0 0 760 684" role="img" aria-label="Only messages that need understanding wake the LLM; it unloads after idling" font-size="13">
 <defs><marker id="wa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="s-m"/></marker></defs>
-<text x="24" y="34" font-size="15" font-weight="600" class="s-t">只有需要理解的消息才唤醒 LLM，空闲后自动卸载</text>
+<text x="24" y="34" font-size="15" font-weight="600" class="s-t">Only messages that need understanding wake the LLM; it unloads after idling</text>
 <g class="s-l"><path d="M380 116V146" marker-end="url(#wa)"/><path d="M380 204V234" marker-end="url(#wa)"/><path d="M452 268H530" marker-end="url(#wa)"/><path d="M380 300V330" marker-end="url(#wa)"/><path d="M308 364H230" marker-end="url(#wa)"/><path d="M380 396V426" marker-end="url(#wa)"/><path d="M126 392V456H258" marker-end="url(#wa)"/><path d="M380 484V514" marker-end="url(#wa)"/><path d="M380 572V602" marker-end="url(#wa)"/></g>
-<text x="491" y="260" text-anchor="middle" font-size="11.5" class="s-q">是</text><text x="390" y="320" font-size="11.5" class="s-q">否</text><text x="269" y="356" text-anchor="middle" font-size="11.5" class="s-q">是</text><text x="390" y="416" font-size="11.5" class="s-q">否</text><text x="136" y="446" font-size="11.5" class="s-q">生成结束后</text>
-<rect x="260" y="60" width="240" height="56" rx="8" class="s-b"/><text x="380" y="84" text-anchor="middle" font-weight="600" class="s-t">用户发消息</text><text x="380" y="102" text-anchor="middle" font-size="11.5" class="s-q">Telegram 文字、按钮或命令</text>
-<rect x="260" y="148" width="240" height="56" rx="8" class="s-a"/><text x="380" y="172" text-anchor="middle" font-weight="600" class="s-t">常驻监听器（唯一常驻）</text><text x="380" y="190" text-anchor="middle" font-size="11.5" class="s-t">纯 Python 长轮询，不加载模型</text>
-<polygon points="308,268 380,236 452,268 380,300" class="s-b"/><text x="380" y="272" text-anchor="middle" class="s-t">命令或按钮？</text>
-<rect x="532" y="240" width="204" height="56" rx="8" class="s-b"/><text x="634" y="264" text-anchor="middle" font-weight="600" class="s-t">直接处理并回复</text><text x="634" y="282" text-anchor="middle" font-size="11.5" class="s-q">/status、选版、取消、暂停</text>
-<polygon points="308,364 380,332 452,364 380,396" class="s-b"/><text x="380" y="368" text-anchor="middle" class="s-t">生成占着内存？</text>
-<rect x="24" y="336" width="204" height="56" rx="8" class="s-b"/><text x="126" y="360" text-anchor="middle" font-weight="600" class="s-t">排队并立即回执</text><text x="126" y="378" text-anchor="middle" font-size="11.5" class="s-q">不抢占正在运行的生成</text>
-<rect x="260" y="428" width="240" height="56" rx="8" class="s-b"/><text x="380" y="452" text-anchor="middle" font-weight="600" class="s-t">加载 LLM（冷启动）</text><text x="380" y="470" text-anchor="middle" font-size="11.5" class="s-q">先回一句“收到，正在处理”</text>
-<rect x="260" y="516" width="240" height="56" rx="8" class="s-b"/><text x="380" y="540" text-anchor="middle" font-weight="600" class="s-t">读上下文并处理</text><text x="380" y="558" text-anchor="middle" font-size="11.5" class="s-q">项目摘要、基准包、近期记录</text>
-<rect x="260" y="604" width="240" height="56" rx="8" class="s-b"/><text x="380" y="628" text-anchor="middle" font-weight="600" class="s-t">空闲计时，新消息续期</text><text x="380" y="646" text-anchor="middle" font-size="11.5" class="s-q">到期卸载，只剩监听器</text>
-</svg><figcaption>按需唤醒：消息分流与 LLM 生命周期</figcaption></figure>
-<div class="table"><table><thead><tr><th>消息类型</th><th>例子</th><th>唤醒 LLM</th><th>处理方式</th></tr></thead><tbody>
-<tr><td>命令</td><td>/status、/cancel、/pause、/budget</td><td>否</td><td>监听器直接执行</td></tr>
-<tr><td>按钮选择</td><td>选中 2 号、打回、混合 1+3</td><td>否</td><td>写入审阅结果，触发锁定或下一轮</td></tr>
-<tr><td>自由文本批注</td><td>“眼神再忧伤一点，光打侧面”</td><td>是</td><td>理解成参数改动，经校验后提交</td></tr>
-<tr><td>新需求</td><td>“用这个定妆照做回头镜头”</td><td>是</td><td>先澄清关键选项（是否要求身份一致、时长、风格），再规划任务</td></tr>
+<text x="491" y="260" text-anchor="middle" font-size="11.5" class="s-q">yes</text><text x="390" y="320" font-size="11.5" class="s-q">no</text><text x="269" y="356" text-anchor="middle" font-size="11.5" class="s-q">yes</text><text x="390" y="416" font-size="11.5" class="s-q">no</text><text x="136" y="446" font-size="11.5" class="s-q">after generation</text>
+<rect x="260" y="60" width="240" height="56" rx="8" class="s-b"/><text x="380" y="84" text-anchor="middle" font-weight="600" class="s-t">User sends a message</text><text x="380" y="102" text-anchor="middle" font-size="11.5" class="s-q">Telegram text, button or command</text>
+<rect x="260" y="148" width="240" height="56" rx="8" class="s-a"/><text x="380" y="172" text-anchor="middle" font-weight="600" class="s-t">Resident listener (only one)</text><text x="380" y="190" text-anchor="middle" font-size="11.5" class="s-t">Plain Python long polling, no model</text>
+<polygon points="308,268 380,236 452,268 380,300" class="s-b"/><text x="380" y="272" text-anchor="middle" class="s-t">Command or button?</text>
+<rect x="532" y="240" width="204" height="56" rx="8" class="s-b"/><text x="634" y="264" text-anchor="middle" font-weight="600" class="s-t">Handle and reply</text><text x="634" y="282" text-anchor="middle" font-size="11.5" class="s-q">/status, pick, cancel, pause</text>
+<polygon points="308,364 380,332 452,364 380,396" class="s-b"/><text x="380" y="368" text-anchor="middle" class="s-t">Generation holds memory?</text>
+<rect x="24" y="336" width="204" height="56" rx="8" class="s-b"/><text x="126" y="360" text-anchor="middle" font-weight="600" class="s-t">Queue, acknowledge now</text><text x="126" y="378" text-anchor="middle" font-size="11.5" class="s-q">Never preempts a running render</text>
+<rect x="260" y="428" width="240" height="56" rx="8" class="s-b"/><text x="380" y="452" text-anchor="middle" font-weight="600" class="s-t">Load the LLM (cold start)</text><text x="380" y="470" text-anchor="middle" font-size="11.5" class="s-q">First reply "Got it, working on it"</text>
+<rect x="260" y="516" width="240" height="56" rx="8" class="s-b"/><text x="380" y="540" text-anchor="middle" font-weight="600" class="s-t">Read context and handle</text><text x="380" y="558" text-anchor="middle" font-size="11.5" class="s-q">Project summary, pack, recent records</text>
+<rect x="260" y="604" width="240" height="56" rx="8" class="s-b"/><text x="380" y="628" text-anchor="middle" font-weight="600" class="s-t">Idle timer, renewed by messages</text><text x="380" y="646" text-anchor="middle" font-size="11.5" class="s-q">Unloads on expiry</text>
+</svg><figcaption>Wake on demand: message routing and the LLM's life cycle</figcaption></figure>
+<div class="table"><table><thead><tr><th>Message type</th><th>Example</th><th>Wakes the LLM</th><th>Handling</th></tr></thead><tbody>
+<tr><td>Command</td><td>/status, /cancel, /pause, /budget</td><td>No</td><td>Executed by the listener directly</td></tr>
+<tr><td>Button choice</td><td>Pick #2, reject, mix 1+3</td><td>No</td><td>Writes the review result, triggers the lock or the next round</td></tr>
+<tr><td>Free-text note</td><td>"Make the eyes a little sadder, light from the side"</td><td>Yes</td><td>Understood as parameter changes, submitted after validation</td></tr>
+<tr><td>New request</td><td>"Make a looking-back shot from this casting photo"</td><td>Yes</td><td>First clarify key options (identity consistency or not, duration, style), then plan tasks</td></tr>
 </tbody></table></div>
 <ul>
-<li>冷启动会慢：加载 27B 要读入整份权重，再加上推理（实测一轮 85.2 秒），一条自由文本可能要一两分钟才有回复。监听器先秒回一句“收到”。</li>
-<li>空闲计时避免反复加载：连续的几条消息共用一次加载；计时长度按 G0 测得的加载耗时来定。LM Studio 的按需加载与空闲自动卸载能否按实例生效，待第 0 阶段核实。</li>
-<li>加载期间到达的多条消息合并成一次处理。</li>
-<li>不抢占生成：生成占着内存时自由文本排队；“停”“取消”这类紧急指令是命令，监听器立即执行，不必等 LLM。若 G0 显示内存有余量，可允许 LLM 与生成并存。</li>
-<li>上下文从数据库重建：每次唤醒读取项目摘要、基准包和近期记录，不重放全部聊天。</li>
-<li>后台探索同理：调度器在需要规划下一轮时才唤醒 LLM；用户消息优先于后台探索的下一轮。</li>
+<li>Cold starts are slow: loading the 27B reads all its weights, plus inference (measured 85.2 s per turn), so a free-text message may take a minute or two to answer. The listener replies "got it" right away.</li>
+<li>An idle timer avoids repeated loads: consecutive messages share one load; the timer length follows the load time measured in G0. Whether LM Studio's on-demand load and idle auto-unload work per instance is to be verified in stage 0.</li>
+<li>Several messages arriving during a load are handled together.</li>
+<li>No preemption of generation: while generation holds memory, free text queues; urgent instructions like "stop" or "cancel" are commands executed by the listener immediately, without waiting for the LLM. If G0 shows memory headroom, the LLM may coexist with generation.</li>
+<li>Context is rebuilt from the database: each wake-up reads the project summary, baseline pack and recent records, never replaying the whole chat.</li>
+<li>Background exploration works the same way: the scheduler only wakes the LLM when the next round needs planning; user messages take priority over the next exploration round.</li>
 </ul>
 
-<h3>驻留模式：可选，默认按需唤醒</h3>
-<p>LLM 的驻留方式做成可切换的选项。切换用命令 <code>/mode</code>，由监听器直接执行，不需要 LLM；也可以给每个项目设默认值。</p>
-<div class="table"><table><thead><tr><th>模式</th><th>LLM 行为</th><th>适合场景</th><th>代价</th></tr></thead><tbody>
-<tr><td>按需唤醒（默认）</td><td>收到自由文本才加载，空闲到期卸载</td><td>日常使用、长时间挂着</td><td>每次冷启动要等一两分钟</td></tr>
-<tr><td>会话常驻</td><td>用 <code>/session</code> 开启后保持加载，结束或超时卸载</td><td>密集选版、连续批注</td><td>会话期间占内存，生成要与之共存或排队</td></tr>
-<tr><td>始终常驻</td><td>一直加载，响应最快</td><td>内存充裕、追求即时回复</td><td>持续占用；视频生成时可能被临时卸载</td></tr>
-<tr><td>纯命令</td><td>不加载 LLM，只用命令和按钮</td><td>生成高峰、内存最紧时</td><td>无法理解自由文本，文字消息只排队</td></tr>
+<h3>Residency modes: optional, wake on demand by default</h3>
+<p>How the LLM stays resident is a switchable option. Switching uses the <code>/mode</code> command, executed by the listener without the LLM; each project can also have a default.</p>
+<div class="table"><table><thead><tr><th>Mode</th><th>LLM behaviour</th><th>Fits</th><th>Cost</th></tr></thead><tbody>
+<tr><td>Wake on demand (default)</td><td>Loads only on free text, unloads when the idle timer expires</td><td>Everyday use, left running for long periods</td><td>Every cold start waits a minute or two</td></tr>
+<tr><td>Session resident</td><td>Stays loaded after <code>/session</code> starts, unloads at the end or on timeout</td><td>Intensive picking, consecutive notes</td><td>Holds memory during the session; generation must coexist or queue</td></tr>
+<tr><td>Always resident</td><td>Always loaded, fastest response</td><td>Plenty of memory, instant replies wanted</td><td>Constant footprint; may be unloaded temporarily during video generation</td></tr>
+<tr><td>Commands only</td><td>No LLM, commands and buttons only</td><td>Generation peaks, tightest memory</td><td>Free text cannot be understood, text messages only queue</td></tr>
 </tbody></table></div>
-<p>内存门控优先于模式设置：当生成任务需要的内存放不下常驻的 LLM 时，调度器临时卸载 LLM，并通过 Telegram 告知用户；生成结束后按原模式恢复。</p>
+<p>The memory gate takes precedence over the mode: when a generation task needs memory that cannot fit alongside a resident LLM, the scheduler unloads the LLM temporarily and tells the user over Telegram; after generation it is restored per the original mode.</p>
 
-<h3>OpenClaw 作为可调用的子 agent</h3>
-<p>已定：主入口是 Telegram + 自建服务，调度权在编排器。OpenClaw 降为编排器按需调用的子 agent，承担不想自建的能力（搜索、现有 Skills、MCP）。评审问题 #1 的范围膨胀因此基本化解。</p>
-<div class="table"><table><thead><tr><th>方面</th><th>做法</th></tr></thead><tbody>
-<tr><td>调用方式</td><td>编排器发起单次 <code>agent exec</code>（试验已验证：85.2 秒、退出码 0、不用 --deliver）；输入是结构化任务说明，要求输出文本或 JSON</td></tr>
-<tr><td>交给它的</td><td>网络搜索与资料整理、复用已有 OpenClaw Skills、需要 MCP 的操作</td></tr>
-<tr><td>不交给它的</td><td>提交 ComfyUI、释放内存、改模型或配置、写项目记忆；这些只在编排器里发生</td></tr>
-<tr><td>资源</td><td>调用前占用资源锁，因为它也走 LM Studio 的 27B；尽量与本服务共用同一个已加载的模型实例</td></tr>
-<tr><td>结果处理</td><td>输出当作数据，经 schema 校验后才进入参数或记忆；调用记录写入 manifest</td></tr>
-<tr><td>失败处理</td><td>设超时；非零退出、超时和 SQLite 警告都记录，有限次重试后向用户汇报</td></tr>
-<tr><td>网关</td><td>OpenClaw 网关实测约 3.7 GiB 常驻；能否按需启停、调用后退出，待第 0 阶段核实</td></tr>
+<h3>OpenClaw as a callable sub-agent</h3>
+<p>Decided: the main entry is Telegram + our own service, and scheduling authority lies with the orchestrator. OpenClaw becomes a sub-agent the orchestrator calls on demand, providing abilities we do not want to build (search, existing skills, MCP). Review problem #1's scope creep is largely resolved by this.</p>
+<div class="table"><table><thead><tr><th>Aspect</th><th>Approach</th></tr></thead><tbody>
+<tr><td>How it is called</td><td>The orchestrator issues a single <code>agent exec</code> (verified in the trial: 85.2 s, exit code 0, no --deliver); input is a structured task description, output must be text or JSON</td></tr>
+<tr><td>What it gets</td><td>Web search and research summaries, reusing existing OpenClaw skills, operations needing MCP</td></tr>
+<tr><td>What it does not get</td><td>Submitting to ComfyUI, releasing memory, changing models or config, writing project memory; these only happen in the orchestrator</td></tr>
+<tr><td>Resources</td><td>Takes the resource lock before calling, since it also uses LM Studio's 27B; shares the same loaded model instance with this service where possible</td></tr>
+<tr><td>Results</td><td>Output is treated as data and only enters parameters or memory after schema validation; the call is recorded in the manifest</td></tr>
+<tr><td>Failures</td><td>Timeouts; non-zero exits, timeouts and SQLite warnings are all recorded, reported to the user after a limited number of retries</td></tr>
+<tr><td>Gateway</td><td>The OpenClaw gateway keeps about 3.7 GiB resident (measured); whether it can start and stop on demand and exit after a call is to be verified in stage 0</td></tr>
 </tbody></table></div>
 
-<h2 id="architecture">6. 目标架构</h2>
-<p class="lead">（2026-11-07：本节的 OpenClaw 子 agent 设计已被 <a href="#agent-now">§6b</a> 取代。）两个入口汇入同一个编排器；LLM 规划器是可选件；Telegram 和 LLM 都碰不到 ComfyUI 或 shell，OpenClaw 由编排器按需调用。</p>
-<figure><svg viewBox="0 0 760 560" role="img" aria-label="只有编排器能接触 ComfyUI；OpenClaw 由它按需调用" font-size="13">
+<h2 id="architecture">6. Target architecture</h2>
+<p class="lead">(2026-11-07: the OpenClaw sub-agent design in this section is superseded by <a href="#agent-now">§6b</a>.) Two entries flow into one orchestrator; the LLM planner is optional; neither Telegram nor the LLM can reach ComfyUI or a shell, and OpenClaw is called by the orchestrator on demand.</p>
+<figure><svg viewBox="0 0 760 560" role="img" aria-label="Only the orchestrator can touch ComfyUI; OpenClaw is called by it on demand" font-size="13">
 <defs><marker id="aa" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="s-m"/></marker></defs>
-<text x="24" y="34" font-size="15" font-weight="600" class="s-t">只有编排器能接触 ComfyUI；OpenClaw 由它按需调用</text>
+<text x="24" y="34" font-size="15" font-weight="600" class="s-t">Only the orchestrator can touch ComfyUI; OpenClaw is called by it on demand</text>
 <g class="s-l"><path d="M194 116V146" marker-end="url(#aa)"/><path d="M194 204V234" marker-end="url(#aa)"/><path d="M566 116V234" marker-end="url(#aa)"/><path d="M107 420V450" marker-end="url(#aa)"/><path d="M289 420V450" marker-end="url(#aa)"/><path d="M471 420V450" marker-end="url(#aa)"/><path d="M653 420V450" marker-end="url(#aa)"/></g>
-<rect x="24" y="60" width="340" height="56" rx="8" class="s-b"/><text x="194" y="84" text-anchor="middle" font-weight="600" class="s-t">Telegram 对话入口</text><text x="194" y="102" text-anchor="middle" font-size="11.5" class="s-q">常驻监听器只处理命令；自由文本才唤醒 LLM</text>
-<rect x="396" y="60" width="340" height="56" rx="8" class="s-b"/><text x="566" y="84" text-anchor="middle" font-weight="600" class="s-t">CLI + 任务文件</text><text x="566" y="102" text-anchor="middle" font-size="11.5" class="s-q">不经过 LLM 也能批量运行</text>
-<rect x="24" y="148" width="340" height="56" rx="8" class="s-b s-d"/><text x="194" y="172" text-anchor="middle" font-weight="600" class="s-t">LLM 规划 / 探索器（可选，27B）</text><text x="194" y="190" text-anchor="middle" font-size="11.5" class="s-q">选模板、模型，提出工作流变体，全部交编排器校验</text>
-<text x="204" y="224" font-size="11.5" class="s-q">参数 / 工作流变体</text><text x="576" y="180" font-size="11.5" class="s-q">任务文件</text>
-<rect x="24" y="236" width="712" height="184" rx="8" class="s-a"/><text x="40" y="260" font-weight="600" class="s-t">确定性编排器（Python）：所有副作用都在这里发生</text>
+<rect x="24" y="60" width="340" height="56" rx="8" class="s-b"/><text x="194" y="84" text-anchor="middle" font-weight="600" class="s-t">Telegram chat entry</text><text x="194" y="102" text-anchor="middle" font-size="11.5" class="s-q">The listener handles commands; only free text wakes the LLM</text>
+<rect x="396" y="60" width="340" height="56" rx="8" class="s-b"/><text x="566" y="84" text-anchor="middle" font-weight="600" class="s-t">CLI + task files</text><text x="566" y="102" text-anchor="middle" font-size="11.5" class="s-q">Batches run without the LLM</text>
+<rect x="24" y="148" width="340" height="56" rx="8" class="s-b s-d"/><text x="194" y="172" text-anchor="middle" font-weight="600" class="s-t">LLM planner / explorer (optional, 27B)</text><text x="194" y="190" text-anchor="middle" font-size="11.5" class="s-q">Picks templates, models, proposes variants; all validated</text>
+<text x="204" y="224" font-size="11.5" class="s-q">parameters / workflow variants</text><text x="576" y="180" font-size="11.5" class="s-q">task files</text>
+<rect x="24" y="236" width="712" height="184" rx="8" class="s-a"/><text x="40" y="260" font-weight="600" class="s-t">Deterministic orchestrator (Python): every side effect happens here</text>
 <rect x="40" y="276" width="216" height="56" rx="8" class="s-b"/><rect x="272" y="276" width="216" height="56" rx="8" class="s-b"/><rect x="504" y="276" width="216" height="56" rx="8" class="s-b"/><rect x="40" y="348" width="216" height="56" rx="8" class="s-b"/><rect x="272" y="348" width="216" height="56" rx="8" class="s-b"/><rect x="504" y="348" width="216" height="56" rx="8" class="s-b"/>
-<text x="148" y="300" text-anchor="middle" font-weight="600" class="s-t">Schema 校验</text><text x="148" y="318" text-anchor="middle" font-size="11.5" class="s-q">拒绝越界参数与未知字段</text>
-<text x="380" y="300" text-anchor="middle" font-weight="600" class="s-t">模板渲染</text><text x="380" y="318" text-anchor="middle" font-size="11.5" class="s-q">按节点 ID 写入参数槽位</text>
-<text x="612" y="300" text-anchor="middle" font-weight="600" class="s-t">内存门控</text><text x="612" y="318" text-anchor="middle" font-size="11.5" class="s-q">可用内存不足则等待或拒绝</text>
-<text x="148" y="372" text-anchor="middle" font-weight="600" class="s-t">提交与轮询</text><text x="148" y="390" text-anchor="middle" font-size="11.5" class="s-q">提交 /prompt，轮询 /history</text>
-<text x="380" y="372" text-anchor="middle" font-weight="600" class="s-t">释放策略</text><text x="380" y="390" text-anchor="middle" font-size="11.5" class="s-q">队列空闲才 /free，可配置保留</text>
-<text x="612" y="372" text-anchor="middle" font-weight="600" class="s-t">Manifest 记录</text><text x="612" y="390" text-anchor="middle" font-size="11.5" class="s-q">参数、种子、耗时、峰值内存</text>
-<rect x="24" y="452" width="166" height="56" rx="8" class="s-b"/><text x="107" y="476" text-anchor="middle" font-weight="600" class="s-t">ComfyUI（HTTP API）</text><text x="107" y="494" text-anchor="middle" font-size="11.5" class="s-q">只接受编排器提交</text>
-<rect x="206" y="452" width="166" height="56" rx="8" class="s-b"/><text x="289" y="476" text-anchor="middle" font-weight="600" class="s-t">审阅台 + 产物目录</text><text x="289" y="494" text-anchor="middle" font-size="11.5" class="s-q">候选并排，人选后回传</text>
-<rect x="388" y="452" width="166" height="56" rx="8" class="s-b"/><text x="471" y="476" text-anchor="middle" font-weight="600" class="s-t">LM Studio</text><text x="471" y="494" text-anchor="middle" font-size="11.5" class="s-q">按需加载，到期卸载</text>
-<rect x="570" y="452" width="166" height="56" rx="8" class="s-b s-d"/><text x="653" y="476" text-anchor="middle" font-weight="600" class="s-t">OpenClaw 子 agent</text><text x="653" y="494" text-anchor="middle" font-size="11.5" class="s-q">搜索、Skills、MCP</text>
-<text x="24" y="540" font-size="11.5" class="s-q">虚线框为可选组件：没有 LLM 时从 CLI 进入同样能运行；OpenClaw 只做扩展能力，不碰 ComfyUI</text>
-</svg><figcaption>目标架构：入口、可选规划器、编排器、执行端</figcaption></figure>
-<p>一个任务的生命周期：草稿 → 已校验 → 等待内存 → 已提交 → 生成中 → 待审阅 → 完成 / 打回 / 失败 / 超时。每次状态变化都写回 manifest，进程重启后按 prompt_id 去 /history 对账，避免重复提交。</p>
-<p>编排器对外只暴露四条命令：<code>plan</code>（可选，调 LLM 出参数）、<code>submit</code>（校验并提交）、<code>status</code>（查任务）、<code>release</code>（空闲时释放）。Telegram 监听器只能调用这四条命令；OpenClaw 由编排器调用，自己不能调用它们。</p>
+<text x="148" y="300" text-anchor="middle" font-weight="600" class="s-t">Schema validation</text><text x="148" y="318" text-anchor="middle" font-size="11.5" class="s-q">Refuses bad / unknown fields</text>
+<text x="380" y="300" text-anchor="middle" font-weight="600" class="s-t">Template rendering</text><text x="380" y="318" text-anchor="middle" font-size="11.5" class="s-q">Writes slots by node ID</text>
+<text x="612" y="300" text-anchor="middle" font-weight="600" class="s-t">Memory gate</text><text x="612" y="318" text-anchor="middle" font-size="11.5" class="s-q">Waits or refuses when short</text>
+<text x="148" y="372" text-anchor="middle" font-weight="600" class="s-t">Submit and poll</text><text x="148" y="390" text-anchor="middle" font-size="11.5" class="s-q">Submit /prompt, poll /history</text>
+<text x="380" y="372" text-anchor="middle" font-weight="600" class="s-t">Release policy</text><text x="380" y="390" text-anchor="middle" font-size="11.5" class="s-q">/free only when idle, can keep loaded</text>
+<text x="612" y="372" text-anchor="middle" font-weight="600" class="s-t">Manifest records</text><text x="612" y="390" text-anchor="middle" font-size="11.5" class="s-q">Params, seed, time, peak memory</text>
+<rect x="24" y="452" width="166" height="56" rx="8" class="s-b"/><text x="107" y="476" text-anchor="middle" font-weight="600" class="s-t">ComfyUI (HTTP API)</text><text x="107" y="494" text-anchor="middle" font-size="11.5" class="s-q">Orchestrator submits only</text>
+<rect x="206" y="452" width="166" height="56" rx="8" class="s-b"/><text x="289" y="476" text-anchor="middle" font-weight="600" class="s-t">Review + outputs</text><text x="289" y="494" text-anchor="middle" font-size="11.5" class="s-q">Side by side, pick</text>
+<rect x="388" y="452" width="166" height="56" rx="8" class="s-b"/><text x="471" y="476" text-anchor="middle" font-weight="600" class="s-t">LM Studio</text><text x="471" y="494" text-anchor="middle" font-size="11.5" class="s-q">Loaded on demand</text>
+<rect x="570" y="452" width="166" height="56" rx="8" class="s-b s-d"/><text x="653" y="476" text-anchor="middle" font-weight="600" class="s-t">OpenClaw sub-agent</text><text x="653" y="494" text-anchor="middle" font-size="11.5" class="s-q">Search, skills, MCP</text>
+<text x="24" y="540" font-size="11.5" class="s-q">Dashed boxes are optional: without the LLM the CLI runs the same way; OpenClaw only adds extensions and never touches ComfyUI</text>
+</svg><figcaption>Target architecture: entries, optional planner, orchestrator, executors</figcaption></figure>
+<p>A task's life cycle: draft → validated → waiting for memory → submitted → running → review → done / rejected / failed / timeout. Every state change is written back to the manifest; after a process restart, reconcile by prompt_id against /history to avoid duplicate submits.</p>
+<p>The orchestrator exposes only four commands: <code>plan</code> (optional, asks the LLM for parameters), <code>submit</code> (validate and submit), <code>status</code> (query tasks), <code>release</code> (release when idle). The Telegram listener can only call these four; OpenClaw is called by the orchestrator and cannot call them itself.</p>
 
-<h2 id="agent-now">6b. 现状：通用 agent 架构（2026-11-07）</h2>
-<p class="lead">上面 §6 的“OpenClaw 子 agent 提供搜索 / Skills / MCP”已被取代：这些能力改由编排器自己执行（用户 2026-11-07 决定）。LLM 是大脑，只提出 tool call；编排器是中转，执行全部工具，并按内存情况择机把结果交回 LLM。</p>
-<figure><svg viewBox="0 0 760 560" role="img" aria-label="入口进入编排器；本地 LLM 只提出 tool call；编排器执行生成工具、通用工具、命令和 MCP，并可经批准把整件事委托给外部 agent" font-size="13">
+<h2 id="agent-now">6b. Today: the general agent architecture (2026-11-07)</h2>
+<p class="lead">§6's "OpenClaw sub-agent provides search / skills / MCP" has been superseded: the orchestrator now executes these abilities itself (user decision 2026-11-07). The LLM is the brain and only proposes tool calls; the orchestrator is the hub that executes every tool and hands results back to the LLM as memory allows.</p>
+<figure><svg viewBox="0 0 760 560" role="img" aria-label="Entries flow into the orchestrator; the local LLM only proposes tool calls; the orchestrator runs generation tools, generic tools, commands and MCP, and with approval can hand a whole job to an external agent" font-size="13">
 <defs><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="s-m"/></marker></defs>
-<text x="24" y="34" font-size="15" font-weight="600" class="s-t">LLM 只提出 tool call；编排器执行一切，并决定何时把结果交回</text>
-<rect x="24" y="60" width="216" height="56" rx="8" class="s-b"/><text x="132" y="84" text-anchor="middle" font-weight="600" class="s-t">Telegram</text><text x="132" y="102" text-anchor="middle" font-size="11.5" class="s-q">对话、按钮审批、收图 / 视频</text>
-<rect x="272" y="60" width="216" height="56" rx="8" class="s-b"/><text x="380" y="84" text-anchor="middle" font-weight="600" class="s-t">Web 控制台 :8790</text><text x="380" y="102" text-anchor="middle" font-size="11.5" class="s-q">同一套会话、审阅台、进度</text>
-<rect x="520" y="60" width="216" height="56" rx="8" class="s-b"/><text x="628" y="84" text-anchor="middle" font-weight="600" class="s-t">CLI（va）</text><text x="628" y="102" text-anchor="middle" font-size="11.5" class="s-q">不经 LLM 也能提交 / 批量</text>
-<rect x="24" y="148" width="340" height="58" rx="8" class="s-b"/><text x="194" y="172" text-anchor="middle" font-weight="600" class="s-t">Agent 大脑：本地 LLM（LM Studio）</text><text x="194" y="190" text-anchor="middle" font-size="11.5" class="s-q">会话历史 + 自己的记忆 + skill 索引；只出 tool call</text>
-<rect x="396" y="148" width="340" height="58" rx="8" class="s-b s-d"/><text x="566" y="172" text-anchor="middle" font-weight="600" class="s-t">外部 agent（每次经你批准）</text><text x="566" y="190" text-anchor="middle" font-size="11.5" class="s-q">Claude Code + FreeVideo MCP（/fv、delegate_freevideo）</text>
+<text x="24" y="34" font-size="15" font-weight="600" class="s-t">LLM proposes tool calls; the orchestrator runs them and decides when results return</text>
+<rect x="24" y="60" width="216" height="56" rx="8" class="s-b"/><text x="132" y="84" text-anchor="middle" font-weight="600" class="s-t">Telegram</text><text x="132" y="102" text-anchor="middle" font-size="11.5" class="s-q">Chat, approvals, media</text>
+<rect x="272" y="60" width="216" height="56" rx="8" class="s-b"/><text x="380" y="84" text-anchor="middle" font-weight="600" class="s-t">Web console :8790</text><text x="380" y="102" text-anchor="middle" font-size="11.5" class="s-q">Same sessions, review, progress</text>
+<rect x="520" y="60" width="216" height="56" rx="8" class="s-b"/><text x="628" y="84" text-anchor="middle" font-weight="600" class="s-t">CLI (va)</text><text x="628" y="102" text-anchor="middle" font-size="11.5" class="s-q">Submit / batch without the LLM</text>
+<rect x="24" y="148" width="340" height="58" rx="8" class="s-b"/><text x="194" y="172" text-anchor="middle" font-weight="600" class="s-t">Agent brain: local LLM (LM Studio)</text><text x="194" y="190" text-anchor="middle" font-size="11.5" class="s-q">History + memory + skill index; tool calls only</text>
+<rect x="396" y="148" width="340" height="58" rx="8" class="s-b s-d"/><text x="566" y="172" text-anchor="middle" font-weight="600" class="s-t">External agents (approved each time)</text><text x="566" y="190" text-anchor="middle" font-size="11.5" class="s-q">Claude Code + FreeVideo MCP (/fv, delegate_freevideo)</text>
 <g class="s-l"><path d="M380 116V238" marker-end="url(#ab)"/><path d="M194 208V238" marker-start="url(#ab)" marker-end="url(#ab)"/><path d="M566 238V208" marker-end="url(#ab)"/><path d="M107 440V470" marker-end="url(#ab)"/><path d="M289 440V470" marker-end="url(#ab)"/><path d="M471 440V470" marker-end="url(#ab)"/><path d="M653 440V470" marker-end="url(#ab)"/></g>
-<rect x="24" y="240" width="712" height="200" rx="8" class="s-a"/><text x="40" y="264" font-weight="600" class="s-t">编排器（Python）：执行全部 tool call，结果落库，LLM 被卸载时暂存</text>
-<rect x="40" y="280" width="216" height="64" rx="8" class="s-b"/><text x="148" y="304" text-anchor="middle" font-weight="600" class="s-t">生成工具</text><text x="148" y="322" text-anchor="middle" font-size="11.5" class="s-q">轮次、审阅、制片、ComfyUI 探索</text>
-<rect x="272" y="280" width="216" height="64" rx="8" class="s-b"/><text x="380" y="304" text-anchor="middle" font-weight="600" class="s-t">通用工具</text><text x="380" y="322" text-anchor="middle" font-size="11.5" class="s-q">读网页、读写文件、skill、记忆、发文件</text>
-<rect x="504" y="280" width="216" height="64" rx="8" class="s-b"/><text x="612" y="304" text-anchor="middle" font-weight="600" class="s-t">run_command</text><text x="612" y="322" text-anchor="middle" font-size="11.5" class="s-q">每条经你批准；危险操作直接拒绝</text>
-<rect x="40" y="360" width="216" height="64" rx="8" class="s-b"/><text x="148" y="384" text-anchor="middle" font-weight="600" class="s-t">MCP hub</text><text x="148" y="402" text-anchor="middle" font-size="11.5" class="s-q">只读工具直跑，其余经批准</text>
-<rect x="272" y="360" width="216" height="64" rx="8" class="s-b"/><text x="380" y="384" text-anchor="middle" font-weight="600" class="s-t">后台工具队列</text><text x="380" y="402" text-anchor="middle" font-size="11.5" class="s-q">慢工具不阻塞对话；重启后如实报中断</text>
-<rect x="504" y="360" width="216" height="64" rx="8" class="s-b"/><text x="612" y="384" text-anchor="middle" font-weight="600" class="s-t">资源调度</text><text x="612" y="402" text-anchor="middle" font-size="11.5" class="s-q">内存闸门；拍片时卸载 LLM，空了再唤醒</text>
-<rect x="24" y="472" width="166" height="56" rx="8" class="s-b"/><text x="107" y="496" text-anchor="middle" font-weight="600" class="s-t">ComfyUI</text><text x="107" y="514" text-anchor="middle" font-size="11.5" class="s-q">Z-Image、FLUX.2 Klein</text>
-<rect x="206" y="472" width="166" height="56" rx="8" class="s-b"/><text x="289" y="496" text-anchor="middle" font-weight="600" class="s-t">FreeVideo</text><text x="289" y="514" text-anchor="middle" font-size="11.5" class="s-q">MiniMax H3 视频</text>
-<rect x="388" y="472" width="166" height="56" rx="8" class="s-b"/><text x="471" y="496" text-anchor="middle" font-weight="600" class="s-t">FFmpeg</text><text x="471" y="514" text-anchor="middle" font-size="11.5" class="s-q">剪辑、合成、字幕</text>
-<rect x="570" y="472" width="166" height="56" rx="8" class="s-b"/><text x="653" y="496" text-anchor="middle" font-weight="600" class="s-t">Shell / 网络 / MCP 服务</text><text x="653" y="514" text-anchor="middle" font-size="11.5" class="s-q">agent-reach、Exa 等</text>
-</svg><figcaption>现状架构：三个入口共用会话；虚线框为每次经批准才启用的外部 agent</figcaption></figure>
+<rect x="24" y="240" width="712" height="200" rx="8" class="s-a"/><text x="40" y="264" font-weight="600" class="s-t">Orchestrator (Python): runs every tool call, stores and parks results</text>
+<rect x="40" y="280" width="216" height="64" rx="8" class="s-b"/><text x="148" y="304" text-anchor="middle" font-weight="600" class="s-t">Generation tools</text><text x="148" y="322" text-anchor="middle" font-size="11.5" class="s-q">Rounds, review, productions</text>
+<rect x="272" y="280" width="216" height="64" rx="8" class="s-b"/><text x="380" y="304" text-anchor="middle" font-weight="600" class="s-t">Generic tools</text><text x="380" y="322" text-anchor="middle" font-size="11.5" class="s-q">Web, files, skills, memory</text>
+<rect x="504" y="280" width="216" height="64" rx="8" class="s-b"/><text x="612" y="304" text-anchor="middle" font-weight="600" class="s-t">run_command</text><text x="612" y="322" text-anchor="middle" font-size="11.5" class="s-q">Approved per item; risky refused</text>
+<rect x="40" y="360" width="216" height="64" rx="8" class="s-b"/><text x="148" y="384" text-anchor="middle" font-weight="600" class="s-t">MCP hub</text><text x="148" y="402" text-anchor="middle" font-size="11.5" class="s-q">Read-only run; others approved</text>
+<rect x="272" y="360" width="216" height="64" rx="8" class="s-b"/><text x="380" y="384" text-anchor="middle" font-weight="600" class="s-t">Background tool queue</text><text x="380" y="402" text-anchor="middle" font-size="11.5" class="s-q">Slow tools never block chat</text>
+<rect x="504" y="360" width="216" height="64" rx="8" class="s-b"/><text x="612" y="384" text-anchor="middle" font-weight="600" class="s-t">Resource scheduling</text><text x="612" y="402" text-anchor="middle" font-size="11.5" class="s-q">Memory gate; LLM yields to video</text>
+<rect x="24" y="472" width="166" height="56" rx="8" class="s-b"/><text x="107" y="496" text-anchor="middle" font-weight="600" class="s-t">ComfyUI</text><text x="107" y="514" text-anchor="middle" font-size="11.5" class="s-q">Z-Image, FLUX.2 Klein</text>
+<rect x="206" y="472" width="166" height="56" rx="8" class="s-b"/><text x="289" y="496" text-anchor="middle" font-weight="600" class="s-t">FreeVideo</text><text x="289" y="514" text-anchor="middle" font-size="11.5" class="s-q">MiniMax H3 video</text>
+<rect x="388" y="472" width="166" height="56" rx="8" class="s-b"/><text x="471" y="496" text-anchor="middle" font-weight="600" class="s-t">FFmpeg</text><text x="471" y="514" text-anchor="middle" font-size="11.5" class="s-q">Edit, compose, subtitles</text>
+<rect x="570" y="472" width="166" height="56" rx="8" class="s-b"/><text x="653" y="496" text-anchor="middle" font-weight="600" class="s-t">Shell / web / MCP</text><text x="653" y="514" text-anchor="middle" font-size="11.5" class="s-q">agent-reach, Exa, ...</text>
+</svg><figcaption>Architecture today: three entries share sessions; the dashed box is the external agent, enabled only with approval each time</figcaption></figure>
 
-<h3>和 Claude Code / OpenClaw 比：使用感受（不谈资源调度）</h3>
-<p>结论：<strong>形态上是通用 agent，日常任务已经能像它们一样对话着做完；但“大脑”和“眼睛”明显弱，审批也更频繁</strong>。这次定妆就是例子：aco 自己写提示词、排轮次、等结果、发图、改记忆；但看图挑毛病、找参考截图、接入 Z-Image 模板是在它外面做的。</p>
+<h3>Compared with Claude Code / OpenClaw: how it feels to use (resource scheduling aside)</h3>
+<p>Conclusion: <strong>in form it is a general agent, and everyday tasks can already be done through conversation the way they are; but its "brain" and "eyes" are clearly weaker, and approvals are more frequent</strong>. The casting work is an example: aco wrote the prompts, queued rounds, waited for results, sent images and updated its memory itself; but spotting flaws by looking, finding reference screenshots and adding the Z-Image template happened outside it.</p>
 <div class="table"><table>
-<tr><th>能力</th><th>aco 现状</th><th>与 Claude Code / OpenClaw 的差距</th></tr>
-<tr><td>多轮对话</td><td>Telegram 与控制台同一会话，历史压缩后带入；可中途用 ask_user 反问</td><td>基本相当</td></tr>
-<tr><td>自己选工具 / skill</td><td>读网页、命令、文件、skill（含 <code>~/.claude/skills</code>）、MCP（如 Exa）、生成工具，全部由 LLM 自选</td><td>相当；工具更少，写文件只限 <code>data/agent-work</code></td></tr>
-<tr><td>长期记忆</td><td>自己的记忆目录 + 索引进系统提示词，可读可写</td><td>相当</td></tr>
-<tr><td>执行命令</td><td>默认逐条批准；“始终允许”记规则；<code>/permissions bypass</code> 不再审批（类似 Claude Code 的 permission mode）</td><td>基本相当</td></tr>
-<tr><td>推理与长任务</td><td>默认本地 27B，单次最多 40 步；<code>/model</code> 可随时换成在线大脑（OpenAI / OpenRouter / Claude API），或整件交给 Claude Code / Codex；agent 也可用 <code>delegate_agent</code> 把难的子任务交出去（每次经你批准）</td><td>本地时明显弱；切到在线大脑后接近（需 <code>allow_online</code>）</td></tr>
-<tr><td>看图 / 看视频</td><td><code>look</code> 工具：图片缩到 1024 交给视觉 LLM；视频抽 6 帧；<code>@round:ID</code> 看整轮（2026-11-07）</td><td>基本相当（本地 27B 是视觉模型）；审美判断仍弱于云端模型</td></tr>
-<tr><td>扩展自己</td><td>能在 ComfyUI 里探索、搭建 / 试跑工作流变体</td><td>不能改项目代码 / 模板：新模型接入（如这次的 Z-Image）仍需开发者</td></tr>
-<tr><td>响应速度</td><td>LLM 按需加载；拍视频时被卸载，对话要等</td><td>比云端 agent 慢；这是本地资源的取舍</td></tr>
+<tr><th>Ability</th><th>aco today</th><th>Gap to Claude Code / OpenClaw</th></tr>
+<tr><td>Multi-turn conversation</td><td>Telegram and the console share one session, history is compacted and carried along; can ask back mid-run with ask_user</td><td>About the same</td></tr>
+<tr><td>Choosing its own tools / skills</td><td>Web reading, commands, files, skills (including <code>~/.claude/skills</code>), MCP (e.g. Exa), generation tools — all chosen by the LLM itself</td><td>About the same; fewer tools, file writes limited to <code>data/agent-work</code></td></tr>
+<tr><td>Long-term memory</td><td>Its own memory directory + an index in the system prompt, readable and writable</td><td>About the same</td></tr>
+<tr><td>Running commands</td><td>Approved per item by default; "Always allow" stores a rule; <code>/permissions bypass</code> skips approvals (like Claude Code's permission modes)</td><td>About the same</td></tr>
+<tr><td>Reasoning and long tasks</td><td>Local 27B by default, at most 40 steps per request; <code>/model</code> switches to an online brain any time (OpenAI / OpenRouter / Claude API) or hands the whole job to Claude Code / Codex; the agent can also hand hard sub-tasks out with <code>delegate_agent</code> (approved each time)</td><td>Clearly weaker when local; close once switched to an online brain (needs <code>allow_online</code>)</td></tr>
+<tr><td>Looking at images / video</td><td>The <code>look</code> tool: images scaled to 1024 for the vision LLM; videos as 6 frames; <code>@round:ID</code> for a whole round (2026-11-07)</td><td>About the same (the local 27B is a vision model); aesthetic judgement still weaker than cloud models</td></tr>
+<tr><td>Extending itself</td><td>Can explore ComfyUI, build / trial-run workflow variants</td><td>Cannot change project code / templates: adding a new model (like Z-Image this time) still needs a developer</td></tr>
+<tr><td>Responsiveness</td><td>The LLM loads on demand; it is unloaded while shooting video, so chat waits</td><td>Slower than cloud agents; a trade-off of local resources</td></tr>
 </table></div>
-<h3>要达到“用起来一样”的下一步（按收益排序）</h3>
+<h3>Next steps toward "feels the same" (by payoff)</h3>
 <ol>
-<li><s>给它眼睛</s>：已完成（<code>look</code>，本地 27B 本身支持视觉）。</li>
-<li><s>降低审批摩擦</s>：已完成——审批按钮加“始终允许”（按程序 / MCP 工具 / 委托对象记规则），<code>/permissions bypass</code> 全部跳过；硬拒绝照旧，装节点 / 下模型仍每次问。</li>
-<li><s>难题升级</s>：已完成——<code>/model</code> 切换在线大脑；<code>delegate_agent</code> 把子任务交给 Claude Code / Codex（经批准，需 <code>allow_online</code>）。</li>
-<li><strong>受控自扩展</strong>：允许 agent 提出新模板（如从 ComfyUI 工作流生成），由编排器校验、最低档试跑、你批准后登记。</li>
+<li><s>Give it eyes</s>: done (<code>look</code>; the local 27B supports vision itself).</li>
+<li><s>Less approval friction</s>: done — approval buttons gained "Always allow" (rules per program / MCP tool / delegate), <code>/permissions bypass</code> skips everything; hard refusals still apply, installing nodes / downloading models still asks every time.</li>
+<li><s>Escalating hard problems</s>: done — <code>/model</code> switches to an online brain; <code>delegate_agent</code> hands sub-tasks to Claude Code / Codex (approved, needs <code>allow_online</code>).</li>
+<li><strong>Controlled self-extension</strong>: let the agent propose new templates (e.g. generated from a ComfyUI workflow), registered after the orchestrator validates them, trial-runs at the lowest tier and you approve.</li>
 </ol>
 
-<h2 id="hitl">7. Human-in-the-loop 迭代流程</h2>
-<p class="lead">agent 负责“多出候选、快出候选”，人负责“挑、批注、定稿”。每一步选定的结果都锁定进导演基准包，后面的生成只在基准上叠加，不再从头抽卡。</p>
-<figure><svg viewBox="0 0 760 568" role="img" aria-label="每一步先出多个候选给人挑，选定即锁定为基准" font-size="13">
+<h2 id="hitl">7. Human-in-the-loop iteration</h2>
+<p class="lead">The agent's job is "more candidates, faster"; the person's job is "pick, annotate, sign off". Each step's picked result is locked into the director's baseline pack, and later generation only builds on that baseline instead of rolling the dice from scratch.</p>
+<figure><svg viewBox="0 0 760 568" role="img" aria-label="Each step makes several candidates for a person to pick; the pick is locked as the baseline" font-size="13">
 <defs><marker id="ha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="s-m"/></marker></defs>
-<text x="24" y="34" font-size="15" font-weight="600" class="s-t">每一步先出多个候选给人挑，选定即锁定为基准</text>
+<text x="24" y="34" font-size="15" font-weight="600" class="s-t">Each step: several candidates, a person picks, the pick is locked</text>
 <g class="s-l">
 <path d="M304 102H398" marker-end="url(#ha)"/><path d="M400 84H306" stroke-dasharray="4 3" marker-end="url(#ha)"/><path d="M500 120V144H164V166" marker-end="url(#ha)"/>
 <path d="M304 206H398" marker-end="url(#ha)"/><path d="M400 188H306" stroke-dasharray="4 3" marker-end="url(#ha)"/><path d="M500 224V248H164V270" marker-end="url(#ha)"/>
@@ -261,96 +261,96 @@ footer{border-top:1px solid var(--line);margin-top:56px;padding-top:20px;color:v
 <path d="M304 414H398" marker-end="url(#ha)"/><path d="M400 396H306" stroke-dasharray="4 3" marker-end="url(#ha)"/><path d="M500 432V456H164V478" marker-end="url(#ha)"/>
 <path d="M304 518H398" marker-end="url(#ha)"/><path d="M400 500H306" stroke-dasharray="4 3" marker-end="url(#ha)"/>
 </g>
-<text x="352" y="76" text-anchor="middle" font-size="11.5" class="s-q">打回 + 批注</text><text x="510" y="140" font-size="11.5" class="s-q">通过</text>
-<rect x="24" y="64" width="280" height="56" rx="8" class="s-b"/><text x="164" y="88" text-anchor="middle" font-weight="600" class="s-t">风格探索</text><text x="164" y="106" text-anchor="middle" font-size="11.5" class="s-q">低分辨率草图，多张并排对比</text>
-<rect x="400" y="64" width="200" height="56" rx="8" class="s-a"/><text x="500" y="88" text-anchor="middle" font-weight="600" class="s-t">人选风格方向</text><text x="500" y="106" text-anchor="middle" font-size="11.5" class="s-t">可混合：A 的构图 + B 的色调</text>
-<text x="616" y="88" font-size="11.5" class="s-q">锁定：风格参考</text><text x="616" y="106" font-size="11.5" class="s-q">色板、风格 LoRA</text>
-<rect x="24" y="168" width="280" height="56" rx="8" class="s-b"/><text x="164" y="192" text-anchor="middle" font-weight="600" class="s-t">定妆照（按约束开启）</text><text x="164" y="210" text-anchor="middle" font-size="11.5" class="s-q">角色、场景各出一组候选</text>
-<rect x="400" y="168" width="200" height="56" rx="8" class="s-a"/><text x="500" y="192" text-anchor="middle" font-weight="600" class="s-t">人选 + 批注</text><text x="500" y="210" text-anchor="middle" font-size="11.5" class="s-t">方向对则固定种子微调</text>
-<text x="616" y="192" font-size="11.5" class="s-q">锁定：角色参考图</text><text x="616" y="210" font-size="11.5" class="s-q">种子、prompt 片段</text>
-<rect x="24" y="272" width="280" height="56" rx="8" class="s-b"/><text x="164" y="296" text-anchor="middle" font-weight="600" class="s-t">导演基准包</text><text x="164" y="314" text-anchor="middle" font-size="11.5" class="s-q">汇总已锁定资产，版本化</text>
-<rect x="400" y="272" width="200" height="56" rx="8" class="s-a"/><text x="500" y="296" text-anchor="middle" font-weight="600" class="s-t">人签字定稿</text><text x="500" y="314" text-anchor="middle" font-size="11.5" class="s-t">之后偏离基准须再确认</text>
-<text x="616" y="296" font-size="11.5" class="s-q">锁定：基准包 v1</text><text x="616" y="314" font-size="11.5" class="s-q">后续生成都引用它</text>
-<rect x="24" y="376" width="280" height="56" rx="8" class="s-b"/><text x="164" y="400" text-anchor="middle" font-weight="600" class="s-t">样片</text><text x="164" y="418" text-anchor="middle" font-size="11.5" class="s-q">低分辨率短视频，看动作与 style</text>
-<rect x="400" y="376" width="200" height="56" rx="8" class="s-a"/><text x="500" y="400" text-anchor="middle" font-weight="600" class="s-t">人选样片</text><text x="500" y="418" text-anchor="middle" font-size="11.5" class="s-t">并排对照基准包播放</text>
-<text x="616" y="400" font-size="11.5" class="s-q">锁定：运动参数</text><text x="616" y="418" font-size="11.5" class="s-q">镜头语言、时长</text>
-<rect x="24" y="480" width="280" height="56" rx="8" class="s-b"/><text x="164" y="504" text-anchor="middle" font-weight="600" class="s-t">正片</text><text x="164" y="522" text-anchor="middle" font-size="11.5" class="s-q">按档位放大，引用基准包</text>
-<rect x="400" y="480" width="200" height="56" rx="8" class="s-a"/><text x="500" y="504" text-anchor="middle" font-weight="600" class="s-t">人工终审</text><text x="500" y="522" text-anchor="middle" font-size="11.5" class="s-t">通过即交付</text>
-<text x="616" y="504" font-size="11.5" class="s-q">交付产物</text><text x="616" y="522" font-size="11.5" class="s-q">+ 完整 manifest</text>
-<text x="24" y="558" font-size="11.5" class="s-q">实线向右：生成一组候选送审；虚线向左：打回重抽；向下：通过后进入下一步</text>
-</svg><figcaption>人在回路的创作流程：5 个阶段，每段一个人工确认点</figcaption></figure>
-<p>下一步输入的是上一步锁定的资产，所以越往后可变的东西越少，生成也越贵。人的判断因此要前置：在便宜的低分辨率阶段多挑，在昂贵的正片阶段少返工。</p>
+<text x="352" y="76" text-anchor="middle" font-size="11.5" class="s-q">reject + note</text><text x="510" y="140" font-size="11.5" class="s-q">approved</text>
+<rect x="24" y="64" width="280" height="56" rx="8" class="s-b"/><text x="164" y="88" text-anchor="middle" font-weight="600" class="s-t">Style exploration</text><text x="164" y="106" text-anchor="middle" font-size="11.5" class="s-q">Low-res sketches side by side</text>
+<rect x="400" y="64" width="200" height="56" rx="8" class="s-a"/><text x="500" y="88" text-anchor="middle" font-weight="600" class="s-t">Person picks a style</text><text x="500" y="106" text-anchor="middle" font-size="11.5" class="s-t">Mixable: A's layout + B's tones</text>
+<text x="616" y="88" font-size="11.5" class="s-q">Locks: style reference</text><text x="616" y="106" font-size="11.5" class="s-q">palette, style LoRA</text>
+<rect x="24" y="168" width="280" height="56" rx="8" class="s-b"/><text x="164" y="192" text-anchor="middle" font-weight="600" class="s-t">Casting (if constrained)</text><text x="164" y="210" text-anchor="middle" font-size="11.5" class="s-q">Candidates per character and location</text>
+<rect x="400" y="168" width="200" height="56" rx="8" class="s-a"/><text x="500" y="192" text-anchor="middle" font-weight="600" class="s-t">Person picks + notes</text><text x="500" y="210" text-anchor="middle" font-size="11.5" class="s-t">Right way: fixed-seed tweaks</text>
+<text x="616" y="192" font-size="11.5" class="s-q">Locks: character ref</text><text x="616" y="210" font-size="11.5" class="s-q">seed, prompt snippets</text>
+<rect x="24" y="272" width="280" height="56" rx="8" class="s-b"/><text x="164" y="296" text-anchor="middle" font-weight="600" class="s-t">Director's baseline pack</text><text x="164" y="314" text-anchor="middle" font-size="11.5" class="s-q">Locked assets collected, versioned</text>
+<rect x="400" y="272" width="200" height="56" rx="8" class="s-a"/><text x="500" y="296" text-anchor="middle" font-weight="600" class="s-t">Person signs off</text><text x="500" y="314" text-anchor="middle" font-size="11.5" class="s-t">Later deviations need confirming</text>
+<text x="616" y="296" font-size="11.5" class="s-q">Locks: pack v1</text><text x="616" y="314" font-size="11.5" class="s-q">all later work uses it</text>
+<rect x="24" y="376" width="280" height="56" rx="8" class="s-b"/><text x="164" y="400" text-anchor="middle" font-weight="600" class="s-t">Test clips</text><text x="164" y="418" text-anchor="middle" font-size="11.5" class="s-q">Short low-res videos: motion and style</text>
+<rect x="400" y="376" width="200" height="56" rx="8" class="s-a"/><text x="500" y="400" text-anchor="middle" font-weight="600" class="s-t">Person picks a clip</text><text x="500" y="418" text-anchor="middle" font-size="11.5" class="s-t">Played next to the pack</text>
+<text x="616" y="400" font-size="11.5" class="s-q">Locks: motion params</text><text x="616" y="418" font-size="11.5" class="s-q">shot language, duration</text>
+<rect x="24" y="480" width="280" height="56" rx="8" class="s-b"/><text x="164" y="504" text-anchor="middle" font-weight="600" class="s-t">Final</text><text x="164" y="522" text-anchor="middle" font-size="11.5" class="s-q">Scaled up by tier, uses the pack</text>
+<rect x="400" y="480" width="200" height="56" rx="8" class="s-a"/><text x="500" y="504" text-anchor="middle" font-weight="600" class="s-t">Final human review</text><text x="500" y="522" text-anchor="middle" font-size="11.5" class="s-t">Approved means delivered</text>
+<text x="616" y="504" font-size="11.5" class="s-q">Delivered outputs</text><text x="616" y="522" font-size="11.5" class="s-q">+ full manifest</text>
+<text x="24" y="558" font-size="11.5" class="s-q">Solid →: candidates sent for review; dashed ←: rejected and redone; down: approved, next step</text>
+</svg><figcaption>Human-in-the-loop creative flow: 5 stages, one human checkpoint each</figcaption></figure>
+<p>Each step's input is what the previous step locked, so less and less can vary further on, while generation gets more expensive. Human judgement should therefore come early: pick a lot in the cheap low-res stages, rework little in the expensive final stage.</p>
 
-<h3>约束可配置</h3>
-<p>身份一致只是约束之一，所有约束都做成可配置项，而不是写死在流程里。每个约束有四个属性：是否开启、来源（参考图或基准包里的哪一项）、检查方式与阈值、不达标时的处理方式。开启一个约束，模板自动挂上对应的输入，检查环节加上对应的评分项；关掉它，相应的阶段和检查就跳过。例如不要求身份一致时，跳过定妆照，直接从风格探索进入样片。流程和组件不变，变的只是这次任务带哪组约束。</p>
-<div class="table"><table><thead><tr><th>约束</th><th>开启后挂到模板的输入</th><th>检查项</th><th>不达标时（可选）</th></tr></thead><tbody>
-<tr><td>身份一致</td><td>定妆参考图</td><td>人脸特征相似度</td><td>仅提示 / 排序降权 / 自动重抽</td></tr>
-<tr><td>风格一致</td><td>风格参考图、色板、风格 LoRA</td><td>图像嵌入相似度</td><td>仅提示 / 排序降权</td></tr>
-<tr><td>服装与场景一致</td><td>服装、场景参考图</td><td>视觉模型差异说明</td><td>仅提示</td></tr>
-<tr><td>输出规格</td><td>分辨率档位、时长档位、帧率</td><td>规格校验（确定性）</td><td>拒绝提交</td></tr>
-<tr><td>审阅点</td><td>无</td><td>哪些阶段需要人确认</td><td>未确认不进入下一阶段</td></tr>
-<tr><td>探索预算</td><td>无</td><td>轮数、时长、候选数上限</td><td>到达上限即停并汇报</td></tr>
+<h3>Configurable constraints</h3>
+<p>Identity consistency is only one constraint; every constraint is a configurable item rather than hard-wired into the flow. Each constraint has four properties: on or off, source (which reference image or baseline pack item), check method and threshold, and what to do when it fails. Turning a constraint on attaches the corresponding inputs to the template and adds the matching score to the checks; turning it off skips the related stage and checks. For example, without identity consistency, skip casting and go from style exploration straight to test clips. Flow and components stay the same; only the set of constraints a task carries changes.</p>
+<div class="table"><table><thead><tr><th>Constraint</th><th>Inputs attached to the template when on</th><th>Check</th><th>On failure (optional)</th></tr></thead><tbody>
+<tr><td>Identity consistency</td><td>Casting reference image</td><td>Face-embedding similarity</td><td>Hint only / rank lower / auto-redo</td></tr>
+<tr><td>Style consistency</td><td>Style reference, palette, style LoRA</td><td>Image-embedding similarity</td><td>Hint only / rank lower</td></tr>
+<tr><td>Costume and location consistency</td><td>Costume, location reference images</td><td>Vision-model difference notes</td><td>Hint only</td></tr>
+<tr><td>Output spec</td><td>Resolution tier, duration tier, frame rate</td><td>Spec validation (deterministic)</td><td>Refuse to submit</td></tr>
+<tr><td>Review points</td><td>None</td><td>Which stages need human confirmation</td><td>No next stage until confirmed</td></tr>
+<tr><td>Exploration budget</td><td>None</td><td>Limits on rounds, time, candidates</td><td>Stop at the limit and report</td></tr>
 </tbody></table></div>
-<p>配置分三层，后者覆盖前者：项目默认值 → 任务文件或需求澄清时的选择 → 审阅中的临时调整。约束配置是任务记录的一部分，写入 manifest，结果可追溯到当时的设置。Telegram 用 <code>/constraints</code> 查看和修改，由监听器直接处理，不唤醒 LLM。</p>
+<p>Config has three layers, later ones overriding earlier ones: project defaults → the task file or choices made when clarifying the request → temporary adjustments during review. The constraint config is part of the task record and written into the manifest, so results trace back to the settings of the time. Telegram views and edits it with <code>/constraints</code>, handled by the listener without waking the LLM.</p>
 
-<h3>人的反馈动作</h3>
-<p>审阅时只提供四个动作，每个都对应编排器里一个确定的行为；自由文字批注由 agent 翻译成下一轮的参数改动。</p>
-<div class="table"><table><thead><tr><th>动作</th><th>含义</th><th>系统行为</th></tr></thead><tbody>
-<tr><td>选中</td><td>采纳这一张或一条</td><td>锁定其种子、参数、参考图，写入基准包</td></tr>
-<tr><td>微调重抽</td><td>方向对，细节不对</td><td>固定种子，小幅改参数或局部重绘</td></tr>
-<tr><td>混合</td><td>取 A 的构图 + B 的色调</td><td>把 A、B 作为下一轮的参考图组合</td></tr>
-<tr><td>打回 + 批注</td><td>方向不对，附一句说明</td><td>agent 改 prompt 或换模板/模型，重抽一轮</td></tr>
+<h3>The person's feedback actions</h3>
+<p>Review offers only four actions, each mapping to one deterministic orchestrator behaviour; free-text notes are translated by the agent into the next round's parameter changes.</p>
+<div class="table"><table><thead><tr><th>Action</th><th>Meaning</th><th>System behaviour</th></tr></thead><tbody>
+<tr><td>Pick</td><td>Take this image or clip</td><td>Lock its seed, parameters and reference images into the baseline pack</td></tr>
+<tr><td>Refine</td><td>Right direction, wrong details</td><td>Fix the seed, small parameter changes or local inpainting</td></tr>
+<tr><td>Mix</td><td>A's composition + B's tones</td><td>Combine A and B as the next round's reference images</td></tr>
+<tr><td>Reject + note</td><td>Wrong direction, with a one-line explanation</td><td>The agent changes the prompt or the template / model and redoes the round</td></tr>
 </tbody></table></div>
 
-<h3>导演基准包内容</h3>
+<h3>What the director's baseline pack contains</h3>
 <ul>
-<li>角色与场景的定妆照（参考图）及其种子、prompt 片段、负面词。</li>
-<li>风格资产：风格参考图、色板、使用的模型与 LoRA 版本。</li>
-<li>视频参数：定稿样片的运动参数、镜头语言、时长档位。</li>
-<li>版本号与签字记录；修改基准包会生成新版本，老产物仍可追溯到当时的版本。</li>
+<li>Casting images (reference images) of characters and locations, with their seeds, prompt snippets and negative terms.</li>
+<li>Style assets: style reference images, palette, the models and LoRA versions used.</li>
+<li>Video parameters: the signed-off test clip's motion parameters, shot language and duration tier.</li>
+<li>Version numbers and sign-off records; changing the pack creates a new version, and old outputs still trace back to the version of their time.</li>
 </ul>
 
-<h3>快速迭代的做法</h3>
+<h3>How to iterate fast</h3>
 <ul>
-<li>候选轮用预览档：低分辨率、少步数，每轮一组并排出图；只对选中的图做放大和精修。</li>
-<li>审阅会话期间保留模型加载（即释放策略里的“连续同模型保留”），反馈到下一轮出图不用重新加载。</li>
-<li>等人的时候不占 LLM：任务进入“待审阅”状态后编排器只是等待，长时间无人响应再释放内存。</li>
-<li>本地审阅台：编排器起一个轻量网页，候选以网格并排、可与基准包左右对照，支持键盘快捷键选择和手机上审阅；一组候选生成完发通知。</li>
+<li>Candidate rounds use the preview tier: low resolution, few steps, one set side by side per round; only the picked image is upscaled and refined.</li>
+<li>Keep the model loaded during a review session (the release policy's "keep for consecutive same-model tasks"), so the next round after feedback needs no reload.</li>
+<li>No LLM while waiting for people: once a task enters "review", the orchestrator just waits, and releases memory after a long time without a response.</li>
+<li>Local review page: the orchestrator serves a light page with candidates in a grid, comparable side by side with the baseline pack, keyboard shortcuts for picking and usable on the phone; a notice goes out when a set of candidates is ready.</li>
 </ul>
-<p class="muted small">待定：每轮候选的数量和预览档的具体分辨率，取决于 G0 实测的单张耗时。</p>
+<p class="muted small">Open: the number of candidates per round and the exact preview-tier resolution depend on the per-image time measured in G0.</p>
 
-<h2 id="roadmap">8. 验证计划与里程碑</h2>
-<p class="lead">先花最少的力气拿到最关键的数字：视频生成的峰值内存与模型切换耗时。它们决定 LLM 能否常驻、档位上限在哪里，也决定后面的阶段值不值得做。</p>
-<figure><svg viewBox="0 0 760 572" role="img" aria-label="视频冒烟和切换耗时先测，扩展能力最后加" font-size="13">
+<h2 id="roadmap">8. Verification plan and milestones</h2>
+<p class="lead">First get the most important numbers with the least effort: peak memory of video generation and model switch times. They decide whether the LLM can stay resident and where the tier ceiling is, and whether the later stages are worth doing.</p>
+<figure><svg viewBox="0 0 760 572" role="img" aria-label="Measure the video smoke test and switch times first; add extensions last" font-size="13">
 <defs><marker id="ra" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="s-m"/></marker></defs>
-<text x="24" y="34" font-size="15" font-weight="600" class="s-t">视频冒烟和切换耗时先测，扩展能力最后加</text>
+<text x="24" y="34" font-size="15" font-weight="600" class="s-t">Measure the video smoke test and switch times first; add extensions last</text>
 <g class="s-l"><path d="M244 132V162" marker-end="url(#ra)"/><path d="M244 236V266" marker-end="url(#ra)"/><path d="M244 340V370" marker-end="url(#ra)"/><path d="M244 444V474" marker-end="url(#ra)"/>
 <line x1="464" y1="96" x2="486" y2="96"/><line x1="464" y1="200" x2="486" y2="200"/><line x1="464" y1="304" x2="486" y2="304"/><line x1="464" y1="408" x2="486" y2="408"/><line x1="464" y1="512" x2="486" y2="512"/></g>
 <path d="M500 82l14 14l-14 14l-14 -14z" class="s-ad"/><path d="M500 186l14 14l-14 14l-14 -14z" class="s-b"/><path d="M500 290l14 14l-14 14l-14 -14z" class="s-b"/><path d="M500 394l14 14l-14 14l-14 -14z" class="s-b"/><path d="M500 498l14 14l-14 14l-14 -14z" class="s-b"/>
-<rect x="24" y="60" width="440" height="72" rx="8" class="s-b"/><text x="40" y="84" font-weight="600" class="s-t">阶段 0：接口与基线实测</text><text x="40" y="104" font-size="11.5" class="s-q">指定模型加载/卸载、确认释放、各模型切换耗时</text><text x="40" y="120" font-size="11.5" class="s-q">手动跑通 640×384、3 秒视频一次</text>
-<text x="524" y="92" font-weight="600" class="s-t">G0 视频冒烟通过</text><text x="524" y="110" font-size="11.5" class="s-q">峰值内存与切换耗时已记录</text>
-<rect x="24" y="164" width="440" height="72" rx="8" class="s-b"/><text x="40" y="188" font-weight="600" class="s-t">阶段 1：调度器 + 图片闭环</text><text x="40" y="208" font-size="11.5" class="s-q">状态机、资源锁、SQLite、job 恢复、manifest</text><text x="40" y="224" font-size="11.5" class="s-q">先用 CLI 驱动，驻留策略按 G0 实测制定</text>
-<text x="524" y="196" font-weight="600" class="s-t">G1 图片闭环跑通</text><text x="524" y="214" font-size="11.5" class="s-q">中断重启后无重复提交</text>
-<rect x="24" y="268" width="440" height="72" rx="8" class="s-b"/><text x="40" y="292" font-weight="600" class="s-t">阶段 2：Telegram + 审阅流程</text><text x="40" y="312" font-size="11.5" class="s-q">通知与按钮选版、本地审阅网页、导演基准包</text><text x="40" y="328" font-size="11.5" class="s-q">LLM 规划输出经 schema 校验</text>
-<text x="524" y="300" font-weight="600" class="s-t">G2 手机上能完成选版</text><text x="524" y="318" font-size="11.5" class="s-q">等待期间无 LLM 推理</text>
-<rect x="24" y="372" width="440" height="72" rx="8" class="s-b"/><text x="40" y="396" font-weight="600" class="s-t">阶段 3：短视频闭环 + 有限探索</text><text x="40" y="416" font-size="11.5" class="s-q">样片、身份与风格一致性评分、预算内多候选</text><text x="40" y="432" font-size="11.5" class="s-q">分辨率、时长按档位逐级上调</text>
-<text x="524" y="404" font-weight="600" class="s-t">G3 遵守探索预算</text><text x="524" y="422" font-size="11.5" class="s-q">未经选定不替换定妆</text>
-<rect x="24" y="476" width="440" height="72" rx="8" class="s-b"/><text x="40" y="500" font-weight="600" class="s-t">阶段 4：扩展能力（按需）</text><text x="40" y="520" font-size="11.5" class="s-q">通过 OpenClaw 子 agent 提供搜索、Skills、MCP</text><text x="40" y="536" font-size="11.5" class="s-q">闭环稳定后再加，不影响核心流程</text>
-<text x="524" y="508" font-weight="600" class="s-t">G4 按需启动、能退出</text><text x="524" y="526" font-size="11.5" class="s-q">不留孤儿进程</text>
-</svg><figcaption>分阶段路线：5 个阶段，合并实施计划后重排</figcaption></figure>
-<p>每个阶段只在前一道闸门通过后开始；未给出具体日期，排期待定。与原计划相比：视频冒烟和切换耗时提前到阶段 0；图片闭环先用 CLI 跑通，再接 Telegram；搜索、Skills、MCP 从阶段 4 移到最后。若 G0 显示内存很紧，严格错峰就是必需；若切换耗时很长，审阅会话期间应让生成模型常驻。</p>
+<rect x="24" y="60" width="440" height="72" rx="8" class="s-b"/><text x="40" y="84" font-weight="600" class="s-t">Stage 0: interfaces and baseline measurements</text><text x="40" y="104" font-size="11.5" class="s-q">Load / unload a given model, confirm releases, switch times</text><text x="40" y="120" font-size="11.5" class="s-q">Run one 640×384, 3 s video by hand</text>
+<text x="524" y="92" font-weight="600" class="s-t">G0 video smoke test passes</text><text x="524" y="110" font-size="11.5" class="s-q">Peak memory and switch times recorded</text>
+<rect x="24" y="164" width="440" height="72" rx="8" class="s-b"/><text x="40" y="188" font-weight="600" class="s-t">Stage 1: scheduler + image loop</text><text x="40" y="208" font-size="11.5" class="s-q">State machine, resource lock, SQLite, job recovery, manifest</text><text x="40" y="224" font-size="11.5" class="s-q">Driven by the CLI first; residency policy from G0 data</text>
+<text x="524" y="196" font-weight="600" class="s-t">G1 image loop works</text><text x="524" y="214" font-size="11.5" class="s-q">No duplicate submit after a restart</text>
+<rect x="24" y="268" width="440" height="72" rx="8" class="s-b"/><text x="40" y="292" font-weight="600" class="s-t">Stage 2: Telegram + review flow</text><text x="40" y="312" font-size="11.5" class="s-q">Notices and button picking, local review page, baseline pack</text><text x="40" y="328" font-size="11.5" class="s-q">LLM planning output schema-validated</text>
+<text x="524" y="300" font-weight="600" class="s-t">G2 picking works on the phone</text><text x="524" y="318" font-size="11.5" class="s-q">No LLM inference while waiting</text>
+<rect x="24" y="372" width="440" height="72" rx="8" class="s-b"/><text x="40" y="396" font-weight="600" class="s-t">Stage 3: short video loop + bounded exploration</text><text x="40" y="416" font-size="11.5" class="s-q">Test clips, identity and style scores, candidates within budget</text><text x="40" y="432" font-size="11.5" class="s-q">Resolution and duration raised tier by tier</text>
+<text x="524" y="404" font-weight="600" class="s-t">G3 respects the budget</text><text x="524" y="422" font-size="11.5" class="s-q">Casting never replaced without a pick</text>
+<rect x="24" y="476" width="440" height="72" rx="8" class="s-b"/><text x="40" y="500" font-weight="600" class="s-t">Stage 4: extensions (as needed)</text><text x="40" y="520" font-size="11.5" class="s-q">Search, skills, MCP via an OpenClaw sub-agent</text><text x="40" y="536" font-size="11.5" class="s-q">Added once the loop is stable, core flow unaffected</text>
+<text x="524" y="508" font-weight="600" class="s-t">G4 starts on demand, exits</text><text x="524" y="526" font-size="11.5" class="s-q">No orphan processes left</text>
+</svg><figcaption>Staged roadmap: 5 stages, reordered after merging with the implementation plan</figcaption></figure>
+<p>Each stage starts only after the previous gate passes; no dates are given, scheduling is open. Compared with the original plan: the video smoke test and switch times move up to stage 0; the image loop runs through the CLI first, then Telegram; search, skills and MCP move from stage 4 to the end. If G0 shows memory is tight, strict staggering is required; if switching is slow, the generation model should stay resident during review sessions.</p>
 
-<h2 id="open">9. 待决问题</h2>
+<h2 id="open">9. Open questions</h2>
 <ul class="checks">
-<li class="done">已定：Telegram + 自建服务为主入口，OpenClaw 作为可调用的子 agent。待核实：OpenClaw 网关能否按需启停，能否与本服务共用同一个模型实例？</li>
-<li>视频工作流用的是哪个模型、哪种精度？这决定内存预算的上限。</li>
-<li>27B 控制模型的实际量化格式和加载后占用是多少？</li>
-<li class="done">已定：是否需要身份一致性，在用户提需求时逐个任务澄清，作为可配置约束，不影响架构。</li>
-<li>预期使用方式：每天多少任务、单任务可接受多长时间、是否夜间批跑？</li>
-<li>用户会不会在系统运行时手动使用 ComfyUI？这决定释放策略能否自动化。</li>
-<li>虚拟机（约 14.7 GiB）是否必须常驻？</li>
-<li>如果需求本身很固定，是否真的需要 LLM？模板 + CLI 可能已经足够。</li>
+<li class="done">Decided: Telegram + our own service as the main entry, OpenClaw as a callable sub-agent. To verify: can the OpenClaw gateway start and stop on demand, and share the same model instance with this service?</li>
+<li>Which model and precision does the video workflow use? That sets the upper bound of the memory budget.</li>
+<li>What are the 27B control model's actual quantisation and loaded footprint?</li>
+<li class="done">Decided: whether identity consistency is needed is clarified per task when the user makes a request, as a configurable constraint that does not affect the architecture.</li>
+<li>Expected usage: how many tasks a day, how long a single task may take, whether to batch overnight?</li>
+<li>Will the user use ComfyUI by hand while the system runs? That decides whether the release policy can be automatic.</li>
+<li>Must the VM (about 14.7 GiB) stay resident?</li>
+<li>If the requests themselves are quite fixed, is the LLM really needed? Templates + CLI may be enough.</li>
 </ul>
 
-<footer>设计文档 · 未启动部署或生成任务。可用浏览器“打印 → 保存为 PDF”归档。<br><a href="lightweight-video-agent-plan.html">轻量本地视频 Agent · 实施计划</a> · <a href="local-openclaw-report.html">本地接管试验报告</a> · <a href="tuning-guide.html">Z-Image 调整教程</a></footer>
+<footer>Design doc · no deployment or generation was started. Archive with the browser's "Print → Save as PDF".<br><a href="lightweight-video-agent-plan.html">Lightweight local video agent · Implementation plan</a> · <a href="local-openclaw-report.html">Local takeover trial report</a> · <a href="tuning-guide.html">Z-Image tuning guide</a></footer>
 </main></body></html>

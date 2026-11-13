@@ -1,108 +1,110 @@
-# G0 基线实测（2026-10-26）
+# G0 baseline measurements (2026-10-26)
 
-机器：Apple M4 Max，128 GiB 统一内存，虚拟机开着（日常状态）。实测前 swap 已用 12.4 / 14 GiB。
-原始数据：`data/bench/*`（gitignored）；脚本：`bench/`。以下数字全部为**实测**，单次或 3 次运行。
+[中文](baseline.zh-CN.md)
 
-## LLM（LM Studio，qwen3.8-27b-splash，4bit，ctx 131072）
+Machine: Apple M4 Max, 128 GiB unified memory, VM running (the everyday state). Swap in use before measuring: 12.4 / 14 GiB.
+Raw data: `data/bench/*` (gitignored); scripts: `bench/`. Every number below is **measured**, from a single run or 3 runs.
 
-| 项目 | 实测 |
+## LLM (LM Studio, qwen3.8-27b-splash, 4-bit, ctx 131072)
+
+| Item | Measured |
 |---|---|
-| 卸载 | 0.3 s |
-| 加载 | 15.4 s（3 次：15.4 / 15.4 / 15.4） |
-| 首 token（刚加载 / 热态） | 0.3 s / 0.3 s |
-| 占用（卸载后可用内存增加） | 19.3–19.9 GiB |
-| `lms load --ttl` 空闲自动卸载 | 生效（ttl=20 s，45 s 后已卸载） |
+| Unload | 0.3 s |
+| Load | 15.4 s (3 runs: 15.4 / 15.4 / 15.4) |
+| First token (just loaded / warm) | 0.3 s / 0.3 s |
+| Footprint (available memory gained after unloading) | 19.3–19.9 GiB |
+| Idle auto-unload with `lms load --ttl` | Works (ttl=20 s, unloaded after 45 s) |
 
-> 设计稿估计“冷启动一两分钟”不成立：加载只要约 15 s。设计稿里的 85 s 是 OpenClaw 多轮 agent 推理的耗时，不是加载耗时。
+> The design doc's estimate of "a minute or two to cold-start" does not hold: loading takes about 15 s. The 85 s in the design doc was OpenClaw's multi-turn agent reasoning time, not load time.
 
-## 图片（01 模板，FLUX.2 Klein 4B Q8，1280×720，4 步）
+## Images (template 01, FLUX.2 Klein 4B Q8, 1280×720, 4 steps)
 
-| 项目 | 实测 |
+| Item | Measured |
 |---|---|
-| 冷启动（含模型加载） | 23.0 s |
-| 热态 | 11.4 s |
-| ComfyUI 进程峰值 RSS | 15.7 GiB（冷）/ 7.8 GiB（热） |
-| 系统最低可用 | 40.4 GiB；无内存压力，无 swap 增长 |
+| Cold start (including model load) | 23.0 s |
+| Warm | 11.4 s |
+| ComfyUI process peak RSS | 15.7 GiB (cold) / 7.8 GiB (warm) |
+| System minimum available | 40.4 GiB; no memory pressure, no swap growth |
 
 ## ComfyUI `/free`
 
-队列二次确认为空后调用：ComfyUI RSS 7.82 → 0.84 GiB，系统可用 46.7 → 54.3 GiB（+7.6 GiB），接口立即返回。
+Called after the queue was confirmed empty twice: ComfyUI RSS 7.82 → 0.84 GiB, system available 46.7 → 54.3 GiB (+7.6 GiB); the endpoint returns immediately.
 
-## 视频（04 模板，FreeVideo / MiniMax H3，640×384，3 s = 73 帧，two_pass 8+3 步）
+## Video (template 04, FreeVideo / MiniMax H3, 640×384, 3 s = 73 frames, two_pass 8+3 steps)
 
-| 项目 | T0.5：27B 已加载 | T0.6：27B 已卸载 |
+| Item | T0.5: 27B loaded | T0.6: 27B unloaded |
 |---|---|---|
-| 总耗时 | 321 s | 230 s ※ |
-| 采样耗时 | 209 s | 199 s |
-| FreeVideo 峰值占用（phys_footprint） | 53.4 GiB | 54.2 GiB |
-| 系统最低可用 | **16.2 GiB** | 36.9 GiB |
-| 内存压力（1 正常 / 2 警告 / 4 严重） | **2** | 1 |
-| swap 变化 | **+3.7 GiB** | 0 |
-| FreeVideo low_memory 模式 | 否 | 否 |
+| Total time | 321 s | 230 s ※ |
+| Sampling time | 209 s | 199 s |
+| FreeVideo peak footprint (phys_footprint) | 53.4 GiB | 54.2 GiB |
+| System minimum available | **16.2 GiB** | 36.9 GiB |
+| Memory pressure (1 normal / 2 warning / 4 critical) | **2** | 1 |
+| Swap change | **+3.7 GiB** | 0 |
+| FreeVideo low_memory mode | No | No |
 
-※ T0.6 命中了文本编码缓存（conditioning_cache_hit），总耗时不能直接对比；可比的是采样耗时：27B 常驻只让采样慢约 5%。
+※ T0.6 hit the text-encoding cache (conditioning_cache_hit), so total times are not directly comparable; sampling time is: a resident 27B only slows sampling by about 5%.
 
-## 结论 → 阶段 1 默认值
+## Conclusions → stage 1 defaults
 
-1. **视频档位**：640×384×3s 在日常状态下可以跑，FreeVideo 峰值约 54 GiB，与 27B 是否加载基本无关（它不会因为 LLM 在就主动缩小占用）。上调档位前必须再测。
-2. **LLM 与视频可以共存，但会进入内存压力警告档并产生 swap** → 默认策略：**提交视频前卸载 LLM**（代价只有重载约 15 s），生成结束按驻留模式恢复。图片任务不需要卸载。
-3. **按需唤醒代价很低**：冷启动约 15 s。空闲计时默认 **5 min**（用 `--ttl` 实现，已验证生效），不需要“会话常驻”来避免重载。
-4. **图片审阅会话期间保留生成模型**：热态比冷启动快一倍（11 s vs 23 s），占用约 8 GiB，可以保留；切到视频前 `/free`。
-5. **内存门控指标**：ComfyUI 进程 RSS 看不到 Metal 占用（视频时只显示 2–4 GiB），不能用。门控改用**系统可用内存 + 内存压力等级**，模型峰值以 FreeVideo 自报的 `ram_peak_bytes` 写入模型注册表。
-6. 视频门控阈值初值：可用内存 ≥ 54 GiB（峰值）+ 8 GiB 余量 ≈ **62 GiB**，不满足则先卸载 LLM / `/free`；仍不满足则排队等待。
+1. **Video tier**: 640×384×3 s runs in the everyday state; FreeVideo peaks at about 54 GiB whether or not the 27B is loaded (it does not shrink its footprint because the LLM is there). Measure again before raising the tier.
+2. **The LLM and video can coexist, but memory pressure reaches the warning level and swap grows** → default policy: **unload the LLM before submitting video** (the cost is only a ~15 s reload) and restore it per the residency mode afterwards. Image tasks need no unloading.
+3. **Waking on demand is cheap**: cold start is about 15 s. The idle timer defaults to **5 min** (implemented with `--ttl`, verified to work); no "session residency" is needed to avoid reloads.
+4. **Keep the generation model loaded during an image review session**: warm is twice as fast as cold (11 s vs 23 s) and takes about 8 GiB, so it can stay; `/free` before switching to video.
+5. **Memory gate metric**: the ComfyUI process RSS does not show Metal usage (only 2–4 GiB during video), so it cannot be used. The gate uses **system available memory + memory pressure level** instead; model peaks are written to the model registry from FreeVideo's self-reported `ram_peak_bytes`.
+6. Initial video gate threshold: available ≥ 54 GiB (peak) + 8 GiB margin ≈ **62 GiB**; otherwise unload the LLM / `/free` first; if still short, queue and wait.
 
-## 补测：图生视频（03 模板 / h3-i2v，2026-10-26，经编排器提交）
+## Follow-up: image-to-video (template 03 / h3-i2v, 2026-10-26, submitted via the orchestrator)
 
-以 G1 定妆图为首帧，640×384×3s。门控按策略先卸载 27B（可用 65.8 GiB ≥ 62），结束后 `/free` 并以 TTL 5 min 恢复 27B。
+G1 casting image as the first frame, 640×384×3 s. Per policy the gate unloaded the 27B first (available 65.8 GiB ≥ 62); afterwards `/free`, and the 27B was restored with a 5 min TTL.
 
-| 项目 | 实测 |
+| Item | Measured |
 |---|---|
-| 执行耗时 / 采样 | 329 s / 223 s |
-| FreeVideo 峰值占用 | 54.9 GiB |
-| 系统最低可用 / 压力 / swap | 21.7 GiB / **2（警告）** / +0.04 GiB |
+| Execution / sampling | 329 s / 223 s |
+| FreeVideo peak footprint | 54.9 GiB |
+| System minimum available / pressure / swap | 21.7 GiB / **2 (warning)** / +0.04 GiB |
 
-> 即使 LLM 已卸载，I2V 也短暂进入压力警告档（比 T2V 多约 1 GiB 峰值），但几乎没有 swap。门控阈值 62 GiB 维持不变；若日常可用内存再降，应优先排查虚拟机与其他常驻进程。人物一致性目视良好（首 / 中 / 末帧）。
+> Even with the LLM unloaded, I2V briefly reaches the warning level (about 1 GiB more peak than T2V), with almost no swap. The 62 GiB threshold stays; if everyday available memory drops further, check the VM and other resident processes first. Character consistency looks good by eye (first / middle / last frames).
 
-## 补测：LM Studio 前缀缓存（2026-10-26，qwen3.8-27b-splash）
+## Follow-up: LM Studio prefix cache (2026-10-26, qwen3.8-27b-splash)
 
-17.4k token 的 system 前缀 + 不同的短问题，流式请求测首 token 时间：
+17.4k-token system prefix + different short questions, time to first token on streaming requests:
 
-| 请求 | 首 token | 说明 |
+| Request | First token | Note |
 |---|---|---|
-| 冷启动（含约 15 s 模型加载） | 63.1 s | 读入上下文约 48 s ≈ 360 token/s |
-| 同前缀、换问题（×2） | 0.46 s / 0.45 s | 命中前缀缓存 |
-| 前缀开头改一字 | 47.7 s | 整段重算 |
-| 切回原前缀 | 0.32 s | 引擎保留多份缓存 |
+| Cold start (including ~15 s model load) | 63.1 s | reading the context ~48 s ≈ 360 tokens/s |
+| Same prefix, different question (×2) | 0.46 s / 0.45 s | prefix cache hit |
+| One character changed at the start of the prefix | 47.7 s | everything recomputed |
+| Back to the original prefix | 0.32 s | the engine keeps several caches |
 
-> 结论：上下文必须“稳定前缀 + 只追加”，易变内容放最后；模型卸载即缓存失效，恢复加载后应预热。详见 PLAN 阶段 2.5 / S8。
+> Conclusion: context must be "stable prefix + append only", with volatile content last; unloading the model invalidates the cache, so prewarm after reloading. See PLAN stage 2.5 / S8.
 
-### 补充：多轮会话的缓存行为（2026-10-26）
+### Addendum: cache behaviour in multi-turn sessions (2026-10-26)
 
-该模型（`qwen3_5` 架构，含线性注意力层）的前缀缓存**只能延长、不能截断复用**：
+This model's (`qwen3_5` architecture, with linear-attention layers) prefix cache **can only be extended, not reused after truncation**:
 
-| 请求 | 首 token |
+| Request | First token |
 |---|---|
-| 新请求 = 旧请求 + 追加消息 | 0.5 s（复用） |
-| 仅 system 相同、其后改变 | 4.8 s（不复用） |
-| 重发任一旧请求 | 0.3 s（引擎保留多份快照） |
+| New request = old request + appended messages | 0.5 s (reused) |
+| Only the system message identical, what follows changed | 4.8 s (not reused) |
+| Resending any old request | 0.3 s (the engine keeps several snapshots) |
 
-> 因此会话历史必须**逐字复现**当时发出的 user 消息（含当时的实时状态）。按此实现后，真实三轮对话复用约 55–73% 的前缀，首 token 2–3 s；预热（重发上一次请求）0.37 s。
-> 关思考：`reasoning_effort=low`、`chat_template_kwargs.enable_thinking=false` 无效；`/no_think` 软开关 14.4 s → 9.3 s（输出 806 → 617 token）。
+> So session history must **reproduce verbatim** the user messages sent at the time (including the live status of that moment). Implemented this way, a real three-turn conversation reuses about 55–73% of the prefix, first token 2–3 s; prewarming (resending the last request) takes 0.37 s.
+> Turning thinking off: `reasoning_effort=low` and `chat_template_kwargs.enable_thinking=false` have no effect; the `/no_think` soft switch goes 14.4 s → 9.3 s (output 806 → 617 tokens).
 
-### 补充：agent 模式（原生 tool calling）的缓存（2026-10-26）
+### Addendum: caching in agent mode (native tool calling) (2026-10-26)
 
-- 原生 tool calling 在 LM Studio + qwen3.8-27b 上可用，模型会在一轮里并行发出多个调用。
-- **同一次运行内**：回放模型的思考内容（`reasoning_content`）后，第 2 步只多算新增部分：ttft 2.04 s → 1.27 s（约 160 新 token）；真实多步运行复用约 74–92%。
-- **跨运行**：聊天模板在新用户消息到来后会去掉更早轮次的思考内容，无法逐字延长。做法：已结束的运行压成稳定的两条（原话 + 最终回复），并在每次运行结束后预热“下一条消息之前”的位置。实测新运行首个调用复用约 40–55%（不预热时约 0%）。
-- 引擎的检查点规则比“最后一条消息之前”更复杂（复用量不总是对齐消息边界），继续优化的收益有限：每轮总耗时的大头是模型输出（思考 + 回复，约 8–15 s / 次调用）。
+- Native tool calling works with LM Studio + qwen3.8-27b; the model issues several calls in parallel within one turn.
+- **Within one run**: after replaying the model's thinking (`reasoning_content`), step 2 only computes the new part: ttft 2.04 s → 1.27 s (about 160 new tokens); real multi-step runs reuse about 74–92%.
+- **Across runs**: the chat template drops earlier turns' thinking once a new user message arrives, so verbatim extension is impossible. Approach: fold finished runs into two stable messages (your words + final reply), and after each run prewarm the position "before the next message". Measured: the first call of a new run reuses about 40–55% (about 0% without prewarming).
+- The engine's checkpoint rules are more complex than "before the last message" (reuse does not always align with message boundaries); further optimisation has limited payoff: most of each turn's time is the model's output (thinking + reply, about 8–15 s per call).
 
-## 补测：hd-60s 图生视频（h3-i2v，1280×736×60 s，2026-10-26 22:28 → 2026-10-27 03:43）
+## Follow-up: hd-60s image-to-video (h3-i2v, 1280×736×60 s, 2026-10-26 22:28 → 2026-10-27 03:43)
 
-| 项目 | 实测 |
+| Item | Measured |
 |---|---|
-| 执行 / 采样 | 18 908 s（5.25 h）/ 15 283 s |
-| 帧数 | 1450（60.4 s） |
-| FreeVideo 峰值占用 | 98.4 GiB（low_memory 未触发） |
-| 期间 | 系统可用一度 13.9 GiB、swap 34–36 GB（其中一段时间 27B 被 dev 测试误加载，已修：跨进程把关） |
+| Execution / sampling | 18 908 s (5.25 h) / 15 283 s |
+| Frames | 1450 (60.4 s) |
+| FreeVideo peak footprint | 98.4 GiB (low_memory not triggered) |
+| Meanwhile | system available dropped to 13.9 GiB at one point, swap 34–36 GB (for part of the time the 27B had been loaded by mistake by a dev test; fixed with cross-process gating) |
 
-> FreeVideo 按可用内存自适应，98.4 GiB 是“有就用”，不是最低需求：模型注册表标 `adaptive: true`，准入门槛仍按 54 GiB；峰值按档位统计，避免大档位抬高小档位门槛。观察时限改为随预计耗时放大（原固定 90 min 导致此任务被标超时，后由对账收回）。
+> FreeVideo adapts to available memory; 98.4 GiB means "used because it was there", not the minimum need: the model registry marks it `adaptive: true` and admission still uses 54 GiB; peaks are tracked per tier so a big tier does not raise a small tier's threshold. The watch limit now scales with the expected duration (the old fixed 90 min marked this task as timed out; reconciliation collected it later).
