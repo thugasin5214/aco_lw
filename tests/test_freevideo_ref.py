@@ -1,4 +1,4 @@
-"""freevideo-ref：参考视频（只引导前 K 步）+ 参考图 → FreeVideo generate 作业；编排器提交、轮询、对账。"""
+"""freevideo-ref: reference video (guiding only the first K steps) + reference images → a FreeVideo generate job; the orchestrator submits, polls, reconciles."""
 
 import json
 from datetime import UTC, datetime
@@ -76,7 +76,7 @@ def test_submit_poll_collect_survive_restart(tmp_path):
     ex.submit(prep, "task-1")
     sent = fv.calls[-1][2]
     assert sent["ref"] == "task-1" and "early_steps" not in sent["media"]["references"][0]
-    ex2 = FreeVideoExecutor(fv, jobs)  # daemon 重启：按落盘的映射接着对账
+    ex2 = FreeVideoExecutor(fv, jobs)  # daemon restart: keep reconciling from the mapping on disk
     assert ex2.poll("task-1").state == "running"
     assert ex2.poll("unknown").state == "lost"
     fv.status = "succeeded"

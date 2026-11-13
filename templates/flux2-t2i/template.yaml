@@ -2,7 +2,7 @@ title: 文生图 · FLUX.2 Klein（定妆选脸）
 kind: image
 model: flux2-klein-4b-q8
 source: 标准实验室/01-文生图-定妆选脸-API.json
-release_after: keep        # 审阅会话期间保留生成模型（G0：热态 11 s vs 冷启动 23 s）
+release_after: keep        # keep the model loaded during a review session (G0: warm 11 s vs cold start 23 s)
 output_prefix: {node: "16", field: filename_prefix}
 slots:
   prompt: {node: "7", field: text, type: str}
@@ -12,6 +12,6 @@ slots:
   height: {node: "21", field: value, type: int, min: 256, max: 2048, multiple_of: 16}
 tiers:
   preview:  {width: 896, height: 512, verified: false}
-  standard: {width: 1280, height: 720, verified: true}   # G0 实测
-  portrait: {width: 896, height: 1152, verified: true}   # 模板默认
+  standard: {width: 1280, height: 720, verified: true}   # G0 measured
+  portrait: {width: 896, height: 1152, verified: true}   # template default
 default_tier: standard

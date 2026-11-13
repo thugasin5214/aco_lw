@@ -1,10 +1,10 @@
-"""FreeVideo agent API 客户端（本机 ComfyUI 上的 /freevideo/agent/v1）。
+"""FreeVideo agent API client (/freevideo/agent/v1 on the local ComfyUI).
 
-用来做视频一致性：角色卡（每张最多 6 张标注图 + 可选声音）与多镜头电影（每镜多条 take、
-下一镜从上一镜选中的 take 续拍）。
+Used for video consistency: character cards (up to 6 labelled images each + optional voice) and multi-shot films (several takes per shot,
+the next shot continues from the take picked in the previous one).
 
-- token 只在进程内从 FreeVideo-local/agent/token 读取；不打印、不写进别的文件、不进日志。
-- 只做 API 允许外部 agent 做的事；暂停 / 继续电影只有用户能在 FreeVideo 页面操作。
+- The token is read in-process only from FreeVideo-local/agent/token; never printed, written to other files or logged.
+- Only does what the API allows external agents to do; pausing / resuming a film is only possible for the user in the FreeVideo page.
 """
 
 from __future__ import annotations
@@ -46,9 +46,10 @@ class FreeVideo:
         self.http = http or httpx.Client(timeout=120, trust_env=False)
         self._hello = False
 
-    # ---- 传输 ----
+    # ---- transport ----
     def _headers(self) -> dict:
-        token = (self.root / "agent" / "token").read_text().strip()  # 每次读：用户可能重置 token
+        # read every time: the user may reset the token
+        token = (self.root / "agent" / "token").read_text().strip()
         return {"Authorization": "Bearer " + token}
 
     def call(self, method: str, path: str, body: Any = None, **params) -> Any:
@@ -57,7 +58,9 @@ class FreeVideo:
             try:
                 self.call("POST", "/connect/hello", {"client": self.client_name, "via": "http"})
             except FreeVideoError:
-                pass  # 打招呼只是让用户在 FreeVideo 页面看到是谁连着；失败不影响调用
+                # the hello only lets the user see in the FreeVideo page who is connected; failing
+                # it does not affect calls
+                pass
         r = self.http.request(
             method, self.base + path, json=body, params=params or None, headers=self._headers()
         )
@@ -70,7 +73,7 @@ class FreeVideo:
         return data
 
     def download(self, url: str, dest: Path) -> Path:
-        """下载结果文件（url 可以是相对 ComfyUI 根的路径）。"""
+        """Download a result file (url may be a path relative to the ComfyUI root)."""
         full = url if url.startswith("http") else self.base.split("/freevideo/")[0] + url
         with self.http.stream("GET", full, headers=self._headers()) as r:
             r.raise_for_status()
@@ -80,13 +83,13 @@ class FreeVideo:
                     f.write(chunk)
         return dest
 
-    # ---- 状态 ----
+    # ---- status ----
     def status(self) -> dict:
         return self.call("GET", "")
 
-    # ---- 素材 ----
+    # ---- media ----
     def upload(self, path: str | Path) -> str:
-        """上传图片 / 视频 / 音频，返回 FreeVideo 里的 media 名。"""
+        """Upload an image / video / audio; returns the media name inside FreeVideo."""
         p = Path(path)
         out = self.call(
             "POST",
@@ -96,7 +99,7 @@ class FreeVideo:
         media = out.get("media") or out
         return media.get("file") or media.get("name") or media["id"]
 
-    # ---- 角色卡 ----
+    # ---- character cards ----
     def cards(self, query: str | None = None) -> list[dict]:
         out = self.call("GET", "/cast", **({"q": query} if query else {}))
         return out.get("cards") or out.get("cast") or out.get("items") or []
@@ -112,7 +115,7 @@ class FreeVideo:
         images: list[tuple[str | Path, str]],
         kind: str = "character",
     ) -> dict:
-        """images：[(本地路径, 标签)]，标签取 front / three_quarter / side / back / face / sheet / other。"""
+        """images: [(local path, label)], label one of front / three_quarter / side / back / face / sheet / other."""
         pics = []
         for path, label in images[:6]:
             if label not in CARD_LABELS:
@@ -125,7 +128,7 @@ class FreeVideo:
         )
         return out.get("card") or out
 
-    # ---- 电影 ----
+    # ---- films ----
     def plan_film(self, screenplay: dict, takes: int = 1, ref: str | None = None) -> dict:
         body = {"screenplay": screenplay, "takes_per_shot": takes, "director": "agent"}
         if ref:

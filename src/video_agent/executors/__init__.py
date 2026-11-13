@@ -1,11 +1,11 @@
-"""执行端接口（E1）：编排器只通过 Executor 与具体生成器打交道。
+"""Executor interface (E1): the orchestrator deals with concrete generators only through Executor.
 
-现在：ComfyExecutor（ComfyUI，FLUX.2 / FreeVideo）、FFmpegExecutor（剪辑合成）。以后：独立 LTX 服务、
-其他本地生成器、在线生成服务——实现同一接口即可，编排器、调度器、恢复逻辑不变。
+Now: ComfyExecutor (ComfyUI, FLUX.2 / FreeVideo), FFmpegExecutor (editing and compositing). Later: a standalone LTX service,
+other local generators, online generation services — implement the same interface; orchestrator, scheduler and recovery logic stay the same.
 
-约定（与 vhotseat 一致的原则）：
-- job_id 由编排器预先生成并落库，再 submit；崩溃后按 job_id 对账，永不自动重提。
-- 只取消 / 释放自己的东西；`busy()` 把别人的任务也算在内（不抢占）。
+Conventions (same principles as vhotseat):
+- job_id is generated and stored by the orchestrator before submit; after a crash reconcile by job_id, never resubmit automatically.
+- Only cancel / release our own things; `busy()` counts other people's tasks too (no preemption).
 """
 
 from __future__ import annotations
@@ -19,11 +19,11 @@ PollState = Literal["queued", "running", "done", "failed", "lost"]
 
 @dataclass
 class Prepared:
-    """提交前准备好的作业：执行端自己的载荷 + 要存进任务目录的副本。"""
+    """A job prepared before submitting: the executor's own payload + copies to store in the task directory."""
 
     payload: Any
     uploads: dict = field(default_factory=dict)
-    artifacts: dict[str, str] = field(default_factory=dict)  # 文件名 → 文本内容
+    artifacts: dict[str, str] = field(default_factory=dict)  # file name → text content
     note: str = ""
 
 
@@ -31,34 +31,36 @@ class Prepared:
 class Poll:
     state: PollState
     detail: str | None = None
-    result: Any = None  # 执行端自己的完成记录，交给 collect
-    alive: bool = False  # 执行端确认作业仍在推进（如近期心跳）：超过观察时限也继续盯，不标超时
+    result: Any = None  # the executor's own completion record, passed to collect
+    # the executor confirms the job is still progressing (e.g. recent heartbeat): keep watching past
+    # the watch limit, do not mark timeout
+    alive: bool = False
 
 
 class Executor(Protocol):
     name: str
 
     def prepare(self, template, task: dict) -> Prepared:
-        """渲染 + 校验 + 上传输入；失败抛异常（任务标为失败，不提交）。"""
+        """Render + validate + upload inputs; raise on failure (the task is marked failed, nothing submitted)."""
 
     def submit(self, prepared: Prepared, job_id: str) -> None: ...
 
     def poll(self, job_id: str) -> Poll: ...
 
     def collect(self, job_id: str, result: Any, dest: Path, metrics: dict) -> list[dict]:
-        """下载产物到 dest，返回 [{file, kind, ...}]；可往 metrics 里补执行耗时等。"""
+        """Download outputs to dest, return [{file, kind, ...}]; may add execution time etc. to metrics."""
 
     def cancel(self, job_id: str) -> None:
-        """只取消这个 job（自己的）。"""
+        """Cancel only this job (our own)."""
 
     def queued_payloads(self) -> list[dict]:
-        """执行端里正在跑 / 排队的全部任务（含别人提交的）的载荷，用于跨进程把关。"""
+        """Payloads of every task running / queued in the executor (including other people's), for cross-process gating."""
 
     def busy(self) -> bool:
-        """执行端是否有任何任务（包括别人手动提交的）。"""
+        """Whether the executor has any task at all (including ones others submitted by hand)."""
 
     def release(self) -> bool:
-        """空闲时释放已加载的模型；忙则不动并返回 False。"""
+        """Release loaded models when idle; when busy, leave them and return False."""
 
 
 def get_executors(cfg, comfy=None) -> dict[str, Executor]:

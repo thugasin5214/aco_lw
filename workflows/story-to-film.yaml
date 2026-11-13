@@ -1,13 +1,13 @@
-# 故事 / 构想 + 图片 / 网页 / YouTube → 成片，镜头视频由 FreeVideo 多镜头电影拍摄：
-# 人物靠 FreeVideo 角色卡保持一致，镜头之间用上一镜选中的 take 续拍。你在我们的审阅里选 take。
+# story / idea + images / web pages / YouTube → finished film; shot videos are shot as a FreeVideo multi-shot film:
+# characters stay consistent through FreeVideo character cards, shots continue from the take picked in the previous shot. You pick takes in our review.
 name: story-to-film
 title: Story → film (FreeVideo cast cards)
 description: Characters stay consistent through FreeVideo cast cards; shots are filmed as one FreeVideo film with takes you choose and real continuations.
 settings:
   image_tier: standard
   image_candidates: 4
-  video_candidates: 2       # 每个镜头拍几条 take 供你挑
-  film_quality: medium      # 续拍镜头只能 light / medium（两遍加速）
+  video_candidates: 2       # how many takes per shot for you to choose from
+  film_quality: medium      # continuation shots only support light / medium (two-pass acceleration)
   aspect: "16:9"
   subtitles: true
   auto_advance: true
@@ -68,7 +68,7 @@ stages:
   - id: cards
     title: FreeVideo cast cards
     kind: tool
-    tool: freevideo_cards     # 复用卡库里同名的卡，否则用已通过的定妆图新建
+    tool: freevideo_cards     # reuse same-named cards from the library, otherwise create from the approved casting image
     needs: [bible, characters]
     gate: auto
 
@@ -85,7 +85,7 @@ stages:
     kind: film
     cast: cards
     needs: [storyboard, cards]
-    confirm: true             # 拍摄以分钟～小时计：等你点开始
+    confirm: true             # shooting takes minutes to hours: wait for you to press start
     fan_out: {items: storyboard.shots, key: id}
 
   - id: edit

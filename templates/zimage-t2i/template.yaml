@@ -4,7 +4,7 @@ model: z-image-bf16
 source: 标准实验室/07-ZImage-精致肤质-文生图.json（UI → API）
 release_after: keep
 output_prefix: {node: "16", field: filename_prefix}
-# Z-Image Base：真 CFG（有负面提示词），30 步 res_multistep。比 Klein 慢，但人像脸型 / 肤质更可控。
+# Z-Image Base: true CFG (has a negative prompt), 30 steps res_multistep. Slower than Klein, but face shape / skin are more controllable in portraits.
 slots:
   prompt:   {node: "5", field: text, type: str}
   negative: {node: "6", field: text, type: str}
@@ -15,6 +15,6 @@ slots:
   height:   {node: "7", field: height, type: int, min: 256, max: 2048, multiple_of: 16}
 tiers:
   preview:  {width: 576, height: 768, steps: 20, verified: false}
-  portrait: {width: 864, height: 1152, verified: false}   # 3:4 定妆
+  portrait: {width: 864, height: 1152, verified: false}   # 3:4 casting portrait
   standard: {width: 1280, height: 720, verified: false}
 default_tier: portrait

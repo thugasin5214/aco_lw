@@ -1,4 +1,4 @@
-"""ComfyUI HTTP API 的薄封装。只有编排器调用它。"""
+"""Thin wrapper over the ComfyUI HTTP API. Only the orchestrator calls it."""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ class Comfy:
         return self._get(f"/history/{prompt_id}").get(prompt_id)
 
     def submit(self, graph: dict, prompt_id: str) -> str:
-        """prompt_id 由调用方预先生成并落库，崩溃后可按它对账，避免重复提交。"""
+        """prompt_id is generated and stored by the caller first, so after a crash we can reconcile by it instead of resubmitting."""
         body = {"prompt": graph, "client_id": self.client_id, "prompt_id": prompt_id}
         r = self.http.post("/prompt", json=body)
         if r.status_code == 400:
@@ -66,7 +66,7 @@ class Comfy:
         return f"{j['subfolder']}/{j['name']}" if j.get("subfolder") else j["name"]
 
     def free(self) -> None:
-        """队列两次确认为空才释放；否则抛 ComfyBusy，不取消任何任务。"""
+        """Release only after the queue is seen empty twice; otherwise raise ComfyBusy. Never cancels any task."""
         if self.queue_busy():
             raise ComfyBusy("ComfyUI 队列非空，拒绝释放")
         if self.queue_busy():
@@ -74,7 +74,7 @@ class Comfy:
         self.http.post("/free", json={"unload_models": True, "free_memory": True})
 
     def interrupt(self, prompt_id: str) -> None:
-        """只中断 / 移除指定 prompt_id（我们自己的任务），不影响别人的任务。"""
+        """Interrupt / remove only the given prompt_id (our own task); other people's tasks are untouched."""
         self.http.post("/interrupt", json={"prompt_id": prompt_id})
         self.http.post("/queue", json={"delete": [prompt_id]})
 

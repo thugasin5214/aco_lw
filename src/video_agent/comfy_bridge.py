@@ -1,12 +1,12 @@
-"""第三方 ComfyUI agent 工具（artokun/comfyui-mcp）的桥：由编排器启动、按“工具 + 动作”分类放行。
+"""Bridge to a third-party ComfyUI agent tool (artokun/comfyui-mcp): started by the orchestrator, calls allowed by "tool + action" class.
 
-用户 2026-10-27 决定：agent 可以探索、搭建、试跑；安装节点 / 下载模型要用户批准；
-执行类调用由我们的编排器调度（成为可追踪的任务，受暂停与资源闸门）。
+User decision 2026-10-27: the agent may explore, build and trial-run; installing nodes / downloading models needs the user's approval;
+execution calls are scheduled by our orchestrator (they become trackable tasks, subject to pause and the resource gate).
 
-- read  ：只读 / 纯计算 / 搭建 workflow（不改 ComfyUI 运行状态）→ 放行
-- run   ：提交执行 → 不让它自己提交；workflow 交给编排器（comfy-raw 任务）
-- approve：安装节点、下载模型、装 skill、训练 LoRA 等 → 需要用户批准
-- deny  ：重启 / 停止 ComfyUI、删模型、动别人的队列、释放显存、改 ComfyUI 设置、云 GPU、付费 API → 拒绝
+- read  : read-only / pure computation / building workflows (does not change ComfyUI's running state) → allowed
+- run   : submit for execution → it may not submit itself; the workflow goes to the orchestrator (a comfy-raw task)
+- approve: install nodes, download models, install skills, train LoRAs, ... → needs the user's approval
+- deny  : restart / stop ComfyUI, delete models, touch other people's queue, free VRAM, change ComfyUI settings, cloud GPUs, paid APIs → refused
 """
 
 from __future__ import annotations
@@ -20,7 +20,8 @@ from .mcp_client import MCPClient
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CMD = ["node", str(ROOT / "data/tools/comfyui-mcp/node_modules/comfyui-mcp/dist/index.js")]
 
-# (tool, action) → 类别；action 为 "*" 表示该工具所有动作。未列出的一律 deny（新版本新增的工具先不放行）。
+# (tool, action) → class; action "*" means every action of that tool. Anything unlisted is deny
+# (tools added in new versions are not allowed until reviewed).
 POLICY: dict[str, dict[str, str]] = {
     "comfy_cli": {
         **dict.fromkeys(
@@ -80,7 +81,8 @@ POLICY: dict[str, dict[str, str]] = {
     },
     "get_history": {"*": "read"},
     "get_workflow": {"*": "read"},
-    "save_workflow": {"*": "read"},  # 写进 ComfyUI 的 workflow 库（搭建），不影响运行
+    # writes into ComfyUI's workflow library (building), does not affect running
+    "save_workflow": {"*": "read"},
     "get_image": {
         **dict.fromkeys(
             [
@@ -95,7 +97,8 @@ POLICY: dict[str, dict[str, str]] = {
             "read",
         )
     },
-    "upload_image": {"*": "read"},  # 把参考图放到 ComfyUI input（为试跑准备）
+    # puts a reference image into ComfyUI input (to prepare a trial run)
+    "upload_image": {"*": "read"},
     "get_defaults": {
         **dict.fromkeys(["get", "get_ui"], "read"),
         **dict.fromkeys(["set", "set_ui"], "deny"),
@@ -113,7 +116,8 @@ POLICY: dict[str, dict[str, str]] = {
     "install_comfyui": {"*": "deny"},
     "model_metadata": {**dict.fromkeys(["read", "fetch_civitai"], "read"), "propose": "approve"},
     "workspace": {**dict.fromkeys(["get", "list"], "read"), "set_default": "deny"},
-    "list_api_nodes": {**dict.fromkeys(["list", "schema"], "read"), "generate": "deny"},  # 付费云端
+    # paid cloud
+    "list_api_nodes": {**dict.fromkeys(["list", "schema"], "read"), "generate": "deny"},
     "node_pack": {
         **dict.fromkeys(["list_files", "read", "search", "verify"], "read"),
         **dict.fromkeys(["scaffold", "write", "patch", "git"], "approve"),
@@ -160,7 +164,7 @@ POLICY: dict[str, dict[str, str]] = {
     "kitchen": {**dict.fromkeys(["status", "assess"], "read"), "apply": "approve"},
     "list_tools": {"*": "read"},
     "describe_tool": {"*": "read"},
-    "clear_vram": {"*": "deny"},  # 内存由我们的资源管理器管
+    "clear_vram": {"*": "deny"},  # memory is managed by our resource manager
     "restart_comfyui": {"*": "deny"},
     "runpod": {"*": "deny"},
     "runpod_watch": {"*": "deny"},
@@ -169,7 +173,7 @@ POLICY: dict[str, dict[str, str]] = {
 
 
 def classify(tool: str, args: dict) -> str:
-    if tool == "call_tool":  # 目录代理：按里面真正要调用的工具分类
+    if tool == "call_tool":  # directory proxy: classify by the tool it actually calls
         inner = args.get("name") or args.get("tool") or ""
         return classify(inner, args.get("args") or args.get("arguments") or {})
     rules = POLICY.get(tool)
@@ -182,7 +186,7 @@ def classify(tool: str, args: dict) -> str:
 
 
 def extract_workflow(tool: str, args: dict) -> dict | None:
-    """执行类调用里的 API 格式 workflow（交给编排器提交）；拿不到就返回 None。"""
+    """The API-format workflow inside an execution call (handed to the orchestrator to submit); None if there is none."""
     if tool == "call_tool":
         return extract_workflow(args.get("name") or "", args.get("args") or {})
     wf = args.get("workflow") or args.get("prompt") or args.get("graph")
@@ -220,7 +224,7 @@ class ComfyBridge:
         return self.client
 
     def catalog(self) -> list[dict]:
-        """按类别列出可用的工具（给 agent 看的精简目录）。"""
+        """Available tools by class (a compact catalogue for the agent)."""
         if self._catalog is None:
             out = []
             for t in self._client().tools():

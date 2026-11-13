@@ -1,7 +1,7 @@
-"""创作层：项目、候选轮、审阅决定、导演基准包。
+"""Creative layer: projects, rounds of candidates, review decisions, the director's baseline pack.
 
-Telegram、Web 审阅台、CLI 都只调用这里的函数；这里只写数据库和排队任务（draft），
-真正提交 ComfyUI 仍由 Worker 经编排器完成。全部是确定性操作，不调用 LLM。
+Telegram, the web review console and the CLI only call functions here; this only writes the database and queues tasks (draft);
+the actual ComfyUI submission is still done by the Worker through the orchestrator. Everything is deterministic; no LLM calls.
 """
 
 from __future__ import annotations
@@ -29,15 +29,18 @@ class Studio:
         self.orch = orch
         self.store: Store = orch.store
         self.round_size = round_size
-        self.decision_listeners: list = []  # 你对某轮做了决定 → 通知（例如等这轮的 agent 运行）
-        self.round_listeners: list = []  # 新开了一轮（含重做 / 微调派生的）→ 通知（例如制片产物跟随）
+        # you decided on a round → notify (e.g. an agent run waiting for that round)
+        self.decision_listeners: list = []
+        # a new round started (including redo / refine children) → notify (e.g. production artifacts
+        # follow it)
+        self.round_listeners: list = []
 
-    # ---- 删除产物（连同本地文件） ----
+    # ---- delete outputs (with local files) ----
     BUSY = frozenset({"draft", "validated", "waiting_memory", "submitted", "running"})
     RUN_DONE = frozenset({"done", "failed", "cancelled"})
 
     def _remove_files(self, task: dict) -> int:
-        """删任务目录 data/jobs/<ID>/，以及 ComfyUI output 里本系统生成的原图；返回释放的字节数。"""
+        """Delete the task directory data/jobs/<ID>/ and the originals this system generated in ComfyUI output; returns bytes freed."""
         freed = 0
         jobs = self.store.jobs_dir.resolve()
         d = self.store.task_dir(task["id"]).resolve()
@@ -50,7 +53,7 @@ class Studio:
             for o in task["outputs"] or []:
                 src = o.get("source") or {}
                 name, sub = src.get("filename") or "", src.get("subfolder") or ""
-                # 只删自己的：output 类型、aco_lw 子目录、文件名以任务 ID 开头
+                # only our own: output type, aco_lw subfolder, filename starting with the task ID
                 if (
                     src.get("type") != "output"
                     or sub != "aco_lw"
@@ -95,13 +98,14 @@ class Studio:
         return out
 
     def purge_project(self, project_id: str, scope: str = "review") -> dict:
-        """清理项目产物。scope=review：只删待审阅的；unselected：删所有没被采纳的
-        （待审阅 / 打回 / 失败 / 超时）。采纳的、正在跑的、进行中制片用到的都保留。"""
+        """Clean up a project's outputs. scope=review: only what awaits review; unselected: everything not approved
+        (review / rejected / failed / timeout). Approved, running and active-production items are kept."""
         if scope not in ("review", "unselected"):
             raise StudioError("scope must be review or unselected")
         states = {"review"} if scope == "review" else {"review", "rejected", "failed", "timeout"}
         all_tasks = self.store.list(1_000_000, project_id)
-        # 审阅页显示的是“待审阅的轮”：其中的候选可能全是失败的，也要一起删
+        # the review page shows "rounds in review": their candidates may all have failed, delete
+        # those too
         review_rounds = {r["id"] for r in self.store.rounds(project_id, "review")}
         tasks = [
             t
@@ -111,8 +115,9 @@ class Studio:
         ]
         rounds = {t["round_id"] for t in tasks if t["round_id"]}
         used = self.store.active_production_refs(list(rounds), [t["id"] for t in tasks])
-        # 制片采用的版本（current + task_id）：只留被选中的那个候选，同轮其他没选的照删；
-        # 还在审阅 / 生成的版本：整轮保留
+        # the version a production uses (current + task_id): keep only the chosen candidate, delete
+        # its unselected siblings;
+        # versions still in review / generating: keep the whole round
         skip_r = {
             a["round_id"]
             for a in used
@@ -135,7 +140,7 @@ class Studio:
         self.log("system", "out", text, project_id)
         return out
 
-    # ---- 项目 ----
+    # ---- projects ----
     def current_project(self) -> dict:
         pid = self.store.get_kv("current_project")
         p = pid and self.store.get_project(pid)
@@ -162,7 +167,7 @@ class Studio:
         return p
 
     def finish_project(self, project_id: str | None = None, note: str | None = None) -> dict:
-        """标记完成：永久保留，控制台仍可浏览；排队中的任务一并取消。"""
+        """Mark done: kept forever and still browsable in the console; queued tasks are cancelled."""
         pid = project_id or self.current_project()["id"]
         self.cancel_queued(pid, "项目已完成")
         p = self.store.update_project(pid, state="done", note=note)
@@ -184,9 +189,9 @@ class Studio:
         sid = self.current_session(pid)["id"]
         return self.store.log_message(channel, direction, text, pid, author, session_id=sid, **meta)
 
-    # ---- 会话 ----
+    # ---- sessions ----
     def current_session(self, project_id: str | None = None) -> dict:
-        """项目的当前会话；没有则新建。旧版本没有会话的消息归入“历史会话”。"""
+        """The project's current session; created if there is none. Messages from old versions without sessions go into a "history session"."""
         pid = project_id or self.current_project()["id"]
         sid = self.store.get_kv(f"session:{pid}")
         s = sid and self.store.get_session(sid)
@@ -199,7 +204,7 @@ class Studio:
         return s
 
     def _adopt_history(self, pid: str) -> None:
-        """旧版本没有会话的消息，统一归入一个“历史会话”。"""
+        """Messages from old versions without a session all go into one "history session"."""
         if self.store.db.execute(
             "SELECT 1 FROM messages WHERE project_id=? AND session_id IS NULL LIMIT 1", (pid,)
         ).fetchone():
@@ -215,7 +220,7 @@ class Studio:
         return s
 
     def use_session(self, key: str, project_id: str | None = None) -> dict:
-        """按 ID 或列表序号（1 = 最近活跃）切换会话。"""
+        """Switch session by ID or list index (1 = most recently active)."""
         pid = project_id or self.current_project()["id"]
         rows = self.store.sessions(pid)
         s = (
@@ -231,7 +236,7 @@ class Studio:
         return s
 
     def delete_session(self, key: str, project_id: str | None = None) -> dict:
-        """删除会话（按 ID 或列表序号）。agent 还在这个会话里干活时拒绝；删的是当前会话则换到下一个。"""
+        """Delete a session (by ID or list index). Refused while the agent is working in it; deleting the current session switches to the next one."""
         if project_id is None and not key.isdigit():
             s = self.store.get_session(key)
             project_id = s and s["project_id"]
@@ -252,7 +257,7 @@ class Studio:
             self.store.set_kv(f"session:{pid}", None)
         return {**out, "title": s["title"], "current": self.current_session(pid)}
 
-    # ---- 项目记忆（LLM 提议，用户确认后生效） ----
+    # ---- project memory (proposed by the LLM, applied after the user confirms) ----
     def propose_memories(
         self, texts: list[str], source: dict, project_id: str | None = None
     ) -> list[dict]:
@@ -269,7 +274,7 @@ class Studio:
         return self.store.add_memory(pid, text.strip(), status="active", source={"by": "user"})
 
     def set_memory(self, memory_id: int, action: str, text: str | None = None) -> dict:
-        """accept / ignore / archive / restore / pin / unpin / edit（编辑 = 新版本取代旧版本）。"""
+        """accept / ignore / archive / restore / pin / unpin / edit (edit = a new version supersedes the old)."""
         m = self.store.get_memory(memory_id)
         if m is None:
             raise StudioError(f"找不到记忆 {memory_id}")
@@ -293,7 +298,7 @@ class Studio:
             )
         raise StudioError(f"未知记忆操作 {action}")
 
-    # ---- 上传的参考图 ----
+    # ---- uploaded reference images ----
     def save_upload(self, name: str, data: bytes, project_id: str | None = None) -> dict:
         pid = project_id or self.current_project()["id"]
         ext = Path(name).suffix.lower() or ".png"
@@ -308,7 +313,7 @@ class Studio:
             self.store.db.execute("UPDATE uploads SET path=? WHERE id=?", (str(path), up["id"]))
         return self.store.get_upload(up["id"])
 
-    # ---- 手动微调（W1，不经 LLM） ----
+    # ---- manual tweaks (W1, no LLM) ----
     def tweak(
         self,
         task_id: str,
@@ -317,7 +322,7 @@ class Studio:
         n: int | None = None,
         origin: str = "web",
     ) -> dict:
-        """以某个任务的参数为底，覆盖用户改动后开新一轮；DAG 连到原任务。"""
+        """Start a new round from one task's parameters with the user's overrides; the DAG links to the original task."""
         task = self.store.get(task_id)
         if task is None:
             raise StudioError(f"找不到任务 {task_id}")
@@ -349,7 +354,7 @@ class Studio:
         )
         return rnd
 
-    # ---- 候选轮 ----
+    # ---- rounds of candidates ----
     def start_round(
         self,
         template: str,
@@ -368,7 +373,9 @@ class Studio:
     ) -> dict:
         t = self.orch.registry.template(template)
         pid = project_id or self.current_project()["id"]
-        if priority is None:  # 你发起的 → 交互；agent 自主发起 → 1；试跑等后台 → 0
+        # started by you → interactive; started by the agent itself → 1; trials and other background
+        # → 0
+        if priority is None:
             priority = {"agent": 1, "background": 0}.get(origin, 2)
         base = {k: v for k, v in params.items() if k != "seed" and k not in TIER_KEYS}
         if n is None:
@@ -415,7 +422,7 @@ class Studio:
         return rnd
 
     def refresh_round(self, round_id: str) -> tuple[dict, bool]:
-        """全部候选跑完则进入待审阅；返回 (轮, 是否刚刚进入待审阅)。"""
+        """When every candidate has finished, the round goes to review; returns (round, whether it just entered review)."""
         rnd = self.store.get_round(round_id)
         if rnd["state"] != "generating":
             return rnd, False
@@ -431,7 +438,7 @@ class Studio:
         closed = self.store.update_round(
             round_id, state="closed", decision={"action": "cancel", "note": reason}
         )
-        for cb in self.decision_listeners:  # 在等这一轮的 agent 运行也要收到结果
+        for cb in self.decision_listeners:  # agent runs waiting for this round get the result too
             cb(closed)
 
     def cancel_queued(self, project_id: str | None = None, reason: str = "用户取消") -> int:
@@ -444,7 +451,7 @@ class Studio:
             self.refresh_round(r["id"])
         return n
 
-    # ---- 审阅决定 ----
+    # ---- review decisions ----
     def _review_round(self, round_id: str) -> tuple[dict, list[dict]]:
         rnd = self.store.get_round(round_id)
         if rnd is None:
@@ -466,7 +473,7 @@ class Studio:
             else:
                 self.store.transition(t["id"], "rejected", decision["action"])
         prev = (rnd.get("decision") or {}).get("history")
-        if prev:  # 重新审阅过的轮：保留之前的决定历史
+        if prev:  # a round reviewed again: keep the earlier decision history
             decision = {**decision, "history": prev}
         closed = self.store.update_round(rnd["id"], state="closed", decision=decision)
         for cb in self.decision_listeners:
@@ -487,7 +494,7 @@ class Studio:
         note: str | None = None,
         origin: str = "web",
     ) -> dict:
-        """通过：选中一个候选；给了 role 就锁进项目基准包。"""
+        """Approve: pick one candidate; with a role, lock it into the project's baseline pack."""
         rnd, tasks = self._review_round(round_id)
         task = self._task_in_round(tasks, which)
         decision = {
@@ -510,7 +517,7 @@ class Studio:
         return rnd
 
     def redo(self, round_id: str, origin: str = "web", n: int | None = None) -> dict:
-        """重做：整轮不要，同参数换种子再来一轮。"""
+        """Redo: reject the whole round and run another with the same parameters and new seeds."""
         rnd, tasks = self._review_round(round_id)
         self._close(rnd, tasks, None, {"action": "redo", "origin": origin}, None)
         self.log(origin, "in", tr("log_redo"), rnd["project_id"])
@@ -534,7 +541,7 @@ class Studio:
         note: str | None = None,
         origin: str = "web",
     ) -> dict:
-        """微调：方向对，保留该候选的种子与参数，叠加参数增量后再出一轮。"""
+        """Refine: right direction; keep that candidate's seed and parameters, apply a parameter delta and run another round."""
         if not delta:
             raise StudioError("微调需要至少一个参数改动")
         rnd, tasks = self._review_round(round_id)
@@ -574,7 +581,7 @@ class Studio:
         )
 
     def reject(self, round_id: str, note: str | None = None, origin: str = "web") -> dict:
-        """打回：整轮不要；有批注时由规划器翻译成参数增量后另开一轮（见 planner）。"""
+        """Reject: drop the whole round; with a note, the planner turns it into a parameter delta and starts another round (see planner)."""
         rnd, tasks = self._review_round(round_id)
         rnd = self._close(
             rnd, tasks, None, {"action": "reject", "note": note, "origin": origin}, note
@@ -585,7 +592,7 @@ class Studio:
     def approve_task(
         self, task_id: str, accept: bool, note: str | None = None, origin: str = "web"
     ) -> dict:
-        """不属于任何轮的单个任务（例如 CLI 提交的）直接通过 / 打回。"""
+        """Approve / reject a single task that belongs to no round (e.g. submitted from the CLI)."""
         task = self.store.get(task_id)
         if task is None:
             raise StudioError(f"找不到任务 {task_id}")
@@ -599,7 +606,7 @@ class Studio:
         return self.orch.review(task_id, accept, note)
 
     def redo_task(self, task_id: str, origin: str = "web") -> dict:
-        """单个任务重做：打回它，并以相同参数（换种子）开一轮。"""
+        """Redo a single task: reject it and start a round with the same parameters (new seed)."""
         task = self.store.get(task_id)
         if task is None:
             raise StudioError(f"找不到任务 {task_id}")
@@ -620,8 +627,8 @@ class Studio:
         )
 
     def reopen(self, round_id: str, origin: str = "web") -> tuple[dict, int]:
-        """更改审阅结果：已决定的轮回到待审阅。旧决定进历史；若曾锁进基准包，
-        新建一个基准包版本把该角色恢复为锁定前的资产。返回 (轮, 仍在生成的派生轮数)。"""
+        """Change a review decision: a decided round goes back to review. The old decision goes into history; if it was locked into the baseline pack,
+        a new pack version restores that role to the asset it had before the lock. Returns (round, number of child rounds still generating)."""
         rnd = self.store.get_round(round_id)
         if rnd is None:
             raise StudioError(f"round {round_id} not found")
@@ -665,7 +672,7 @@ class Studio:
         return self.store.transition(task_id, "review", tr("log_reopen"))
 
     def _unlock(self, pid: str, role: str, task_id: str) -> None:
-        """撤销某次锁定：新版本里该角色恢复为上一次不是这个任务的资产；没有则移除。"""
+        """Undo a lock: in a new version the role goes back to the last asset that was not this task; removed if there is none."""
         cur = self.store.pack(pid)
         if not cur or cur["assets"].get(role, {}).get("task_id") != task_id:
             return
@@ -682,7 +689,7 @@ class Studio:
             assets.pop(role)
         self.store.add_pack_version(pid, assets, tr("log_unlock", r=role))
 
-    # ---- 导演基准包 ----
+    # ---- director's baseline pack ----
     def lock(
         self, task_id: str, role: str, note: str | None = None, project_id: str | None = None
     ) -> dict:

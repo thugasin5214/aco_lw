@@ -1,6 +1,6 @@
-"""系统内存读数与生成期间的后台采样。
+"""System memory readings and background sampling during generation.
 
-G0 结论：ComfyUI 进程 RSS 看不到 Metal 占用，门控与记录都以系统可用内存 + 压力等级为准。
+G0 finding: the ComfyUI process RSS does not show Metal usage, so gating and records use system available memory + pressure level.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ GIB = 2**30
 
 
 def pressure_level() -> int:
-    """kern.memorystatus_vm_pressure_level：1 正常，2 警告，4 严重；读不到返回 -1。"""
+    """kern.memorystatus_vm_pressure_level: 1 normal, 2 warning, 4 critical; -1 if it cannot be read."""
     out = subprocess.run(
         ["sysctl", "-n", "kern.memorystatus_vm_pressure_level"],
         check=False,
@@ -36,7 +36,7 @@ def snapshot() -> dict:
 
 
 class Sampler:
-    """`with Sampler() as s: ...` 结束后 `s.summary()` 给出峰值与 swap 变化。"""
+    """`with Sampler() as s: ...`; afterwards `s.summary()` gives the peak and the swap change."""
 
     def __init__(self, interval: float = 1.0):
         self.interval = interval

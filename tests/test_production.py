@@ -99,7 +99,7 @@ def prod(make_orch, fake, tmp_path):
 
 
 def run_skills(p: Production) -> None:
-    """依次执行排队的 tool / skill 作业，直到队列空（brief 跑完会接着排改编）。"""
+    """Run queued tool / skill jobs in order until the queue is empty (when brief finishes, adaptation is queued next)."""
     for _ in range(10):
         jobs = p.pending_skill_jobs()
         if not jobs:
@@ -122,7 +122,7 @@ def select_all(p: Production, which=1) -> None:
 def test_expressions_and_json_extraction():
     ctx = {"item": {"id": "a", "tags": ["x"]}, "settings": {"n": 3}}
     assert interp("{item.id}-{settings.n}", ctx) == "a-3"
-    assert interp("{settings.n}", ctx) == 3  # 整串引用保留类型
+    assert interp("{settings.n}", ctx) == 3  # a whole-string reference keeps its type
     assert interp({"p": ["{item.tags.0}"]}, ctx) == {"p": ["x"]}
     assert extract_json('Sure:\n```json\n{"a": 1}\n```') == {"a": 1}
     assert extract_json('blah {"a": {"b": 2}} tail') == {"a": {"b": 2}}
@@ -142,14 +142,16 @@ def test_full_pipeline_with_gates_and_confirm(prod):
     pr = p.create("novel-to-film", "Lost cat", {"source": "Mei lost her cat..."})
     plan = p.plan(pr["id"])
     assert stage(plan, "source")["state"] == "completed"
-    assert stage(plan, "brief")["state"] == "active"  # 素材整理自动排队（queued 记作 running）
+    # material intake is queued automatically (queued counts as running)
+    assert stage(plan, "brief")["state"] == "active"
     assert stage(plan, "adaptation")["state"] == "blocked"
 
     run_skills(p)
     plan = p.plan(pr["id"])
     assert stage(plan, "adaptation")["state"] == "review"
     assert plan["next_action"] == {"type": "review", "stage": "adaptation"}
-    # skill 的系统提示词 = SKILL.md + 输出契约；用户消息带上游输入
+    # a skill's system prompt = SKILL.md + output contract; the user message carries the upstream
+    # inputs
     sys_msg, user_msg = p.fake_llm.calls[0][1]
     assert "short-film treatment" in sys_msg["content"] and '"scenes"' in sys_msg["content"]
     brief = json.loads(user_msg["content"])["inputs"]["brief"]
@@ -157,7 +159,8 @@ def test_full_pipeline_with_gates_and_confirm(prod):
 
     p.review(pr["id"], "adaptation", "approve")
     run_skills(p)
-    p.review(pr["id"], "bible", "approve")  # → 自动展开定妆：2 个角色 + 1 个场景
+    # → casting fans out automatically: 2 characters + 1 location
+    p.review(pr["id"], "bible", "approve")
     plan = p.plan(pr["id"])
     chars = stage(plan, "characters")
     assert chars["state"] == "active" and [i["key"] for i in chars["items"]] == ["mei", "cat"]
@@ -166,7 +169,7 @@ def test_full_pipeline_with_gates_and_confirm(prod):
     t = p.store.round_tasks(next(r for r in rounds if r["title"].endswith("mei"))["id"])[0]
     assert "girl, red coat" in t["params"]["prompt"] and "35mm" in t["params"]["prompt"]
 
-    select_all(p)  # 选中即通过 → 自动跑分镜
+    select_all(p)  # picking approves → the storyboard runs automatically
     run_skills(p)
     p.review(pr["id"], "storyboard", "approve")
     plan = p.plan(pr["id"])
@@ -174,12 +177,12 @@ def test_full_pipeline_with_gates_and_confirm(prod):
     kf = next(r for r in p.store.rounds(None, "generating") if r["title"].endswith("sh02"))
     mei_task = p._current(p._index(pr["id"]), "characters", "mei")["task_id"]
     ref = p.store.round_tasks(kf["id"])[0]["params"]["image"]
-    assert mei_task in ref  # 关键帧以已选的定妆图为参考
+    assert mei_task in ref  # keyframes use the picked casting image as reference
 
     select_all(p)
     plan = p.plan(pr["id"])
     clips = stage(plan, "clips")
-    assert clips["state"] == "ready" and clips["confirm"]  # 视频不自动开跑
+    assert clips["state"] == "ready" and clips["confirm"]  # video does not start automatically
     assert plan["next_action"] == {
         "type": "run_stage",
         "stage": "clips",
@@ -203,13 +206,15 @@ def test_staleness_is_per_item(prod):
     p.review(pr["id"], "storyboard", "approve")
     select_all(p)
 
-    # 改一个角色的外观：只让 mei 的定妆图过期，cat 与场景不受影响
+    # change one character's look: only mei's casting image goes stale, cat and the location are
+    # unaffected
     bible2 = json.loads(json.dumps(BIBLE))
     bible2["characters"][0]["look"] = "girl, yellow raincoat"
     p.review(pr["id"], "bible", "approve", data=bible2, note="raincoat")
     plan = p.plan(pr["id"])
     states = {i["key"]: i["state"] for i in stage(plan, "characters")["items"]}
-    assert states["mei"] == "running" and states["cat"] == "current"  # 过期的自动重跑
+    # stale items rerun automatically
+    assert states["mei"] == "running" and states["cat"] == "current"
     assert stage(plan, "locations")["state"] == "completed"
     select_all(p)
     plan = p.plan(pr["id"])
@@ -220,10 +225,11 @@ def test_staleness_is_per_item(prod):
         "options": ["keep", "redo"],
     }
     assert stage(plan, "keyframes")["state"] == "blocked"
-    p.review(pr["id"], "storyboard", "keep")  # 分镜仍然适用：保留
+    p.review(pr["id"], "storyboard", "keep")  # the storyboard still applies: keep it
     plan = p.plan(pr["id"])
     kf = {i["key"]: i["state"] for i in stage(plan, "keyframes")["items"]}
-    assert kf == {"sh01": "current", "sh02": "running"}  # 只有引用 mei 的镜头过期（并自动重跑）
+    # only shots referencing mei go stale (and rerun automatically)
+    assert kf == {"sh01": "current", "sh02": "running"}
 
 
 def test_redo_round_follows_artifact_and_reject_skill(prod):
@@ -231,7 +237,7 @@ def test_redo_round_follows_artifact_and_reject_skill(prod):
     pr = p.create("novel-to-film", "Lost cat", {"source": "..."})
     run_skills(p)
     p.review(pr["id"], "adaptation", "redo", note="make it funnier")
-    msgs = p.fake_llm.calls  # 重做：带上一版输出和修改意见
+    msgs = p.fake_llm.calls  # redo: carries the previous output and the change request
     run_skills(p)
     user = json.loads(p.fake_llm.calls[-1][1][1]["content"])
     assert user["revision_request"] == "make it funnier" and user["previous_output"] == ADAPT
@@ -241,7 +247,8 @@ def test_redo_round_follows_artifact_and_reject_skill(prod):
     p.review(pr["id"], "bible", "approve")
     ready = drain(p.studio)
     mei = next(r for r in ready if r["title"].endswith("mei"))
-    new = p.studio.redo(mei["id"])  # 在 Review 页 / Telegram 上重做：新轮自动跟随到同一产物
+    # redo from the Review page / Telegram: the new round follows the same artifact
+    new = p.studio.redo(mei["id"])
     art = p.store.artifact_by_round(new["id"])
     assert art and art["stage"] == "characters" and art["key"] == "mei" and art["version"] == 2
     drain(p.studio)
@@ -260,7 +267,7 @@ def test_invalid_output_gets_one_repair_then_invalid(prod):
     assert item["state"] == "invalid"
     with pytest.raises(ProductionError, match="schema"):
         p.review(pr["id"], "adaptation", "approve")
-    p.review(pr["id"], "adaptation", "approve", data=ADAPT)  # 手改后通过
+    p.review(pr["id"], "adaptation", "approve", data=ADAPT)  # approved after editing by hand
     assert stage(p.plan(pr["id"]), "adaptation")["state"] == "completed"
 
 
@@ -268,7 +275,7 @@ def test_park_keeps_job_queued(prod):
     p = prod
     p.fake_llm.park = True
     pr = p.create("novel-to-film", "x", {"source": "..."})
-    p.run_skill_job(p.pending_skill_jobs()[0])  # brief：工具，不需要 LLM
+    p.run_skill_job(p.pending_skill_jobs()[0])  # brief: a tool, no LLM needed
     with pytest.raises(Park):
         p.run_skill_job(p.pending_skill_jobs()[0])
     assert p.store.artifacts(pr["id"], "adaptation")[0]["status"] == "queued"
@@ -325,12 +332,12 @@ def test_materialize_and_ffmpeg_command(tmp_path):
     srt.write_text(to_srt(tl["subtitles"]))
     out = tmp_path / "final.mp4"
     subprocess.run(build_command(tl, out, srt), check=True)
-    assert abs(probe_seconds(out) - 3.0) < 0.2  # 1.5 + 2 − 0.5 转场重叠
+    assert abs(probe_seconds(out) - 3.0) < 0.2  # 1.5 + 2 − 0.5 transition overlap
 
 
 def test_pending_reviews_list_planning_stages(prod):
     pr = prod.create("novel-to-film", "Lost cat", {"source": "..."})
-    assert prod.pending_reviews() == []  # 还在排队
+    assert prod.pending_reviews() == []  # still queued
     run_skills(prod)
     (r,) = prod.pending_reviews()
     assert (r["production_id"], r["stage"], r["state"]) == (pr["id"], "adaptation", "review")
@@ -358,24 +365,26 @@ def test_language_reaches_video_prompts(prod):
     (t,) = prod.store.round_tasks(prod.store.rounds(None, "generating")[0]["id"])
     assert t["params"]["prompt"].endswith("Dialogue and speech in Mandarin Chinese.")
     prod.update_settings(pr["id"], {"language": ""})
-    assert prod.store.get_production(pr["id"])["settings"]["video_tier"] == "smoke"  # 合并，不覆盖
+    # merged, not overwritten
+    assert prod.store.get_production(pr["id"])["settings"]["video_tier"] == "smoke"
 
 
 def test_redo_of_approved_storyboard_keeps_downstream_until_new_version(prod):
     p = prod
     pr = _to_keyframes(p)
     board2 = json.loads(json.dumps(BOARD))
-    board2["shots"][1]["frame"] = "陈师傅抬头"  # 只改 sh02
+    board2["shots"][1]["frame"] = "陈师傅抬头"  # only sh02 changed
     p.fake_llm.out["storyboard"] = [board2]
     p.review(pr["id"], "storyboard", "redo", note="all shots in Mandarin")
     cur = p._current(p._index(pr["id"]), "storyboard")
-    assert cur and cur["version"] == 1  # 旧版本在新版本通过前仍然有效
+    assert cur and cur["version"] == 1  # the old version stays valid until the new one is approved
     run_skills(p)
     user = json.loads(p.fake_llm.calls[-1][1][1]["content"])
     assert user["revision_request"] == "all shots in Mandarin" and user["previous_output"] == BOARD
     p.review(pr["id"], "storyboard", "approve")
     kf = {i["key"]: i["state"] for i in stage(p.plan(pr["id"]), "keyframes")["items"]}
-    assert kf == {"sh01": "current", "sh02": "running"}  # 只有文字变了的镜头重出
+    # only the shot whose text changed is redone
+    assert kf == {"sh01": "current", "sh02": "running"}
 
 
 def test_plain_reject_of_a_production_round_re_renders(prod):
@@ -387,11 +396,13 @@ def test_plain_reject_of_a_production_round_re_renders(prod):
     p.review(pr["id"], "bible", "approve")
     ready = drain(p.studio)
     mei = next(r for r in ready if r["title"].endswith("mei"))
-    p.studio.reject(mei["id"])  # 不带意见
+    p.studio.reject(mei["id"])  # no note
     items = {i["key"]: i for i in stage(p.plan(pr["id"]), "characters")["items"]}
-    assert items["mei"]["state"] == "running" and items["mei"]["version"] == 2  # 自动换种子重出
+    # rerun automatically with new seeds
+    assert items["mei"]["state"] == "running" and items["mei"]["version"] == 2
     cat = next(r for r in ready if r["title"].endswith("cat"))
-    p.studio.reject(cat["id"], "make it fluffier")  # 带意见：等规划器派生新轮，不在这里重出
+    # with a note: wait for the planner to derive a new round, no rerun here
+    p.studio.reject(cat["id"], "make it fluffier")
     items = {i["key"]: i for i in stage(p.plan(pr["id"]), "characters")["items"]}
     assert items["cat"]["state"] == "rejected"
 
@@ -429,7 +440,7 @@ def test_ffmpeg_assemble_through_orchestrator_collects_outputs(make_orch, fake, 
     assert done["state"] == "review", done
     assert {o["file"] for o in done["outputs"]} == {"final.mp4", "final.srt"}
     assert abs(probe_seconds(orch.store.task_dir(task["id"]) / "final.mp4") - 2.0) < 0.2
-    assert fake.frees == 0  # cpu 资源类：不释放 ComfyUI
+    assert fake.frees == 0  # cpu resource class: ComfyUI is not released
 
 
 def test_executor_success_without_outputs_fails(make_orch, fake):
@@ -468,9 +479,9 @@ def test_assemble_keeps_clip_audio(tmp_path, transition):
     assert abs(probe_seconds(out) - (2.0 - (0.3 if transition else 0))) < 0.15
 
 
-# ---- 3.1 多来源输入 + 自带定妆 ----
+# ---- 3.1 multi-source input + your own casting images ----
 class FakeHTTP:
-    """假的 httpx.Client：按 URL 返回网页或图片。"""
+    """A fake httpx.Client: returns a web page or an image by URL."""
 
     def __init__(self, pages):
         self.pages = pages
@@ -528,9 +539,10 @@ def test_ingest_text_image_url_youtube(tmp_path):
     assert "Transcript:\n你好\n世界" in out["text"] and "开头" in out["text"]
     refs = {r["label"]: r for r in out["references"]}
     assert refs["陈师傅"]["use"] == "as_is" and refs["陈师傅"]["role"] == "character"
-    assert len(out["references"]) == 3  # 你的图 + 网页主图 + 视频缩略图
+    assert len(out["references"]) == 3  # your image + the page's main image + the video thumbnail
     status = [s["status"] for s in out["sources"]]
-    assert status == ["ok", "ok", "ok", "ok", "failed"]  # 坏链接只标失败，不影响其他来源
+    # a broken link is only marked failed, other sources unaffected
+    assert status == ["ok", "ok", "ok", "ok", "failed"]
     assert vtt_to_text("WEBVTT\n\n1\n00:00.000 --> 00:01.000\na\na\n") == "a"
 
 
@@ -540,8 +552,8 @@ def test_provided_casting_photo_as_is_and_stylize(prod, tmp_path):
     a.write_bytes(b"\x89PNG a")
     b.write_bytes(b"\x89PNG b")
     bible = json.loads(json.dumps(BIBLE))
-    bible["characters"][0]["reference"] = "r1"  # mei：原样使用
-    bible["characters"][1]["reference"] = "r2"  # cat：按风格重画
+    bible["characters"][0]["reference"] = "r1"  # mei: used as-is
+    bible["characters"][1]["reference"] = "r2"  # cat: redrawn in the film's style
     p.fake_llm.out["bible"] = [bible]
     pr = p.create("novel-to-film", "x", {"source": {"text": "story", "sources": [
         {"kind": "image", "path": str(a), "label": "Mei", "role": "character", "use": "as_is"},
@@ -552,7 +564,8 @@ def test_provided_casting_photo_as_is_and_stylize(prod, tmp_path):
     run_skills(p)
     p.review(pr["id"], "bible", "approve")
     items = {i["key"]: i["state"] for i in stage(p.plan(pr["id"]), "characters")["items"]}
-    assert items == {"mei": "current", "cat": "running"}  # 你的照片直接通过；猫按风格重画
+    # your photo is approved directly; the cat is redrawn in style
+    assert items == {"mei": "current", "cat": "running"}
     cat_round = next(r for r in p.store.rounds(None, "generating") if r["title"].endswith("cat"))
     assert cat_round["template"] == "flux2-edit"
     mei = p._current(p._index(pr["id"]), "characters", "mei")
@@ -566,7 +579,8 @@ def test_manual_provide_replaces_an_item_and_downstream_uses_it(prod, tmp_path):
     img.write_bytes(b"\x89PNG mine")
     p.provide(pr["id"], "characters", "mei", str(img))
     kf = {i["key"]: i["state"] for i in stage(p.plan(pr["id"]), "keyframes")["items"]}
-    assert kf["sh02"] == "running" and kf["sh01"] == "current"  # 引用 mei 的镜头按新照片重出
+    # shots referencing mei are redone with the new photo
+    assert kf["sh02"] == "running" and kf["sh01"] == "current"
     rnd = next(r for r in p.store.rounds(None, "generating") if r["title"].endswith("sh02"))
     assert p.store.round_tasks(rnd["id"])[0]["params"]["image"].endswith(".png")
 
@@ -574,7 +588,7 @@ def test_manual_provide_replaces_an_item_and_downstream_uses_it(prod, tmp_path):
 def test_done_production_reactivates_when_work_reappears(prod):
     p = prod
     pr = p.create("novel-to-film", "x", {"source": "..."})
-    p.store.update_production(pr["id"], state="done")  # 例如之前跑完过
+    p.store.update_production(pr["id"], state="done")  # e.g. it ran to completion before
     p.run_stage(pr["id"], "brief") if p.pending_skill_jobs() == [] else None
     assert p.plan(pr["id"])["production"]["state"] == "active"
     run_skills(p)
@@ -587,16 +601,18 @@ def test_pause_holds_queued_work_and_resume_continues(prod):
     run_skills(p)
     p.review(pr["id"], "adaptation", "approve")
     run_skills(p)
-    p.review(pr["id"], "bible", "approve")  # 定妆、场景排队中
+    p.review(pr["id"], "bible", "approve")  # casting and locations are queued
     drafts = p.store.by_state("draft")
     assert drafts and not any(p.holds(t) for t in drafts)
     p.pause(pr["id"])
-    assert all(p.holds(t) for t in drafts)  # Worker 跳过它们，队列原样保留
+    assert all(p.holds(t) for t in drafts)  # the Worker skips them, the queue stays as it is
     assert p.store.by_state("draft") == drafts
     p.store.update_production(pr["id"], state="paused")
-    assert p.plan(pr["id"])["production"]["state"] == "paused"  # 计划不会把它改回进行中
+    # the plan does not flip it back to active
+    assert p.plan(pr["id"])["production"]["state"] == "paused"
     p.fake_llm.out["adaptation"] = [ADAPT]
-    p.review(pr["id"], "adaptation", "redo", note="x")  # 暂停期间排的 LLM 作业也不执行
+    # LLM jobs queued while paused do not run either
+    p.review(pr["id"], "adaptation", "redo", note="x")
     assert p.pending_skill_jobs() == []
     p.resume(pr["id"])
     assert not any(p.holds(t) for t in p.store.by_state("draft"))

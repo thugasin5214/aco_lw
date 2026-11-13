@@ -1,16 +1,16 @@
-"""通用 MCP：编排器按配置启动 / 连接 MCP 服务，agent 只能请求“列出 / 调用”，由编排器执行。
+"""Generic MCP: the orchestrator starts / connects MCP servers from config; the agent can only ask to "list / call", the orchestrator executes.
 
-配置（config.toml，字段与 Claude Code / Codex 的 mcpServers 相同）：
+Config (config.toml, same fields as Claude Code / Codex mcpServers):
 
     [mcp_servers.exa]
     url = "https://mcp.exa.ai/mcp"            # Streamable HTTP
     [mcp_servers.fs]
     command = "npx"
     args = ["-y", "@modelcontextprotocol/server-filesystem", "/Users/me/Movies"]
-    env = { FOO = "bar" }                     # 只在本进程里用，不进日志、不交给 LLM
+    env = { FOO = "bar" }                     # used only inside this process; never logged or given to the LLM
 
-审批（policies.yaml 的 `mcp`）：默认只读工具（annotations.readOnlyHint）直接跑，其他每次经你批准；
-可按服务覆盖。ComfyUI 的 MCP 不在这里——它走 comfy 工具（分类 + 生成只经编排器）。
+Approval (`mcp` in policies.yaml): read-only tools (annotations.readOnlyHint) run directly by default, others need your approval each time;
+overridable per server. ComfyUI's MCP is not here — it goes through the comfy tools (classified; generation only via the orchestrator).
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ PROTOCOL = "2025-06-18"
 
 
 class HTTPMCPClient:
-    """Streamable HTTP 传输：POST JSON-RPC，回复可能是 JSON 或 SSE。"""
+    """Streamable HTTP transport: POST JSON-RPC; the reply may be JSON or SSE."""
 
     def __init__(self, url: str, headers: dict | None = None, timeout_s: float = 120):
         self.url, self.headers, self.timeout_s = url, dict(headers or {}), timeout_s
@@ -138,7 +138,7 @@ class MCPHub:
         return self._tools[name]
 
     def catalog(self, server: str | None = None) -> dict:
-        """不带 server：每个服务的工具名 + 一句话；带 server：该服务工具的完整参数 schema。"""
+        """Without server: each server's tool names + one line each; with server: that server's full tool parameter schemas."""
         if server:
             return {
                 "server": server,
@@ -159,7 +159,8 @@ class MCPHub:
                     f"{t['name']}: {(t.get('description') or '').splitlines()[0][:160] if t.get('description') else ''}"
                     for t in self.tools(name)
                 ]
-            except Exception as e:  # noqa: BLE001 — 一个服务连不上不影响其他
+            # one server failing to connect does not affect the others
+            except Exception as e:  # noqa: BLE001
                 out[name] = {"error": f"{type(e).__name__}: {e}"[:300]}
         return {"servers": out}
 

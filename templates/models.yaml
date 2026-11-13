@@ -1,35 +1,35 @@
-# 模型注册表：峰值为 G0 实测（docs/baseline.md）；新模型先实测再登记。
+# Model registry: peaks are G0 measurements (docs/baseline.md); measure a new model before registering it.
 flux2-klein-4b-q8:
   kind: image
-  peak_gib: 16      # 冷启动 ComfyUI RSS 15.7 GiB
+  peak_gib: 16      # cold-start ComfyUI RSS 15.7 GiB
   measured: true
 freevideo-h3:
   kind: video
   peak_gib: 54      # FreeVideo ram_peak_bytes（phys_footprint）53.4–54.2 GiB
   measured: true
-  exclusive_llm: true   # 提交前卸载 LLM（G0：共存进入内存压力警告 + swap）
-  adaptive: true        # 按可用内存自适应：hd-60s 实测占到 98.4 GiB 只是“有就用”，准入仍按 peak_gib
+  exclusive_llm: true   # unload the LLM before submitting (G0: coexisting led to memory-pressure warnings + swap)
+  adaptive: true        # adapts to available memory: hd-60s measured at 98.4 GiB only because it was there; admission still uses peak_gib
 ffmpeg:
   kind: video
-  peak_gib: 1       # 估算：x264 编码 720p
-  resource: cpu     # 不经内存闸门、不卸载 LLM、不释放 ComfyUI；可与渲染并存
-  exec_s: 20        # 估算，跑过后用实测历史
+  peak_gib: 1       # estimate: x264 encoding at 720p
+  resource: cpu     # skips the memory gate, does not unload the LLM or release ComfyUI; can run alongside renders
+  exec_s: 20        # estimate; measured history is used once it has run
 comfy-raw:
   kind: video
-  peak_gib: 54      # 未知 workflow：按最重的视频模型保守估计（估算）
+  peak_gib: 54      # unknown workflow: conservatively the heaviest video model (estimate)
   exclusive_llm: true
   adaptive: true
 minimax-h3-native:
   kind: video
-  peak_gib: 54      # 估算：与 FreeVideo 同一套 int8 主干 + nvfp4 编码（FreeVideo 实测 54 GiB）；首次实测后改
+  peak_gib: 54      # estimate: same int8 backbone + nvfp4 encoder as FreeVideo (FreeVideo measured 54 GiB); update after the first measurement
   exclusive_llm: true
   adaptive: true
 ltx-2.5-distilled:
   kind: video
-  peak_gib: 50      # 估算：21.5 GB int8 主干 + 15.4 GB Gemma 编码 + VAE / 放大器 + 激活；首次实测后改
+  peak_gib: 50      # estimate: 21.5 GB int8 backbone + 15.4 GB Gemma encoder + VAE / upscaler + activations; update after the first measurement
   exclusive_llm: true
   adaptive: true
 z-image-bf16:
   kind: image
-  peak_gib: 28      # 估算：DiT bf16 12.3 GB + Qwen3-4B 8 GB + VAE + 激活；实测后更新
+  peak_gib: 28      # estimate: DiT bf16 12.3 GB + Qwen3-4B 8 GB + VAE + activations; update after measuring
   measured: false

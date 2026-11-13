@@ -1,7 +1,7 @@
-"""Telegram 入口：纯 Python 长轮询，不加载模型。
+"""Telegram entry: plain-Python long polling, loads no model.
 
-命令与按钮由监听器直接执行（确定性）；只有自由文本（新需求、批注）才交给规划器队列唤醒 LLM。
-候选以文件方式发送（不压缩）。只响应白名单 chat_id（/whoami 例外，用于首次配置）。
+Commands and buttons are executed directly by the listener (deterministic); only free text (new requests, notes) goes to the planner queue and wakes the LLM.
+Candidates are sent as files (uncompressed). Only whitelisted chat_ids get answers (except /whoami, used for first-time setup).
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ class TelegramAPI:
         return self.call("sendMessage", **params)
 
     def send_documents(self, chat_id: int, items: list[tuple[Path, str]]) -> None:
-        """原图以文件发送；多于 1 个用 sendMediaGroup（每组最多 10 个）。"""
+        """Send originals as files; more than one goes via sendMediaGroup (at most 10 per group)."""
         for i in range(0, len(items), 10):
             chunk = items[i : i + 10]
             if len(chunk) == 1:
@@ -75,7 +75,7 @@ class TelegramAPI:
             self.call("sendMediaGroup", files=files, chat_id=chat_id, media=media)
 
     def download(self, file_id: str) -> tuple[str, bytes]:
-        """下载用户发来的图片 / 文件，返回 (文件名, 内容)。"""
+        """Download an image / file the user sent; returns (filename, content)."""
         info = self.call("getFile", file_id=file_id)
         path = info["file_path"]
         base = str(self.http.base_url).replace("/bot", "/file/bot", 1)
@@ -102,7 +102,7 @@ class TelegramAPI:
 
 
 class TelegramBot:
-    """把 Telegram 更新翻译成 Actions 调用；所有业务逻辑在 Actions / Studio 里。"""
+    """Translate Telegram updates into Actions calls; all business logic lives in Actions / Studio."""
 
     def __init__(self, api: TelegramAPI, actions, allowed: list[int]):
         self.api = api
@@ -110,20 +110,20 @@ class TelegramBot:
         self.allowed = set(allowed)
         self.offset: int | None = None
 
-    # ---- 出站 ----
+    # ---- outbound ----
     def broadcast(self, text: str, buttons=None) -> None:
         for chat in self.allowed:
             try:
                 self.api.send(chat, text, buttons)
-            except Exception as e:  # noqa: BLE001 — 通知失败不影响出图
+            except Exception as e:  # noqa: BLE001 — a failed notice does not affect generation
                 log.warning("Telegram send failed: %s", e)
 
     def send_files(self, items: list[tuple[Path, str]]) -> None:
-        """agent 的 send_file：把文件（联系表、视频…）发给你。"""
+        """The agent's send_file: send files (contact sheets, videos, ...) to you."""
         for chat in self.allowed:
             try:
                 self.api.send_documents(chat, items)
-            except Exception as e:  # noqa: BLE001 — 发不出去只记日志
+            except Exception as e:  # noqa: BLE001 — if it cannot be sent, just log it
                 log.warning("Telegram send_files failed: %s", e)
 
     def send_round(self, rnd: dict, tasks: list[dict], task_dir: Callable[[str], Path]) -> None:
@@ -150,12 +150,12 @@ class TelegramBot:
             except Exception as e:  # noqa: BLE001
                 log.warning("Telegram send (candidates) failed: %s", e)
 
-    # ---- 入站 ----
+    # ---- inbound ----
     def poll_forever(self, stop: threading.Event) -> None:
         while not stop.is_set():
             try:
                 updates = self.api.get_updates(self.offset)
-            except Exception as e:  # noqa: BLE001 — 网络抖动时稍后重试
+            except Exception as e:  # noqa: BLE001 — network hiccup: retry a bit later
                 log.warning("getUpdates failed: %s", e)
                 stop.wait(5)
                 continue
@@ -203,17 +203,20 @@ class TelegramBot:
                 ),
                 data,
             )
-            try:  # 按钮点击也记进当前会话（控制台的对话历史里看得到你点了什么）
+            # button presses also go into the current session (so the console's chat history shows
+            # what you pressed)
+            try:
                 self.actions.studio.log("telegram", "in", tr("btn_pressed", b=label), button=data)
-            except Exception as e:  # noqa: BLE001 — 记录失败不影响按钮本身
+            # a failed log entry does not affect the button itself
+            except Exception as e:  # noqa: BLE001
                 log.warning("Logging button press failed: %s", e)
             done = self.actions.button("telegram", data, reply)
             if done and msg:
                 self.api.clear_buttons(chat, msg["message_id"])
 
     def _attachments(self, msg: dict) -> list[dict]:
-        """照片（取最大尺寸）、视频、以文件发送的图片 / 视频 → 保存为上传，供 @upload 引用。
-        Telegram 机器人只能下载 ≤ 20 MB 的文件；更大的请发链接。"""
+        """Photos (largest size), videos, images / videos sent as files → saved as uploads for @upload references.
+        Telegram bots can only download files ≤ 20 MB; send a link for anything larger."""
         file_id, name = None, None
         doc = msg.get("document") or {}
         if msg.get("photo"):

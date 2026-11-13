@@ -1,4 +1,4 @@
-"""E1：编排器只通过 Executor 接口工作；换一个执行端不需要改编排器。"""
+"""E1: the orchestrator works only through the Executor interface; swapping an executor needs no orchestrator change."""
 
 from pathlib import Path
 
@@ -6,7 +6,7 @@ from video_agent.executors import Poll, Prepared
 
 
 class FakeExecutor:
-    """一个不是 ComfyUI 的执行端：第二次轮询完成，产出一个文本文件。"""
+    """An executor that is not ComfyUI: completes on the second poll, produces a text file."""
 
     name = "fake"
 
@@ -59,8 +59,8 @@ def test_orchestrator_runs_any_executor(make_orch, fake):
     t = o.execute(o.create("h3-t2v", {"seed": 1})["id"])
     assert t["state"] == "review" and t["outputs"][0]["file"] == "out.png"
     assert (o.store.task_dir(t["id"]) / "job.json").exists()
-    assert ex.released == 1  # 视频模板 release_after=free
-    assert fake.submits == 0  # 没碰 ComfyUI
+    assert ex.released == 1  # video template release_after=free
+    assert fake.submits == 0  # ComfyUI untouched
 
 
 def test_executor_failure_and_lost(make_orch, fake):
@@ -70,4 +70,5 @@ def test_executor_failure_and_lost(make_orch, fake):
     assert t["state"] == "failed" and t["error"] == "boom"
     use_fake(o, FakeExecutor(lost=True))
     t = o.execute(o.create("flux2-t2i", {"seed": 2})["id"])
-    assert t["state"] == "failed" and t["error"] == "lost"  # 连续几次找不到才认定丢失
+    # declared lost only after missing several times in a row
+    assert t["state"] == "failed" and t["error"] == "lost"

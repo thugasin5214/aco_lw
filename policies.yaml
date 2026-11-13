@@ -44,14 +44,14 @@ execution:
     update_production_settings: {allow: true}
     comfy_catalog: {allow: true}
     comfy_describe: {allow: true}
-    comfy: {allow: true}               # comfy_bridge.py 再按工具 + 动作分类：读放行、安装需批准、危险的拒绝
-    run_comfy_workflow: {allow: true}  # 经编排器排队（可追踪、受暂停与资源闸门）
-    # 通用工具（toolbox.py）：编排器执行，agent 只提出请求
+    comfy: {allow: true}               # comfy_bridge.py then classifies by tool + action: reads allowed, installs need approval, dangerous ones refused
+    run_comfy_workflow: {allow: true}  # queued via the orchestrator (trackable, subject to pause and the resource gate)
+    # generic tools (toolbox.py): executed by the orchestrator, the agent only requests
     web_fetch: {allow: true}
     look: {allow: true}
-    run_command:                       # 每条命令都要你批准；auto_allow 里的前缀（单条命令、无管道）免批准
+    run_command:                       # every command needs your approval; prefixes in auto_allow (single command, no pipes) skip it
       allow: true
-      auto_allow: []                   # 例：["ffprobe", "agent-reach doctor"]
+      auto_allow: []                   # e.g. ["ffprobe", "agent-reach doctor"]
     read_file: {allow: true}
     write_file: {allow: true}
     list_skills: {allow: true}
@@ -62,8 +62,8 @@ execution:
     send_file: {allow: true}
     mcp_list: {allow: true}
     mcp_call: {allow: true}
-    delegate_freevideo: {allow: true}  # 交给 FreeVideo agent：每次经你批准；需 freevideo_agent_online
-    delegate_agent: {allow: true}      # 交给 Claude Code / Codex：每次经你批准；需 allow_online
+    delegate_freevideo: {allow: true}  # hand off to the FreeVideo agent: your approval each time; needs freevideo_agent_online
+    delegate_agent: {allow: true}      # hand off to Claude Code / Codex: your approval each time; needs allow_online
 
 # MCP tools (servers configured in config.toml [mcp_servers.*]).
 # approval: unless_read_only (tools annotated readOnlyHint run directly) | always | never | deny

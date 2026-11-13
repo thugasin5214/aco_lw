@@ -1,4 +1,4 @@
-# 复制为 config.toml（已 gitignore）后按需修改；未写的项用代码默认值。
+# copy to config.toml (gitignored) and edit as needed; keys left out use the code defaults.
 # comfy_url = "http://127.0.0.1:8188"
 # lms_url = "http://127.0.0.1:1234"
 # llm_model = "qwen3.8-27b-splash"
@@ -6,11 +6,11 @@
 # memory_margin_gib = 8.0
 # language = "en"                    # console default & system messages: en | zh
 # web_port = 8790
-# round_size = 4                      # 每轮候选数
+# round_size = 4                      # candidates per round
 
-# Telegram：@BotFather 新建 bot 得到 token；chat_id 可先启动 daemon 后给 bot 发 /whoami 查看
+# Telegram: create a bot with @BotFather to get the token; for chat_id, start the daemon and send /whoami to the bot
 # telegram_token = "123456:ABC..."
-# telegram_chat_ids = [123456789]     # 白名单，只响应这些 chat
+# telegram_chat_ids = [123456789]     # whitelist: only these chats get answers
 
 # Planner / sessions
 # planner_backend = "lmstudio"        # lmstudio | openai_compatible

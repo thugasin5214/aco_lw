@@ -4,7 +4,7 @@ model: z-image-bf16
 source: 标准实验室/07-ZImage-精致肤质-参考重绘.json（UI → API）
 release_after: keep
 output_prefix: {node: "16", field: filename_prefix}
-# 普通 img2img：denoise 越低越像原图（0.35–0.6）。不是换姿势保身份的参考编辑——那个用 flux2-edit。
+# plain img2img: the lower the denoise, the closer to the source (0.35–0.6). Not identity-preserving reference editing for new poses — use flux2-edit for that.
 slots:
   prompt:   {node: "5", field: text, type: str}
   negative: {node: "6", field: text, type: str}

@@ -1,29 +1,29 @@
-# 小说 / 构想 + 图片 / 网页 / YouTube → 成片。阶段 DAG 是数据：换一套 YAML（广告、MV……）不改代码。
-# 表达式：{settings.x}、{item.y}、{bible.style}；@art:阶段/key 引用已通过的产物（并记为依赖）。
+# novel / idea + images / web pages / YouTube → finished film. The stage DAG is data: another YAML set (ads, music videos, ...) needs no code change.
+# expressions: {settings.x}, {item.y}, {bible.style}; @art:stage/key references an approved artifact (and records it as a dependency).
 name: novel-to-film
 title: Novel → film
 description: Turn a story, an idea with reference images, web pages or YouTube videos into a storyboarded short film.
 settings:
-  image_tier: standard      # flux2 档位（实测）
-  video_tier: smoke         # h3 档位：smoke 已实测；其他档位创建时显式指定
+  image_tier: standard      # flux2 tier (measured)
+  video_tier: smoke         # h3 tier: smoke is measured; name other tiers explicitly when creating
   image_candidates: 4
   video_candidates: 1
   subtitles: true
-  youtube_frames: 4         # 每个 YouTube 链接抽几帧作风格参考（0 = 只要缩略图）
-  language: ""              # 对白与画面描述的语言，例如 "Mandarin Chinese (普通话)"；留空 = 跟原文一致
-  auto_advance: true        # 上一阶段通过后自动开跑下一阶段（confirm 的阶段除外）
+  youtube_frames: 4         # frames grabbed per YouTube link as style reference (0 = thumbnail only)
+  language: ""              # language of dialogue and scene descriptions, e.g. "Mandarin Chinese (普通话)"; empty = same as the source text
+  auto_advance: true        # start the next stage automatically once the previous one is approved (except confirm stages)
   width: 1280
   height: 720
   fps: 24
 stages:
   - id: source
     title: Sources
-    kind: input               # {"text": "...", "sources": [{kind: image|url|youtube|text, ...}]}；旧格式是一段文字
+    kind: input               # {"text": "...", "sources": [{kind: image|url|youtube|text, ...}]}; the old format is a piece of text
 
   - id: brief
     title: Brief (text · references)
     kind: tool
-    tool: ingest              # 网页正文、YouTube 字幕与帧、你的图片 → 一份素材包
+    tool: ingest              # web page text, YouTube subtitles and frames, your images → one material pack
     needs: [source]
     gate: auto
 
@@ -52,7 +52,7 @@ stages:
       n: "{settings.image_candidates}"
       params:
         prompt: "Character reference sheet, full body, neutral pose, plain background. {item.look}. Style: {bible.style.look}"
-    alternatives:             # 你提供了这个人物的照片：原样使用，或以它为参考按片子风格重画
+    alternatives:             # you provided a photo of this character: use it as-is, or redraw it in the film's style using it as reference
       - when: {path: ref.use, equals: as_is}
         provide: "{ref.path}"
       - when: {path: ref.use, equals: stylize}
@@ -111,7 +111,7 @@ stages:
     title: Shot videos
     kind: render
     needs: [storyboard, keyframes]
-    confirm: true             # 视频耗时以分钟～小时计：通过关键帧后由你点开始
+    confirm: true             # video takes minutes to hours: after keyframes are approved, you press start
     fan_out: {items: storyboard.shots, key: id}
     render:
       template: h3-i2v

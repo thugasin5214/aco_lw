@@ -1,4 +1,4 @@
-"""LM Studio 驻留控制（只通过 `lms` CLI）。G0：加载约 15 s，卸载 0.3 s，--ttl 生效。"""
+"""LM Studio residency control (only via the `lms` CLI). G0: load ~15 s, unload 0.3 s, --ttl works."""
 
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ def load(
 
 
 def models() -> list[dict]:
-    """LM Studio 里已下载的 LLM（设置窗口的下拉框用）。"""
+    """LLMs downloaded in LM Studio (for the settings window's drop-down)."""
     if not available():
         return []
     try:
@@ -75,7 +75,7 @@ _VISION: dict[str, tuple[float, bool | None]] = {}
 
 
 def supports_vision(model: str) -> bool | None:
-    """LM Studio 报告的视觉能力（None = 不知道）。缓存 60 s，模型换了很快就跟上。"""
+    """Vision support as reported by LM Studio (None = unknown). Cached 60 s so a model switch is picked up quickly."""
     import time
 
     hit = _VISION.get(model)

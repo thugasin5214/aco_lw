@@ -1,13 +1,13 @@
-"""FFmpeg 执行端（E2）：按时间线（EDL JSON）裁切、统一尺寸帧率、拼接（保留片段自带的声音）、可选转场与字幕。
+"""FFmpeg executor (E2): from a timeline (EDL JSON) trim, unify size and frame rate, concatenate (keeping the clips' own audio), optional transitions and subtitles.
 
-LLM / skill 只产出时间线，命令行由这里确定性地拼出来——不让模型直接写 ffmpeg 参数。
-CPU 资源类：不经内存闸门，不卸载 LLM，不释放 ComfyUI。
+The LLM / skills only produce the timeline; the command line is built deterministically here — the model never writes ffmpeg arguments.
+CPU resource class: skips the memory gate, does not unload the LLM, does not release ComfyUI.
 
-时间线格式：
+Timeline format:
     {"width": 1280, "height": 720, "fps": 24, "transition": {"type": "fade", "seconds": 0.3},
      "clips": [{"file": "/abs/a.mp4", "in": 0.0, "out": 2.5}, ...],
      "subtitles": [{"start": 0.0, "end": 2.0, "text": "……"}, ...]}
-字幕：本机 ffmpeg 没有 libass / drawtext，写成软字幕轨（mp4 mov_text）+ 同名 .srt。
+Subtitles: the local ffmpeg has no libass / drawtext, so they are written as a soft subtitle track (mp4 mov_text) + a .srt with the same name.
 """
 
 from __future__ import annotations
@@ -75,7 +75,7 @@ def has_audio(path: str | Path) -> bool:
 
 
 def build_command(tl: dict, out: Path, srt: Path | None) -> list[str]:
-    """时间线 → ffmpeg 参数（纯函数，便于测试）。片段带声音（例如 H3 的人声）就保留并一起剪。"""
+    """Timeline → ffmpeg arguments (pure function, easy to test). Clips with audio (e.g. H3 voices) keep it and it is cut along."""
     clips = tl["clips"]
     w, h, fps = int(tl.get("width", 1280)), int(tl.get("height", 720)), int(tl.get("fps", 24))
     audio = any(c.get("_audio") for c in clips)
@@ -100,7 +100,7 @@ def build_command(tl: dict, out: Path, srt: Path | None) -> list[str]:
                     f"[{i}:a]{atrim},asetpts=PTS-STARTPTS,aresample=48000,"
                     f"aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}]"
                 )
-            else:  # 无声片段补静音，保持音画对齐
+            else:  # silent clip: pad with silence to keep audio and video aligned
                 parts.append(
                     f"anullsrc=r=48000:cl=stereo,atrim=duration={c['_len']:.3f},"
                     f"aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}]"
@@ -176,7 +176,8 @@ class FFmpegExecutor:
         cmd = build_command(prepared.payload["timeline"], d / "final.mp4", srt)
         (d / "command.json").write_text(json.dumps(cmd, ensure_ascii=False))
         log = (d / "ffmpeg.log").open("w")
-        # 退出码写进 rc 文件：daemon 重启后仍能判断作业是否完成（不重提）
+        # the exit code goes into an rc file: after a daemon restart we can still tell whether the
+        # job finished (no resubmit)
         script = shlex.join(cmd) + '; echo $? > "$0/rc"'
         self.jobs[job_id] = subprocess.Popen(
             ["/bin/sh", "-c", script, str(d)], stdout=log, stderr=subprocess.STDOUT
@@ -189,7 +190,8 @@ class FFmpegExecutor:
             return Poll("running")
         rc_file = d / "rc"
         if not rc_file.exists():
-            return Poll("lost")  # 进程没了也没留下退出码（被杀）；便宜，交给你重跑
+            # the process is gone and left no exit code (killed); cheap, so it is yours to rerun
+            return Poll("lost")
         rc = int(rc_file.read_text().strip() or 1)
         return Poll("done" if rc == 0 else "failed", result={"rc": rc, "dir": str(d)})
 

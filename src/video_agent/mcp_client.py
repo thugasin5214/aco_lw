@@ -1,5 +1,5 @@
-"""最小的 MCP 客户端（stdio JSON-RPC）：由编排器启动第三方 MCP 服务（例如 comfyui-mcp），
-列出并调用它的工具。调用一律经 comfy_tools.py 的分类与策略，不直接暴露给 LLM。"""
+"""Minimal MCP client (stdio JSON-RPC): the orchestrator starts a third-party MCP server (e.g. comfyui-mcp),
+lists and calls its tools. Every call goes through the classification and policy in comfy_tools.py; nothing is exposed to the LLM directly."""
 
 from __future__ import annotations
 
@@ -84,9 +84,9 @@ class MCPClient:
                     try:
                         msg = json.loads(line)
                     except json.JSONDecodeError:
-                        continue  # 服务把日志打到了 stdout：跳过
+                        continue  # the server printed logs to stdout: skip
                     if msg.get("id") != rid:
-                        continue  # 服务端通知 / 别的回复
+                        continue  # server notification / some other reply
                     if "error" in msg:
                         raise MCPError(str(msg["error"].get("message") or msg["error"])[:500])
                     return msg.get("result")

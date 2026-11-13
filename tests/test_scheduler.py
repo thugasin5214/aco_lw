@@ -31,7 +31,7 @@ def test_image_happy_path(make_orch, fake):
         json.loads((tdir / "prompt.json").read_text())["16"]["inputs"]["filename_prefix"]
         == f"aco_lw/{task['id']}"
     )
-    assert fake.frees == 0  # 图片模板 release_after=keep
+    assert fake.frees == 0  # image template release_after=keep
 
 
 def test_video_releases_after(make_orch, fake):
@@ -57,7 +57,7 @@ def test_duplicate_rejected_until_failed(make_orch, fake):
 
 
 def test_memory_gate_timeout_never_submits(make_orch, fake):
-    fake.busy_other = True  # 有人手动在跑，队列一直忙
+    fake.busy_other = True  # someone is running something by hand; the queue stays busy
     o = make_orch(fake)
     t = o.execute(o.create("flux2-t2i", {"seed": 2})["id"])
     assert t["state"] == "timeout" and fake.submits == 0
@@ -71,7 +71,7 @@ def test_illegal_transition(make_orch, fake):
 
 
 def test_recover_collects_without_resubmitting(make_orch, fake):
-    """模拟提交后进程被杀：任务停在 submitted，重启后只对账。"""
+    """Simulate the process being killed after submit: the task stays submitted; after restart we only reconcile."""
     o = make_orch(fake)
     t = o.create("flux2-t2i", {"seed": 11})
     o.store.transition(t["id"], "validated")
@@ -79,11 +79,11 @@ def test_recover_collects_without_resubmitting(make_orch, fake):
     o.store.update(t["id"], prompt_id="11111111-1111-4111-8111-111111111111")
     o.comfy.submit({"x": {}}, "11111111-1111-4111-8111-111111111111")
     o.store.transition(t["id"], "submitted")
-    # —— 崩溃，新进程 ——
+    # —— crash, new process ——
     o2 = make_orch(fake)
     results = o2.recover()
     assert results[0][1] == "review"
-    assert fake.submits == 1  # 只有崩溃前那一次
+    assert fake.submits == 1  # only the one before the crash
 
 
 def test_recover_prompt_id_written_but_never_submitted(make_orch, fake):
@@ -95,7 +95,7 @@ def test_recover_prompt_id_written_but_never_submitted(make_orch, fake):
     results = o.recover()
     assert results == [(t["id"], "failed（找不到）")]
     assert fake.submits == 0
-    # 失败后允许按相同参数重提
+    # after a failure, resubmitting with the same parameters is allowed
     assert o.create("flux2-t2i", {"seed": 12})
 
 
@@ -112,10 +112,11 @@ def test_timeout_scales_with_estimate_and_late_results_are_collected(make_orch):
 
     fake = FakeComfy(history_after=4)
     o = make_orch(fake)
-    o.cfg.task_timeout_s = 0  # 配置时限为 0 时，按预计耗时放大的时限仍然生效
+    # with a configured limit of 0, the limit scaled by the expected duration still applies
+    o.cfg.task_timeout_s = 0
     t = o.execute(o.create("flux2-t2i", {"seed": 31})["id"])
     assert t["state"] == "review"
-    # 观察超时后才完成的任务：定期对账收回
+    # tasks finishing after their watch timed out: collected by periodic reconciliation
     fake2 = FakeComfy(history_after=1000)
     o2 = make_orch(fake2)
     o2.cfg.task_timeout_s = 0
@@ -123,13 +124,14 @@ def test_timeout_scales_with_estimate_and_late_results_are_collected(make_orch):
         "E", (), {"exec_s": 0.0, "peak_gib": 16, "family": "f", "source": "t"}
     )()
     t2 = o2.execute(o2.create("flux2-t2i", {"seed": 32})["id"])
-    assert t2["state"] == "timeout" and o2.reconcile_timeouts() == []  # 还在跑：留到下次
+    # still running: left for next time
+    assert t2["state"] == "timeout" and o2.reconcile_timeouts() == []
     fake2.history_after = 0
     assert o2.reconcile_timeouts() == [(t2["id"], "review")]
 
 
 def test_alive_job_is_watched_past_the_limit(make_orch):
-    """执行端还报心跳就不按（常常不准的）预计耗时标超时。"""
+    """While the executor still sends heartbeats, do not mark timeout by the (often wrong) expected duration."""
     import dataclasses
 
     from conftest import FakeComfy
@@ -151,5 +153,6 @@ def test_recover_keeps_queued_drafts(make_orch, fake):
     orch = make_orch(fake)
     t = orch.create("flux2-t2i", {"prompt": "x"})
     assert orch.recover() == []
-    assert orch.store.get(t["id"])["state"] == "draft"  # 从未提交：重启后仍在队列里
+    # never submitted: still queued after restart
+    assert orch.store.get(t["id"])["state"] == "draft"
     assert fake.submits == 0

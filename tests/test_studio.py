@@ -17,12 +17,13 @@ from video_agent.telegram import TelegramAPI, TelegramBot
 @pytest.fixture
 def studio(make_orch, fake):
     s = Studio(make_orch(fake), round_size=3)
-    s.store.set_kv("planner_style", "simple")  # 这些测试覆盖单次 JSON 规划（简单模式）
+    # these tests cover single-shot JSON planning (simple mode)
+    s.store.set_kv("planner_style", "simple")
     return s
 
 
 def drain(studio: Studio) -> list[dict]:
-    """同步执行所有排队任务（代替 Worker 线程）。返回刚进入待审阅的轮。"""
+    """Run all queued tasks synchronously (instead of the Worker thread). Returns rounds that just entered review."""
     ready = []
     while (t := studio.store.next_draft()) is not None:
         studio.orch.execute(t["id"])
@@ -44,7 +45,7 @@ def fake_chat(responses: list[dict]):
     return chat
 
 
-# ---- 项目 / 轮 / 决定 ----
+# ---- projects / rounds / decisions ----
 def test_round_lifecycle_and_select_lock(studio):
     rnd = studio.start_round("flux2-t2i", {"prompt": "girl", "seed": 100})
     tasks = studio.store.round_tasks(rnd["id"])
@@ -69,7 +70,7 @@ def test_pack_reference_resolves(studio):
     vid = studio.start_round("h3-i2v", {"image": "@pack:角色"})
     t = studio.store.round_tasks(vid["id"])[0]
     assert t["params"]["image"].endswith("v1/角色.png")
-    assert vid["n"] == 1  # 视频默认一轮 1 个
+    assert vid["n"] == 1  # video defaults to 1 per round
 
 
 def test_redo_refine_reject(studio):
@@ -95,7 +96,7 @@ def test_finish_project_keeps_history(studio):
     studio.finish_project(note="收工")
     assert studio.store.get_project(p1["id"])["state"] == "done"
     assert all(t["state"] == "failed" for t in studio.store.list(project_id=p1["id"]))
-    assert studio.store.messages(p1["id"])  # 对话保留
+    assert studio.store.messages(p1["id"])  # chat is kept
     p2 = studio.current_project()
     assert p2["id"] != p1["id"]
     assert {p["id"] for p in studio.store.list_projects()} >= {p1["id"], p2["id"]}
@@ -110,7 +111,7 @@ def test_approve_standalone_task(studio):
     assert r["n"] == 3
 
 
-# ---- 规划器 ----
+# ---- planner ----
 def test_planner_validates_output(studio):
     store, reg = studio.store, studio.orch.registry
     ok = Planner(
@@ -149,10 +150,11 @@ def test_planner_validates_output(studio):
         ),
     )
     delta, _, _ = note.translate_note("flux2-edit", {"prompt": "a"}, "换图", None)
-    assert delta == {"prompt": "b"}  # 越界的 steps 与 image 字段被忽略，prompt 修改保留
+    # out-of-range steps and the image field are ignored, the prompt change is kept
+    assert delta == {"prompt": "b"}
 
 
-# ---- Actions：命令、按钮、批注 ----
+# ---- Actions: commands, buttons, notes ----
 def run_jobs(actions: Actions) -> None:
     while not actions.jobs.empty():
         actions.jobs.get()[0]()
@@ -212,7 +214,7 @@ def test_telegram_routing_and_whitelist(studio):
     bot = TelegramBot(api, actions, allowed=[42])
     msg = lambda chat, text: {"message": {"chat": {"id": chat}, "text": text}}
     bot.handle(msg(99, "/status"))
-    assert sent == []  # 非白名单不响应
+    assert sent == []  # non-whitelisted chats get no answer
     bot.handle(msg(99, "/whoami"))
     assert b"99" in sent[-1][1]
     bot.handle(msg(42, "/round flux2-t2i 2 a cat"))
@@ -252,7 +254,7 @@ def test_web_review_endpoints(studio, tmp_path):
     assert g[0]["type"] == "round"
     r = c.post(f"/api/rounds/{rnd['id']}/select", json={"idx": 3, "role": "场景"})
     assert r.status_code == 200
-    assert c.post(f"/api/rounds/{rnd['id']}/redo").status_code == 400  # 已决定
+    assert c.post(f"/api/rounds/{rnd['id']}/redo").status_code == 400  # already decided
     p = c.get(f"/api/projects/{rnd['project_id']}").json()
     assert p["packs"][0]["assets"]["场景"]
     name = p["packs"][0]["assets"]["场景"]["file"].split("/")[-1]
@@ -327,7 +329,7 @@ def test_telegram_photo_becomes_upload(studio):
 
 
 def test_note_on_video_template_ignores_steps(studio):
-    """h3 模板没有 steps（只有 base_steps / refine_steps）：模型给了 steps 也不能让整条批注失败。"""
+    """The h3 template has no steps (only base_steps / refine_steps): the model giving steps must not fail the whole note."""
     planner = Planner(
         studio.orch.cfg,
         studio.store,

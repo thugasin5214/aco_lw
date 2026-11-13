@@ -1,4 +1,4 @@
-"""A1 + A2：agent 运行时——tool call 执行、暂存与恢复、审批、逐字复现（缓存）、崩溃恢复。"""
+"""A1 + A2: the agent runtime — tool call execution, parking and resuming, approvals, verbatim replay (cache), crash recovery."""
 
 import json
 
@@ -15,7 +15,7 @@ def call(name, args=None, cid=None):
 
 
 class Script:
-    """按顺序返回预设的 LLM 输出；每次都记录收到的消息，用来检查“只延长”与 call ID。"""
+    """Returns preset LLM outputs in order; records the messages each call received, to check "extend only" and call IDs."""
 
     def __init__(self, *steps):
         self.steps, self.seen = list(steps), []
@@ -66,10 +66,11 @@ def test_tool_loop_waits_for_render_then_continues(env):
     a.inbound("web", "make 2 portraits", lambda t, b=None: None)
     run_all(a)
     run = last_run(studio)
-    assert run["status"] == "waiting_event"  # 渲染中：对话暂停，不占线程
-    drain(studio)  # Worker 跑完渲染
+    # rendering: the conversation pauses and holds no thread
+    assert run["status"] == "waiting_event"
+    drain(studio)  # the Worker finishes the render
     rnd = studio.store.rounds(state="review")[0]
-    a.runtime.on_round_ready(rnd)  # daemon 的 notify_round 会调用它
+    a.runtime.on_round_ready(rnd)  # the daemon's notify_round calls this
     run_all(a)
     assert last_run(studio)["status"] == "done"
     assert said[-1][0] == "Done: 2 candidates ready."
@@ -84,7 +85,7 @@ def test_tool_loop_waits_for_render_then_continues(env):
         "tool",
         "assistant",
     ]
-    # 每次请求都是上一次的逐字延长（前缀缓存）
+    # every request is a verbatim extension of the previous one (prefix cache)
     for prev, nxt in zip(script.seen, script.seen[1:], strict=False):
         assert nxt[: len(prev)] == prev
     waited = json.loads(script.seen[-1][-1]["content"])
@@ -107,7 +108,8 @@ def test_multiple_tool_calls_keep_order_and_ids(env):
     run_all(a)
     sent = script.seen[1]
     tool_msgs = [m for m in sent if m["role"] == "tool"]
-    assert [m["tool_call_id"] for m in tool_msgs] == ["A", "B", "C"]  # 每个调用都有结果，顺序不变
+    # every call has a result, order unchanged
+    assert [m["tool_call_id"] for m in tool_msgs] == ["A", "B", "C"]
     assert "unknown tool" in tool_msgs[1]["content"] and "not valid JSON" in tool_msgs[2]["content"]
     assert sent[-4]["tool_calls"][2]["id"] == "C"
 
@@ -145,7 +147,7 @@ def test_selection_needs_approval_unless_named(env):
     a.inbound("web", "pick the best one", lambda t, b=None: None)
     run_all(a)
     assert last_run(studio)["status"] == "waiting_user"
-    assert studio.store.get_round(rnd["id"])["state"] == "review"  # 还没选
+    assert studio.store.get_round(rnd["id"])["state"] == "review"  # not picked yet
     approve = next(b for _t, b in said if b)[0][0][1]
     a.button("web", approve, lambda t, b=None: None)
     run_all(a)
@@ -159,7 +161,7 @@ def test_selection_needs_approval_unless_named(env):
         {"tool_calls": [call("propose_selection", {"round_id": rnd2["id"], "idx": 1})]},
         {"text": "done"},
     )
-    a2.inbound("web", "就用 #1", lambda t, b=None: None)  # 原话点名 → 直接执行
+    a2.inbound("web", "就用 #1", lambda t, b=None: None)  # named in your words → executed directly
     run_all(a2)
     assert studio.store.get_round(rnd2["id"])["decision"]["idx"] == 1
 
@@ -174,7 +176,7 @@ def test_user_choosing_via_review_buttons_answers_pending_approval(env):
     )
     a.inbound("web", "pick one", lambda t, b=None: None)
     run_all(a)
-    studio.select(rnd["id"], 1)  # 你直接在审阅页选了 #1
+    studio.select(rnd["id"], 1)  # you picked #1 directly on the review page
     run_all(a)
     result = json.loads(script.seen[-1][-1]["content"])
     assert result["user_decision"] == "select" and result["selected"] == 1
@@ -188,18 +190,18 @@ def test_ask_user_and_recovery_after_restart(env):
     a.inbound("web", "make something", lambda t, b=None: None)
     run_all(a)
     assert last_run(studio)["status"] == "waiting_user"
-    a.inbound("web", "video", lambda t, b=None: None)  # 回答提问，不开新运行
+    a.inbound("web", "video", lambda t, b=None: None)  # answers the question, no new run
     run_all(a)
     assert len(studio.store.runs(None)) == 1 and last_run(studio)["status"] == "done"
     assert json.loads(script.seen[-1][-1]["content"]) == {"answer": "video"}
 
-    # 崩溃恢复：等待中的轮在 daemon 停机期间完成了
+    # crash recovery: the round being waited for finished while the daemon was down
     rnd = studio.start_round("flux2-t2i", {"seed": 9}, n=1)
     b, _ = make({"tool_calls": [call("wait_for_round", {"round_id": rnd["id"]})]}, {"text": "back"})
     b.inbound("web", "wait for it", lambda t, b=None: None)
     run_all(b)
     drain(studio)
-    c, script_c = make({"text": "back after restart"})  # 新进程
+    c, script_c = make({"text": "back after restart"})  # new process
     c.runtime.recover()
     run_all(c)
     assert last_run(studio)["status"] == "done" and len(script_c.seen) == 1
@@ -219,7 +221,7 @@ def test_step_budget(env):
     assert last_run(studio)["status"] == "done" and "budget" in said[-1][0]
 
 
-# ---------------- 策略层（P1 / P2 / D1） ----------------
+# ---------------- policy layer (P1 / P2 / D1) ----------------
 def test_execution_policy_rejects_without_changing_args(env):
     studio, make, _ = env
     a, script = make(
@@ -230,7 +232,7 @@ def test_execution_policy_rejects_without_changing_args(env):
     run_all(a)
     err = json.loads(script.seen[-1][-1]["content"])["error"]
     assert "exceeds the policy limit of 8" in err
-    assert studio.store.rounds(state="generating") == []  # 没有偷偷改成 8 张
+    assert studio.store.rounds(state="generating") == []  # not quietly changed to 8 images
 
 
 def test_user_override_policy_file(env, tmp_path):
@@ -252,7 +254,7 @@ def test_user_override_policy_file(env, tmp_path):
         {"tool_calls": [call("propose_selection", {"round_id": rnd["id"], "idx": 1})]},
         {"text": "ok"},
     )
-    b.inbound("web", "就用 #1", lambda t, b=None: None)  # 策略 always：即使点名也要按钮
+    b.inbound("web", "就用 #1", lambda t, b=None: None)  # policy always: buttons even when named
     run_all(b)
     assert studio.store.get_round(rnd["id"])["state"] == "review"
 
@@ -260,7 +262,7 @@ def test_user_override_policy_file(env, tmp_path):
 def test_oom_retries_once_with_same_seeds_then_returns_to_llm(make_orch):
     from conftest import FakeComfy
 
-    fake = FakeComfy(fail=True)  # 执行端报 "OOM"
+    fake = FakeComfy(fail=True)  # the executor reports "OOM"
     studio = Studio(make_orch(fake), round_size=1)
     script = Script(
         {"tool_calls": [call("queue_round", {"template": "flux2-t2i", "prompt": "x", "n": 1})]},
@@ -279,7 +281,8 @@ def test_oom_retries_once_with_same_seeds_then_returns_to_llm(make_orch):
     seed = studio.store.round_tasks(first["id"])[0]["params"]["seed"]
     drain(studio)
     a.runtime.on_round_ready(studio.store.get_round(first["id"]))
-    retry = studio.store.rounds(state="generating")[0]  # 策略：同参数同种子重试 1 次，LLM 不参与
+    # policy: retry once with the same parameters and seed, without the LLM
+    retry = studio.store.rounds(state="generating")[0]
     assert retry["parent_round"] == first["id"] and len(script.seen) == 2
     assert studio.store.round_tasks(retry["id"])[0]["params"]["seed"] == seed
     drain(studio)
@@ -302,14 +305,14 @@ def test_pipeline_runs_steps_without_waking_llm(env):
     run_all(a)
     drain(studio)
     first = studio.store.rounds(state="review")[0]
-    a.runtime.on_round_ready(first)  # 第 1 步完成 → 策略 auto_next
+    a.runtime.on_round_ready(first)  # step 1 done → policy auto_next
     video = studio.store.rounds(state="generating")[0]
     assert video["template"] == "h3-i2v" and video["parent_round"] == first["id"]
     img_task = studio.store.round_tasks(first["id"])[0]
     assert studio.store.round_tasks(video["id"])[0]["params"]["image"].endswith(
         img_task["outputs"][0]["file"]
     )
-    assert len(script.seen) == 1  # 中间没有唤醒 LLM
+    assert len(script.seen) == 1  # the LLM was not woken in between
     drain(studio)
     a.runtime.on_round_ready(studio.store.get_round(video["id"]))
     run_all(a)
@@ -330,10 +333,11 @@ def test_finished_runs_are_compact_and_stable_across_runs(env):
         a.inbound("web", text, lambda t, b=None: None)
         run_all(a)
     two, three = script.seen[2], script.seen[3]
-    # 第 1 次运行压成 [原话, 最终回复]，不再带工具往来
+    # run 1 is folded into [your words, final reply], without the tool exchange
     assert two[1] == {"role": "user", "content": "## User\none"}
     assert two[2] == {"role": "assistant", "content": "first answer"}
-    assert three[:3] == two[:3]  # 之后每次请求，这部分逐字不变（缓存可命中）
+    # in every later request this part is verbatim the same (cache hits)
+    assert three[:3] == two[:3]
 
 
 def test_queue_and_runs_api(env):
@@ -378,7 +382,7 @@ def test_cancelled_round_releases_waiting_run(env):
 
 
 def test_parked_message_tells_you_once_and_resumes_when_film_ends(env):
-    """Telegram 来一句话时正在拍片：告诉你在排队（只说一次），拍完自动接着处理。"""
+    """A Telegram message arrives while a film is shooting: tell you it is queued (only once), continue automatically when shooting ends."""
     studio, make, said = env
     a, script = make({"text": "answer"})
     rm = studio.orch.resources
@@ -388,12 +392,13 @@ def test_parked_message_tells_you_once_and_resumes_when_film_ends(env):
     assert last_run(studio)["status"] == "waiting_resources" and script.seen == []
     parked = [t for t, _ in said if "FreeVideo" in t]
     assert len(parked) == 1
-    a.runtime.on_resources_freed()  # 别的渲染结束也会唤醒：仍在拍片 → 继续排队，不重复通知
+    # other renders ending also wake it: still shooting → keep waiting, no repeated notice
+    a.runtime.on_resources_freed()
     run_all(a)
     assert len([t for t, _ in said if "FreeVideo" in t]) == 1 and script.seen == []
     status = a.status_text()
     assert "1" in status.split("Agent")[1] and "Film shooting: 1" in status
-    rm.films_shooting(set())  # 拍完 → 唤醒等待者
+    rm.films_shooting(set())  # shooting done → wake the waiters
     run_all(a)
     assert last_run(studio)["status"] == "done" and len(script.seen) == 1
     texts = [t for t, _ in said]

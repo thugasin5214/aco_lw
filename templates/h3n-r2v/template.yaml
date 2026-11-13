@@ -4,8 +4,8 @@ model: minimax-h3-native
 source: comfyui_workflow_templates/video_minimax_h3_r2v.json（改写成 API 格式；4 张参考图）
 release_after: free
 output_prefix: {node: "29", field: filename_prefix}
-# 参考图在提示词里依次是 <Picture 1>…<Picture 4>（与 FreeVideo 的 Ref2VA 写法一致）。
-# turbo：LoRA 强度 1 + steps 4；全量：强度 0 + steps 20。
+# reference images are <Picture 1>…<Picture 4> in order in the prompt (same as FreeVideo's Ref2VA).
+# turbo: LoRA strength 1 + 4 steps; full: strength 0 + 20 steps.
 slots:
   prompt:   {node: "20", field: prompt, type: str}
   image:    {node: "11", field: image, type: image, required: true}
@@ -14,8 +14,8 @@ slots:
   image4:   {node: "14", field: image, type: image, required: true}
   width:    {node: "20", field: width, type: int, min: 256, max: 1920, multiple_of: 32}
   height:   {node: "20", field: height, type: int, min: 256, max: 1920, multiple_of: 32}
-  frames:   {node: "20", field: length, type: int, min: 22, max: 362}   # 24 fps；须为 17k+5（124≈5 s，226≈9.4 s）
-  ref_size: {node: "20", field: ref_image_size, type: str}               # match / max（max 身份更准、更慢）
+  frames:   {node: "20", field: length, type: int, min: 22, max: 362}   # 24 fps; must be 17k+5 (124 ≈ 5 s, 226 ≈ 9.4 s)
+  ref_size: {node: "20", field: ref_image_size, type: str}               # match / max (max keeps identity better, slower)
   seed:     {node: "21", field: noise_seed, type: int, min: 0}
   steps:    {node: "23", field: steps, type: int, min: 2, max: 50}
   turbo:    {node: "2", field: strength_model, type: float, min: 0, max: 1}

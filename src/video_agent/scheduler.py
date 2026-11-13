@@ -1,7 +1,7 @@
-"""确定性编排器：所有执行端（ComfyUI 等）的副作用只经这里、经 Executor 接口发生。
+"""Deterministic orchestrator: every side effect on an executor (ComfyUI etc.) happens only here, through the Executor interface.
 
-一个任务：草稿 → 已校验 → 等待内存 → 已提交 → 生成中 → 待审阅 → 完成 / 打回 / 失败 / 超时。
-prompt_id 先落库再提交；重启后按 prompt_id 去 /history 与 /queue 对账，永不自动重提。
+A task: draft → validated → waiting for memory → submitted → running → review → done / rejected / failed / timeout.
+The prompt_id is stored before submitting; after a restart we reconcile by prompt_id against /history and /queue, never resubmitting automatically.
 """
 
 from __future__ import annotations
@@ -24,8 +24,9 @@ from .render import params_hash, resolve
 from .resources import ResourceManager
 from .store import Store
 
-HARD_LIMIT_S = 24 * 3600  # 有心跳也最多盯这么久
-LOST_POLLS = 5  # 连续几次在队列与历史里都找不到，才认定任务丢失
+HARD_LIMIT_S = 24 * 3600  # with heartbeats, watch at most this long
+# missing from both queue and history this many times in a row before the task is declared lost
+LOST_POLLS = 5
 
 
 class SchedulerBusy(RuntimeError):
@@ -50,12 +51,14 @@ class Orchestrator:
     ):
         self.cfg = cfg
         self.executors: dict[str, Executor] = get_executors(cfg, comfy)
-        self.comfy = self.executors["comfy"].comfy  # 兼容：取消 / 状态等仍需直接访问的地方
+        # compatibility: cancel / status etc. still need direct access
+        self.comfy = self.executors["comfy"].comfy
         self.store = store or Store(cfg.db_path, cfg.jobs_dir)
         self.registry = registry or Registry.from_settings(cfg)
         self.log = log
         self.sleep = sleep
-        self.on_llm_restored: Callable[[], None] | None = None  # 由 daemon 注入：恢复后预热会话缓存
+        # injected by the daemon: prewarm the session cache after a restore
+        self.on_llm_restored: Callable[[], None] | None = None
         self.resources = ResourceManager(cfg, self.registry, self.store, log, sleep)
         self.resources.executors = self.executors
 
@@ -64,7 +67,7 @@ class Orchestrator:
             raise ValueError(f"{t.name}: 未知执行端 {t.executor}")
         return self.executors[t.executor]
 
-    # ---- 串行锁：同一时刻只有一个编排器进程在提交/对账 ----
+    # ---- serial lock: only one orchestrator process submits / reconciles at a time ----
     @contextlib.contextmanager
     def lock(self) -> Iterator[None]:
         with self.cfg.lock_path.open("w") as f:
@@ -74,7 +77,7 @@ class Orchestrator:
                 raise SchedulerBusy("另一个编排器进程正在运行；未提交新任务") from None
             yield
 
-    # ---- 创建 ----
+    # ---- create ----
     def create(
         self,
         template: str,
@@ -122,7 +125,7 @@ class Orchestrator:
         return task
 
     def resolve_ref(self, value: str, project_id: str | None) -> str:
-        """图片引用：`@pack:角色` → 项目基准包最新版本里的文件；`@task:ID` → 该任务第一张图。"""
+        """Image references: `@pack:role` → the file in the latest baseline pack of the project; `@task:ID` → that task's first image."""
         if value.startswith("@pack:"):
             role = value[len("@pack:") :]
             pack = self.store.pack(project_id) if project_id else None
@@ -149,7 +152,7 @@ class Orchestrator:
 
     @staticmethod
     def _video_frame(video: Path) -> Path:
-        """视频任务用作参考图时，取中间一帧（缓存在任务目录）。"""
+        """When a video task is used as a reference image, take its middle frame (cached in the task directory)."""
         frame = video.with_name(video.stem + "_mid.png")
         if frame.exists():
             return frame
@@ -190,7 +193,7 @@ class Orchestrator:
         return frame
 
     def _inherit_image(self, t: Template, params: dict, parent: dict) -> None:
-        """子任务未指定图片时，用父任务的第一张图片产物（例如定妆图 → 图生视频）。"""
+        """When a child task has no image, use the parent's first image output (e.g. casting image → image-to-video)."""
         slot = next((n for n, s in t.slots.items() if s.type == "image"), None)
         if slot is None or slot in params:
             return
@@ -199,7 +202,7 @@ class Orchestrator:
             raise ValueError(f"父任务 {parent['id']} 没有图片产物可用作 {slot}")
         params[slot] = str(self.store.task_dir(parent["id"]) / img["file"])
 
-    # ---- 执行 ----
+    # ---- execute ----
     def execute(self, task_id: str) -> dict:
         with self.lock():
             return self._execute(task_id)
@@ -212,7 +215,8 @@ class Orchestrator:
 
         try:
             prepared = ex.prepare(t, task)
-        except Exception as e:  # noqa: BLE001 — 校验失败的任何原因都记录后终止
+        # any validation failure is recorded, then the task ends
+        except Exception as e:  # noqa: BLE001
             return self.store.transition(task_id, "failed", f"校验失败：{e}", error=str(e))
         for name, text in prepared.artifacts.items():
             (tdir / name).write_text(text)
@@ -242,7 +246,7 @@ class Orchestrator:
                     task_id, "timeout", "内存门控等待超时，未提交", error="memory gate timeout"
                 )
             job_id = str(uuid.uuid4())
-            self.store.update(task_id, prompt_id=job_id)  # 先落库再提交
+            self.store.update(task_id, prompt_id=job_id)  # store first, then submit
             try:
                 ex.submit(prepared, job_id)
             except Exception as e:  # noqa: BLE001
@@ -258,7 +262,8 @@ class Orchestrator:
         job_id = task["prompt_id"]
         start = time.monotonic()
         lost = 0
-        # 观察时限随预计耗时放大（未实测的大档位可能要几个小时），至少保留配置值
+        # the watch limit scales with the expected duration (unmeasured big tiers may take hours),
+        # at least the configured value
         est = self.resources.estimator.estimate(
             self.registry.template(task["template"]), task["tier"]
         )
@@ -276,7 +281,8 @@ class Orchestrator:
                 if task["state"] == "submitted" and poll.state == "running":
                     self.store.transition(task_id, "running")
                 elapsed = time.monotonic() - start
-                # 执行端还报心跳（预计耗时常常不准）就继续盯，直到硬上限
+                # while the executor still sends heartbeats (estimates are often off), keep watching
+                # up to the hard limit
                 if elapsed > limit and not (poll.alive and elapsed < HARD_LIMIT_S):
                     poll = None
                     break
@@ -312,7 +318,7 @@ class Orchestrator:
             )
         outputs = ex.collect(job_id, poll.result, self.store.task_dir(task_id), metrics)
         self.store.update(task_id, metrics=metrics)
-        if not outputs:  # 报告完成却没有产物：按失败处理，别进待审阅
+        if not outputs:  # reported done but no outputs: treat as failed, do not put it into review
             msg = f"{ex.name} reported success but produced no output"
             return self.store.transition(task_id, "failed", msg, error=msg)
         return self.store.transition(
@@ -321,19 +327,20 @@ class Orchestrator:
 
     def _after(self, t: Template, ex: Executor, unloaded_llm: bool) -> None:
         if self.registry.model_of(t).resource == "cpu":
-            return  # 没占内存闸门，也就没有要还的
+            return  # it never held the memory gate, so there is nothing to give back
         released = False
         if t.release_after == "free":
             released = ex.release()
             self.log(f"{ex.name} {'released' if released else 'busy; release skipped'}")
         self.resources.render_done(t, released, unloaded_llm, self.on_llm_restored)
 
-    # ---- 恢复 ----
+    # ---- recovery ----
     def recover(self) -> list[tuple[str, str]]:
-        """进程重启后对账；只观察与收集，不重新提交。"""
+        """Reconcile after a process restart; only observe and collect, never resubmit."""
         results = []
         with self.lock():
-            # 排队中（draft）的任务从未发出过：原样留在队列里，重启后照常执行
+            # queued (draft) tasks were never sent: they stay in the queue and run as usual after
+            # the restart
             stuck = self.store.by_state(
                 "validated", "waiting_memory", "submitted", "running", "timeout"
             )
@@ -342,7 +349,7 @@ class Orchestrator:
         return results
 
     def reconcile_timeouts(self) -> list[tuple[str, str]]:
-        """把“观察超时”但执行端已跑完的任务收回来（不阻塞：还在跑的留到下次）。"""
+        """Collect tasks whose watch timed out but whose executor has finished (non-blocking: still-running ones wait for next time)."""
         out = []
         for task in self.store.by_state("timeout"):
             if not task["prompt_id"]:
@@ -380,12 +387,12 @@ class Orchestrator:
         self.store.transition(tid, "failed", f"{ex.name} 中找不到该任务；不自动重提", error="lost")
         return "failed（找不到）"
 
-    # ---- 审阅与释放 ----
+    # ---- review and release ----
     def review(self, task_id: str, accept: bool, note: str | None = None) -> dict:
         return self.store.transition(task_id, "done" if accept else "rejected", note)
 
     def release(self) -> None:
-        """释放所有空闲执行端的模型；有执行端忙则抛错（不动别人的任务）。"""
+        """Release models of all idle executors; raise if one is busy (other people's tasks are never touched)."""
         from .comfy import ComfyBusy
 
         busy = [name for name, ex in self.executors.items() if not ex.release()]

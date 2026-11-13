@@ -1,4 +1,4 @@
-"""测试用的 stdio MCP 服务：search（只读）与 post（有副作用）。"""
+"""A stdio MCP server for tests: search (read-only) and post (has side effects)."""
 
 import json
 import sys
