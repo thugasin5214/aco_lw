@@ -101,6 +101,10 @@ M: dict[str, tuple[str, str]] = {
         "Deleted {rounds} round(s), {tasks} task(s) and their files ({freed_mb} MB).",
         "已删除 {rounds} 轮、{tasks} 个任务及其文件（{freed_mb} MB）。",
     ),
+    "delete_production_running": (
+        "Production “{p}” has a stage running; pause it first",
+        "制片「{p}」有阶段正在跑，先暂停再删",
+    ),
     "log_kept": (
         " Kept {n} item(s) still used by production(s): {p}.",
         "保留了 {n} 项进行中制片仍在使用的：{p}。",

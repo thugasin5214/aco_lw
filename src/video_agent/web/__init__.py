@@ -402,6 +402,21 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
     def purge_project(project_id: str, scope: str = Body("review", embed=True)) -> dict:
         return guard(lambda: studio.purge_project(project_id, scope))
 
+    @app.post("/api/projects/{project_id}/delete")
+    def delete_project(project_id: str, confirm: str = Body("", embed=True)) -> dict:
+        p = store.get_project(project_id)
+        if p is None:
+            raise HTTPException(404, f"No project {project_id}.")
+        if confirm != p["name"]:  # 不可恢复：要求回填项目名
+            raise HTTPException(400, "confirm must be the project name")
+        return guard(lambda: studio.delete_project(project_id))
+
+    @app.post("/api/tasks/delete")
+    def delete_tasks(ids: list[str] = Body(..., embed=True)) -> dict:  # noqa: B008
+        if not ids:
+            raise HTTPException(400, "no ids")
+        return guard(lambda: studio.delete_tasks(ids))
+
     @app.post("/api/rounds/{round_id}/redo")
     def redo(round_id: str) -> dict:
         return guard(lambda: studio.redo(round_id, origin="web"))

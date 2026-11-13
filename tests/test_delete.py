@@ -125,3 +125,82 @@ def test_old_versions_in_an_active_production_do_not_block_purge(studio):  # noq
     assert [t["id"] for t in st.round_tasks(used["id"])] == [pick]  # 只留制片用的那张
     assert len(st.round_tasks(waiting["id"])) == 3  # 制片还在审阅：整轮保留
     assert out["kept_for_productions"] == 2 and out["kept_productions"] == ["Film"]
+
+
+def test_delete_selected_tasks_skips_busy_and_production_use(studio):  # noqa: F811
+    r1 = studio.start_round("flux2-t2i", {"prompt": "a", "seed": 1})
+    r2 = studio.start_round("flux2-t2i", {"prompt": "b", "seed": 10})
+    drain(studio)
+    st = studio.store
+    t1 = [t["id"] for t in st.round_tasks(r1["id"])]
+    t2 = [t["id"] for t in st.round_tasks(r2["id"])]
+    prod = st.create_production(r1["project_id"], "film", "Film", {})
+    st.add_artifact(prod["id"], "clips", "sh01", "review", round_id=r2["id"])
+    queued = studio.start_round("flux2-t2i", {"prompt": "c", "seed": 20})  # 还没跑：排队中
+    tq = st.round_tasks(queued["id"])[0]["id"]
+    out = studio.delete_tasks([*t1, t2[0], tq, "nope"])
+    assert out["tasks"] == 3 and out["rounds"] == 1  # r1 删空 → 轮也删
+    assert out["skipped_busy"] == 1 and out["kept_for_productions"] == 1
+    assert st.get_round(r1["id"]) is None and len(st.round_tasks(r2["id"])) == 3
+    assert st.get(tq) is not None
+
+
+def test_delete_project_removes_everything(studio, tmp_path):  # noqa: F811
+    rnd = studio.start_round("flux2-t2i", {"prompt": "a", "seed": 1})
+    drain(studio)
+    st = studio.store
+    pid = rnd["project_id"]
+    studio.select(rnd["id"], 1, role="主角")  # 基准包
+    studio.add_memory("记住这个")
+    studio.log("web", "in", "你好", pid)
+    sess = studio.current_session(pid)
+    run = st.create_run(pid, sess["id"], "web", "x")
+    st.add_agent_msg(run["id"], "user", "x")
+    st.update_run(run["id"], status="done")
+    prod = st.create_production(pid, "film", "Film", {})
+    st.add_artifact(prod["id"], "clips", "sh01", "current", round_id=rnd["id"])
+    data = st.jobs_dir.parent
+    for d in (
+        data / "productions" / prod["id"],
+        data / "agent-work" / run["id"],
+        data / "uploads" / pid,
+    ):
+        d.mkdir(parents=True)
+        (d / "f.bin").write_bytes(b"x" * 10)
+    other = studio.new_project("别的项目")
+    keep = studio.start_round("flux2-t2i", {"prompt": "z", "seed": 5}, project_id=other["id"])
+    drain(studio)
+    out = studio.delete_project(pid)
+    assert out["tasks"] == 3 and out["productions"] == 1 and out["sessions"] >= 1
+    assert st.get_project(pid) is None and st.rounds(pid) == [] and st.list(100, pid) == []
+    assert st.sessions(pid) == [] and st.memories(pid) == [] and st.pack(pid) is None
+    assert st.productions(pid) == [] and st.get_run(run["id"]) is None
+    assert not (data / "productions" / prod["id"]).exists()
+    assert not (data / "packs" / pid).exists() and not (data / "uploads" / pid).exists()
+    assert len(st.round_tasks(keep["id"])) == 3  # 别的项目不动
+
+
+def test_delete_project_refuses_while_busy(studio):  # noqa: F811
+    rnd = studio.start_round("flux2-t2i", {"prompt": "a", "seed": 1})  # 排队中
+    with pytest.raises(StudioError):
+        studio.delete_project(rnd["project_id"])
+
+
+def test_delete_project_api_needs_the_name(studio):  # noqa: F811
+    from fastapi.testclient import TestClient
+
+    from video_agent.daemon import Actions
+    from video_agent.planner import Planner
+    from video_agent.web import create_app
+
+    rnd = studio.start_round("flux2-t2i", {"prompt": "a", "seed": 1})
+    drain(studio)
+    a = Actions(studio, Planner(studio.orch.cfg, studio.store, studio.orch.registry))
+    c = TestClient(create_app(studio.orch.cfg, a))
+    pid = rnd["project_id"]
+    name = studio.store.get_project(pid)["name"]
+    assert c.post(f"/api/projects/{pid}/delete", json={"confirm": "x"}).status_code == 400
+    ids = [t["id"] for t in studio.store.round_tasks(rnd["id"])][:1]
+    assert c.post("/api/tasks/delete", json={"ids": ids}).json()["tasks"] == 1
+    assert c.post(f"/api/projects/{pid}/delete", json={"confirm": name}).status_code == 200
+    assert studio.store.get_project(pid) is None

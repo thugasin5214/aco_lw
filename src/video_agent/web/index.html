@@ -179,7 +179,11 @@ textarea.json{width:100%;min-height:320px;font:12px/1.5 ui-monospace,Menlo,monos
 .mem:last-child{border-bottom:0}.mem .tx{flex:1;overflow-wrap:anywhere}.mem .pin{color:var(--warn)}
 .mem.arch .tx{color:var(--muted);text-decoration:line-through}
 .gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
-.gallery .item{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.gallery .item{background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden;position:relative}
+.gallery.selecting .item{cursor:pointer}
+.gallery.selecting .item img,.gallery.selecting .item video{pointer-events:none}
+.gallery .item.picked{outline:3px solid var(--accent);outline-offset:-3px}
+.gallery .pick{position:absolute;top:8px;left:8px;width:22px;height:22px;z-index:1;accent-color:var(--accent)}
 .gallery img,.gallery video{width:100%;display:block;background:#000;aspect-ratio:16/10;object-fit:contain}
 .gallery .cap{padding:8px 10px;font-size:12.5px;display:flex;justify-content:space-between;gap:8px}
 .gallery .cap span{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -313,6 +317,7 @@ kbd{font:11.5px ui-monospace,monospace;border:1px solid var(--line);border-radiu
       <button class="tab on" data-kind="all" data-t="all">All</button>
       <button class="tab" data-kind="image" data-t="images">Images</button>
       <button class="tab" data-kind="video" data-t="videos">Videos</button>
+      <span class="sp" style="flex:1"></span><span class="actions" id="gal-tools"></span>
     </div>
     <div class="gallery" id="gallery"></div>
   </section>
@@ -378,6 +383,11 @@ const I18N = {
     "del.task.q": "Delete this output and its files? This cannot be undone.",
     "purge.review": "🗑 Clear pending review · {p} ({n})",
     "purge.review.q": "Delete every candidate still waiting for review in “{p}”, with its files? Approved ones are kept.",
+    "proj.del": "🗑 Delete project", "proj.del.q": "Delete the whole project “{p}”: all {n} outputs and their files, every session and chat, agent history, memory, baseline packs and productions. This cannot be undone.\n\nType the project name to confirm:",
+    "proj.deleted": "Deleted project “{name}”: {tasks} task(s), {sessions} session(s), {productions} production(s), {freed_mb} MB freed", "proj.del.mismatch": "Name did not match; nothing deleted",
+    "gal.select": "☑ Select", "gal.cancel": "Cancel", "gal.all": "Select all shown", "gal.none": "Clear", "gal.del": "🗑 Delete selected ({n})",
+    "gal.del.q": "Delete {n} selected output task(s) and their files? Queued / running ones and ones an active production uses are skipped. This cannot be undone.",
+    "gal.skipped": "; skipped {n} queued / running",
     "purge.unsel": "🗑 Clean up project", "purge.unsel.q": "Delete everything in “{p}” that was not approved (pending, rejected, failed, timed out), with its files? Approved and baseline-pack items are kept.",
     "deleted": "Deleted {rounds} round(s), {tasks} task(s), {freed_mb} MB",
     "kept.prod": "; kept {n} still used by production: {p} (pause or finish it to clean them up)",
@@ -486,6 +496,11 @@ const I18N = {
     "del.task.q": "删除这个产物及其文件？不能恢复。",
     "purge.review": "🗑 清空待审阅 · {p}（{n}）",
     "purge.review.q": "删除「{p}」里所有待审阅的候选及其文件？已通过的保留。",
+    "proj.del": "🗑 删除项目", "proj.del.q": "删除整个项目「{p}」：全部 {n} 个产物及其文件、所有会话与对话、agent 记录、记忆、基准包和制片。删除后无法恢复。\n\n请输入项目名确认：",
+    "proj.deleted": "已删除项目「{name}」：{tasks} 个任务、{sessions} 个会话、{productions} 个制片，释放 {freed_mb} MB", "proj.del.mismatch": "项目名不一致，未删除",
+    "gal.select": "☑ 多选", "gal.cancel": "取消", "gal.all": "全选当前", "gal.none": "清空", "gal.del": "🗑 删除所选（{n}）",
+    "gal.del.q": "删除所选的 {n} 个产物任务及其文件？排队 / 生成中的、进行中制片在用的会跳过。删除后无法恢复。",
+    "gal.skipped": "；跳过 {n} 个排队 / 生成中的",
     "purge.unsel": "🗑 清理本项目", "purge.unsel.q": "删除「{p}」里所有没通过的产物（待审阅、打回、失败、超时）及其文件？已通过的和基准包里的保留。",
     "deleted": "已删除 {rounds} 轮、{tasks} 个任务，释放 {freed_mb} MB",
     "kept.prod": "；保留了 {n} 项进行中制片仍在使用的：{p}（暂停或完成该制片后可再清理）",
@@ -1148,7 +1163,8 @@ async function loadProject(force){
   $("#pdetail").innerHTML = `<h2>${esc(p.name)} ${badge(p.state)}<span class="sp"></span>
       ${isCurrentProject ? `<span class="badge ok">${t("current")}</span>` : `<button class="btn" onclick="act('/api/projects/${esc(p.id)}/use', {})">${t("set.current")}</button>`}
       ${p.state === "active" ? `<button class="btn" onclick="if(confirm(t('confirm.done'))) act('/api/projects/${esc(p.id)}/done', {})">${t("mark.done")}</button>` : ""}
-      <button class="btn danger" onclick="purge('${esc(p.id)}', 'unselected')">${t("purge.unsel")}</button></h2>
+      <button class="btn danger" onclick="purge('${esc(p.id)}', 'unselected')">${t("purge.unsel")}</button>
+      <button class="btn danger" onclick="delProject('${esc(p.id)}')">${t("proj.del")}</button></h2>
     <div class="hint">${t("p.created", {a: fmtT(p.created), b: fmtT(p.updated)})}${p.note ? " · " + esc(p.note) : ""}</div>
     <div class="ptabs">${tabs}</div>${body}`;
   const nc = $("#pdetail .chat"); if (nc && (atBottom || force)) nc.scrollTop = nc.scrollHeight;
@@ -1346,11 +1362,44 @@ function renderQueue(q){
 }
 
 /* ================= gallery ================= */
+let galSel = null;  // null = 不在多选；Set(task id)
+const DELETABLE = ["review","done","rejected","failed","timeout"];
+function galItems(){ return TASKS.flatMap(tk => (tk.outputs || []).map(o => ({tk, o}))).filter(x => galleryKind === "all" || x.o.kind === galleryKind); }
+function renderGalTools(){
+  const el = $("#gal-tools"); if (!el) return;
+  $("#gallery").classList.toggle("selecting", !!galSel);
+  el.innerHTML = !galSel ? `<button class="btn sm" onclick="galSel=new Set();renderGallery()">${t("gal.select")}</button>`
+    : `<button class="btn sm" onclick="galAll()">${t("gal.all")}</button><button class="btn sm" onclick="galSel.clear();renderGallery()">${t("gal.none")}</button>
+       <button class="btn sm danger" ${galSel.size ? "" : "disabled"} onclick="galDelete()">${t("gal.del", {n: galSel.size})}</button>
+       <button class="btn sm" onclick="galSel=null;renderGallery()">${t("gal.cancel")}</button>`;
+}
+function galAll(){ galItems().forEach(({tk}) => DELETABLE.includes(tk.state) && galSel.add(tk.id)); renderGallery(); }
+function galPick(id){ if (!galSel) return; galSel.has(id) ? galSel.delete(id) : galSel.add(id); renderGallery(); }
+async function galDelete(){
+  const ids = [...galSel]; if (!ids.length || !confirm(t("gal.del.q", {n: ids.length}))) return;
+  try {
+    const r = await api("/api/tasks/delete", {ids});
+    toast(t("deleted", r) + (r.skipped_busy ? t("gal.skipped", {n: r.skipped_busy}) : "") + (r.kept_for_productions ? t("kept.prod", {n: r.kept_for_productions, p: (r.kept_productions || []).join(", ")}) : ""));
+    galSel = new Set(); keys.gal = ""; refreshAll(true);
+  } catch(e){ toast(t("not.done") + e.message, true); }
+}
+async function delProject(pid){
+  const p = PROJECTS.find(x => x.id === pid) || PDATA || {name: pid};
+  const typed = prompt(t("proj.del.q", {p: p.name, n: p.tasks ?? "?"}));
+  if (typed === null) return;
+  if (typed.trim() !== p.name) return toast(t("proj.del.mismatch"), true);
+  try {
+    const r = await api(`/api/projects/${encodeURIComponent(pid)}/delete`, {confirm: p.name});
+    toast(t("proj.deleted", r)); selProject = null; selSession = null; refreshAll(true); loadProject(true);
+  } catch(e){ toast(t("not.done") + e.message, true); }
+}
 function renderGallery(){
-  const items = TASKS.flatMap(tk => (tk.outputs || []).map(o => ({tk, o}))).filter(x => galleryKind === "all" || x.o.kind === galleryKind);
-  $("#gallery").innerHTML = items.length ? items.map(({tk, o}) => `<div class="item">${media(tk, o)}
+  const items = galItems();
+  if (galSel) for (const id of [...galSel]) if (!TASKS.some(tk => tk.id === id)) galSel.delete(id);
+  renderGalTools();
+  $("#gallery").innerHTML = items.length ? items.map(({tk, o}) => `<div class="item ${galSel?.has(tk.id) ? "picked" : ""}" ${galSel && DELETABLE.includes(tk.state) ? `onclick="galPick('${esc(tk.id)}')"` : ""}>${galSel && DELETABLE.includes(tk.state) ? `<input type="checkbox" class="pick" aria-label="select" ${galSel.has(tk.id) ? "checked" : ""} onclick="event.stopPropagation();galPick('${esc(tk.id)}')">` : ""}${media(tk, o)}
       <div class="cap"><span title="${esc(tk.title || tk.template)}">${esc(tk.title || tk.template)}</span>${badge(tk.state)}
-        ${["review","done","rejected","failed","timeout"].includes(tk.state) ? `<button class="btn sm danger" title="${esc(t("del"))}" onclick="delTask('${esc(tk.id)}')">🗑</button>` : ""}</div></div>`).join("")
+        ${!galSel && DELETABLE.includes(tk.state) ? `<button class="btn sm danger" title="${esc(t("del"))}" onclick="delTask('${esc(tk.id)}')">🗑</button>` : ""}</div></div>`).join("")
     : `<div class="empty">${t("no.outputs")}</div>`;
 }
 

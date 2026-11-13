@@ -557,6 +557,33 @@ class Store:
             self.db.execute("DELETE FROM rounds WHERE id=?", (round_id,))
 
     @_locked
+    def delete_project_rows(self, project_id: str) -> dict:
+        """删项目的全部记录：会话 / 消息 / agent 运行、记忆、基准包、制片、上传、项目本身。
+        任务与轮次由调用方连同文件先删。返回 agent 运行 ID 与制片 ID（调用方删对应目录）。"""
+        q = self._rows
+        runs = [r["id"] for r in q("SELECT id FROM agent_runs WHERE project_id=?", (project_id,))]
+        sess = [r["id"] for r in q("SELECT id FROM sessions WHERE project_id=?", (project_id,))]
+        prods = [r["id"] for r in q("SELECT id FROM productions WHERE project_id=?", (project_id,))]
+        with self.db:
+            x = self.db.execute
+            for rid in runs:
+                x("DELETE FROM agent_msgs WHERE run_id=?", (rid,))
+            x("DELETE FROM agent_runs WHERE project_id=?", (project_id,))
+            for sid in sess:
+                x("DELETE FROM kv WHERE key=?", (f"agent_upto:{sid}",))
+            x("DELETE FROM messages WHERE project_id=?", (project_id,))
+            x("DELETE FROM sessions WHERE project_id=?", (project_id,))
+            x("DELETE FROM memories WHERE project_id=?", (project_id,))
+            x("DELETE FROM packs WHERE project_id=?", (project_id,))
+            for pid in prods:
+                x("DELETE FROM artifacts WHERE production_id=?", (pid,))
+            x("DELETE FROM productions WHERE project_id=?", (project_id,))
+            x("DELETE FROM uploads WHERE project_id=?", (project_id,))
+            x("DELETE FROM kv WHERE key=?", (f"session:{project_id}",))
+            x("DELETE FROM projects WHERE id=?", (project_id,))
+        return {"runs": runs, "productions": prods, "sessions": len(sess)}
+
+    @_locked
     def active_production_refs(self, round_ids: list[str], task_ids: list[str]) -> list[dict]:
         """进行中的制片还在用的产物（删了会让制片缺图）。
 
