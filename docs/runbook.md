@@ -87,6 +87,7 @@ Ready when you see `Telegram listener started (whitelist [...])` and `Console: h
 | `/memory` · `/memory add TEXT` · `/memory del ID` | Project memory |
 | `/pack` | Current baseline pack |
 | `/model [NAME]` | Show / switch the agent's brain (local or online, see §3.10) |
+| `/llm` · `/llm use NAME` · `/llm load` · `/llm unload` | List the downloaded local models; switch aco's local model (unloads the old one, checks memory, tells you when loaded). Same as `va llm …` on the command line |
 | `/permissions [default\|bypass\|forget RULE\|all]` | Approval mode and always-allow rules (see §3.10) |
 | `/fv TASK` | Hand a video task to the FreeVideo agent |
 | `/whoami` | Show your chat_id (works for anyone; used to set up the whitelist) |
@@ -180,7 +181,7 @@ Free text goes to the agent. The LLM only **proposes** tool calls; the orchestra
 | `delegate_agent` | Hand a sub-task to Claude Code / Codex and wait for the report | Yes; needs `allow_online` |
 | `delegate_freevideo` (`/fv`) | Hand a whole video task to the FreeVideo agent | Yes; needs `freevideo_agent_online` |
 
-**Hard refusals (in every mode)**: direct ComfyUI `:8188`, reading the FreeVideo token, `kill` / `pkill`, `lms load|unload`. The execution policy is `policies.yaml` (per-tool switches, limits, MCP approval rules).
+**Hard refusals (in every mode)**: direct ComfyUI `:8188`, reading the FreeVideo token, `kill` / `pkill`. Loading / switching the LLM (`va llm use`, `lms load`) is an ordinary approved command. Commands can carry `memory_gib` / `exclusive`; after approval the orchestrator starts them only when that much memory is free (waiting for a video, unloading the LLM for exclusive ones), and the approval message shows the estimate. The execution policy is `policies.yaml` (per-tool switches, limits, MCP approval rules).
 
 **Permission modes** (like Claude Code's permission modes):
 - `default`: actions that need approval come with buttons **✅ Approve / ✅ Always (rule) / ✕ No**. *Always* stores a rule so the same kind is not asked again: commands by program (`cmd:ffmpeg`, single commands only — no pipes, chaining or redirection), MCP by tool (`mcp:exa.web_search_exa`), hand-overs by target (`delegate:codex`), unmeasured video tiers by template (`round:h3-t2v`).
