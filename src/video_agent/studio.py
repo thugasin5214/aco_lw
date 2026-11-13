@@ -100,7 +100,15 @@ class Studio:
         if scope not in ("review", "unselected"):
             raise StudioError("scope must be review or unselected")
         states = {"review"} if scope == "review" else {"review", "rejected", "failed", "timeout"}
-        tasks = [t for t in self.store.list(1_000_000, project_id) if t["state"] in states]
+        all_tasks = self.store.list(1_000_000, project_id)
+        # 审阅页显示的是“待审阅的轮”：其中的候选可能全是失败的，也要一起删
+        review_rounds = {r["id"] for r in self.store.rounds(project_id, "review")}
+        tasks = [
+            t
+            for t in all_tasks
+            if t["state"] in states
+            or (t["round_id"] in review_rounds and t["state"] not in self.BUSY | {"done"})
+        ]
         rounds = {t["round_id"] for t in tasks if t["round_id"]}
         used = self.store.active_production_refs(list(rounds), [t["id"] for t in tasks])
         # 制片采用的版本（current + task_id）：只留被选中的那个候选，同轮其他没选的照删；
