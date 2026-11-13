@@ -300,5 +300,59 @@ def mode(value: Annotated[str | None, typer.Argument()] = None) -> None:
     typer.echo(f"{pl.mode}：{MODES[pl.mode]}")
 
 
+@app.command("llm")
+def llm_cmd(
+    action: Annotated[str, typer.Argument(help="list | use | load | reload | unload")] = "list",
+    model: Annotated[
+        str | None, typer.Argument(help="model key, list number or unique part")
+    ] = None,
+) -> None:
+    """Local LLM via the running daemon: list models, switch aco's model (unloads the previous one), load / unload.
+
+    Goes through the daemon so its resource state stays right (memory check, waits for answers to finish).
+    """
+    import httpx
+
+    cfg = config.load()
+    base = f"http://127.0.0.1:{cfg.web_port}"
+    try:
+        if action == "list":
+            st = httpx.get(f"{base}/api/llm", timeout=30).json()
+            loaded = {m["id"] for m in st["loaded"]}
+            for i, m in enumerate(st["models"], 1):
+                flags = ("loaded " if m["key"] in loaded else "") + (
+                    "in-use" if m["key"] == st["model"] else ""
+                )
+                size = round((m.get("size") or 0) / 2**30, 1)
+                vision = " vision" if m.get("vision") else ""
+                typer.echo(f"{i}. {m['key']}  {size} GiB{vision}  {flags}".rstrip())
+            return
+        if action == "use":
+            if not model:
+                _fail("usage: va llm use MODEL")
+            r = httpx.post(f"{base}/api/llm/use", json={"model": model, "wait": True}, timeout=900)
+        elif action in ("load", "reload"):
+            r = httpx.post(
+                f"{base}/api/llm/load",
+                json={"reload": action == "reload", "wait": True},
+                timeout=900,
+            )
+        elif action == "unload":
+            r = httpx.post(f"{base}/api/llm/unload", timeout=60)
+        else:
+            _fail(f"unknown action {action}: list | use | load | reload | unload")
+    except httpx.HTTPError as e:
+        _fail(f"daemon not reachable at {base}: {e}")
+    out = r.json()
+    if r.status_code >= 400:
+        _fail(str(out.get("detail", out)))
+    job = out.get("job") or {}
+    if job.get("state") == "error":
+        _fail(f"failed: {job.get('error')}")
+    typer.echo(
+        json.dumps({k: v for k, v in out.items() if k != "job"} | {"seconds": job.get("seconds")})
+    )
+
+
 if __name__ == "__main__":
     app()

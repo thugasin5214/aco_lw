@@ -87,6 +87,7 @@ uv run va daemon 2>&1 | tee -a data/daemon.log
 | `/memory` · `/memory add 文本` · `/memory del 编号` | 项目记忆 |
 | `/pack` | 当前基准包 |
 | `/model [名字]` | 查看 / 切换 agent 的大脑（本地或在线，见 §3.10） |
+| `/llm` · `/llm use 名称` · `/llm load` · `/llm unload` | 列出本机已下载的模型；切换 aco 用的本地模型（先卸载旧的、检查内存，加载好了告诉你）。命令行等价于 `va llm …` |
 | `/permissions [default\|bypass\|forget 规则\|all]` | 审批模式与“始终允许”规则（见 §3.10） |
 | `/fv 任务` | 把视频任务交给 FreeVideo agent |
 | `/whoami` | 显示 chat_id（任何人可用，用于配置白名单） |
@@ -180,7 +181,7 @@ llm_fallback = ["anthropic", "claude_code", "codex"]  # 依次尝试
 | `delegate_agent` | 把子任务交给 Claude Code / Codex，等它汇报 | 要；需 `allow_online` |
 | `delegate_freevideo`（`/fv`） | 整个视频任务交给 FreeVideo agent | 要；需 `freevideo_agent_online` |
 
-**硬拒绝（任何模式都拒绝）**：直连 ComfyUI `:8188`、读 FreeVideo token、`kill` / `pkill` 结束进程、`lms load|unload`。执行策略在 `policies.yaml`（每个工具的开关、参数上限、MCP 审批规则）。
+**硬拒绝（任何模式都拒绝）**：直连 ComfyUI `:8188`、读 FreeVideo token、`kill` / `pkill` 结束进程。加载 / 切换 LLM（`va llm use`、`lms load`）是普通的需审批命令。命令可带 `memory_gib` / `exclusive` 资源预估：批准后编排器等内存够了才执行（会等视频渲染结束；独占时先卸载 LLM），审批消息里显示预估。执行策略在 `policies.yaml`（每个工具的开关、参数上限、MCP 审批规则）。
 
 **权限模式**（类似 Claude Code 的 permission mode）：
 - `default`（默认）：要审批的动作逐条发按钮：**✅ 同意 / ✅ 始终允许（规则）/ ✕ 不要**。“始终允许”记一条规则，以后同类不再问：命令按程序名（`cmd:ffmpeg`，只对不带管道 / 串联 / 重定向的单条命令）、MCP 按工具（`mcp:exa.web_search_exa`）、委托按对象（`delegate:codex`）、未实测视频档位按模板（`round:h3-t2v`）。
