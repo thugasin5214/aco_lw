@@ -228,3 +228,68 @@ def test_prepare_film_does_not_interrupt_an_answer(rm, monkeypatch):
     with rm.llm.inference(), pytest.raises(resources.ResourceBusy):
         rm.prepare_film()
     assert rm.state["unloads"] == 0
+
+
+# ---- Docker-aware resource accounting (read-only visibility) ----
+
+
+def _fake_docker(total=1.85, containers=None, available=True):
+    return {
+        "available": available,
+        "total_gib": total,
+        "containers": containers or [{"name": "lab", "mem_gib": total, "cpu_pct": 0.0}],
+        "error": None,
+    }
+
+
+def test_record_includes_docker_share(rm):
+    rm.docker_probe = lambda: _fake_docker(total=1.85)
+    rm.record()
+    assert rm.history[-1]["docker_gib"] == 1.85
+
+
+def test_record_docker_zero_when_daemon_down(rm):
+    rm.docker_probe = lambda: _fake_docker(available=False, total=0.0)
+    rm.record()
+    assert rm.history[-1]["docker_gib"] == 0.0
+
+
+def test_prepare_render_attaches_docker(rm):
+    rm.docker_probe = lambda: _fake_docker(total=2.0)
+    gate = rm.prepare_render(rm.registry.template("flux2-t2i"), "standard", Ex(), "t1")
+    assert gate.ok and gate.docker["available"] and gate.docker["total_gib"] == 2.0
+
+
+def test_docker_usage_is_cached(rm):
+    calls = {"n": 0}
+
+    def probe():
+        calls["n"] += 1
+        return _fake_docker()
+
+    rm.docker_probe = probe
+    rm.docker_poll_s = 100.0
+    rm.docker_usage()
+    rm.docker_usage()
+    assert calls["n"] == 1  # second call within the window reuses the cache
+
+
+def test_docker_usage_disabled_skips_probe(rm):
+    def boom():
+        raise AssertionError("probe must not run when docker_aware is off")
+
+    rm.docker_probe = boom
+    rm.docker_aware = False
+    assert rm.docker_usage()["available"] is False
+
+
+def test_docker_probe_failure_never_breaks_scheduling(rm):
+    def boom():
+        raise RuntimeError("docker exploded")
+
+    rm.docker_probe = boom
+    usage = rm.docker_usage()
+    assert usage["available"] is False and "exploded" in usage["error"]
+    # and a render still gates normally despite the probe failing
+    gate = rm.prepare_render(rm.registry.template("flux2-t2i"), "standard", Ex(), "t2")
+    assert gate.ok
