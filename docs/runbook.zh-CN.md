@@ -23,21 +23,84 @@
 
 ## 2. 启动与停止
 
-### 启动顺序
-1. **ComfyUI**：确认 http://127.0.0.1:8188 能打开（FreeVideo-local 环境）。
-2. **LM Studio**：应用开着即可；不需要手动加载模型。
-3. **aco_lw**：执行下面的命令。
+### 一共三个服务
+
+| 服务 | 地址 | 作用 |
+|---|---|---|
+| ComfyUI（带 FreeVideo 插件） | http://127.0.0.1:8188 | 出图、出视频。FreeVideo 不是单独的程序，它是 ComfyUI 里的插件，ComfyUI 起来它就在 |
+| LM Studio | http://127.0.0.1:1234 | 本地 LLM（aco 的大脑） |
+| aco（`va daemon`） | http://127.0.0.1:8790 | 编排器 + 控制台 + Telegram |
+
+先开哪个都可以：aco 先起来时会每 30 秒重试连接 ComfyUI，连上之前排队的任务原地等着。
+
+### 1）启动 ComfyUI + FreeVideo
+本机没有装 FreeVideo.app，ComfyUI 用 FreeVideo-local 自带的 Python 直接启动（参数与 FreeVideo 启动器一致，不要改）。
+
+前台运行（开一个终端窗口专门放它，`Ctrl-C` 停止）：
+
+```sh
+cd ~/Documents/ChatGPT/jev/FreeVideo-local/ComfyUI
+../envs/comfyui-630aa60d8624e901/bin/python main.py --listen 127.0.0.1 --port 8188
+```
+
+后台运行（关掉终端也不停）：
+
+```sh
+cd ~/Documents/ChatGPT/jev/FreeVideo-local/ComfyUI
+nohup ../envs/comfyui-630aa60d8624e901/bin/python main.py --listen 127.0.0.1 --port 8188 >/dev/null 2>&1 &
+```
+
+- 约 10–20 秒后就绪（实测 18 s，含 aco 一起启动）。检查：`curl -s http://127.0.0.1:8188/system_stats` 有 JSON 返回；或浏览器打开 http://127.0.0.1:8188 。
+- 打开 FreeVideo 面板：浏览器进 http://127.0.0.1:8188 → **工作流 → 浏览模板 → FreeVideo → FreeVideo-All-in-One**；FreeVideo agent 对话在 **Extensions → FreeVideo**。
+- 日志：FreeVideo 插件把 ComfyUI 输出写到 `~/Documents/ChatGPT/jev/FreeVideo-local/launcher/comfy-runs/connected-<时间>-<pid>/comfy.log`（最新的目录就是这次）。
+- 停止：前台 `Ctrl-C`；后台 `pkill -f "ComfyUI/main.py"`。停之前先确认没有在跑的视频，否则那条会中断。
+- `envs/comfyui-<hash>` 目录名以后 FreeVideo 升级可能变；以 `FreeVideo-local/launcher/comfy-host.json` 里的 `python` 为准。
+
+### 2）启动 LM Studio
+打开 LM Studio 应用即可（或终端 `lms server start`）。不需要手动加载模型：aco 用到时自己加载、空闲时卸载。检查：`curl -s http://127.0.0.1:1234/v1/models`。
+
+### 3）启动 aco
+前台运行（`Ctrl-C` 停止，日志同时写进 `data/daemon.log`）：
 
 ```sh
 cd ~/workplace/video-agent
 uv run va daemon 2>&1 | tee -a data/daemon.log
 ```
 
-看到 `Telegram listener started (whitelist [...])` 与 `Console: http://127.0.0.1:8790` 即就绪。启动时会自动对账（`recover`），只收集已完成的任务，**不会重复提交**。
+后台运行：
+
+```sh
+cd ~/workplace/video-agent
+nohup uv run va daemon --port 8790 >> data/daemon.log 2>&1 &
+```
+
+- 就绪标志：日志出现 `Telegram listener started (whitelist [...])` 和 `Console: http://127.0.0.1:8790`。检查：`curl -s http://127.0.0.1:8790/api/system`，返回里 `comfy.online` 为 `true`、`daemon.alive` 为 `true`。
+- 打开控制台：浏览器进 http://127.0.0.1:8790 ；Telegram 直接给 bot 发消息。
+- 启动时会自动对账（`recover`），只收集已完成的任务，**不会重复提交**。ComfyUI 没开时日志会出现 `Startup reconcile failed (ComfyUI offline?)`，开了 ComfyUI 之后自动继续，不用重启 aco。
+- 看日志：`tail -f data/daemon.log`。
+
+### 一键全开（后台）
+
+```sh
+FV=~/Documents/ChatGPT/jev/FreeVideo-local
+(cd $FV/ComfyUI && nohup ../envs/comfyui-630aa60d8624e901/bin/python main.py --listen 127.0.0.1 --port 8188 >/dev/null 2>&1 &)
+(cd ~/workplace/video-agent && nohup uv run va daemon --port 8790 >> data/daemon.log 2>&1 &)
+```
+
+### 看哪些在运行
+
+```sh
+pgrep -fl "ComfyUI/main.py"; pgrep -fl "va daemon"
+curl -s -o /dev/null -w "ComfyUI %{http_code}\n" http://127.0.0.1:8188/system_stats
+curl -s -o /dev/null -w "aco %{http_code}\n" http://127.0.0.1:8790/api/system
+```
+
+两个都是 `200` 就是正常。
 
 ### 停止
-- 在运行 daemon 的终端按 `Ctrl-C`，或 `pkill -f "va daemon"`。
-- 正在 ComfyUI 里跑的任务**不会被取消**；下次启动 daemon 会按 prompt_id 对账并收回产物。
+- aco：前台 `Ctrl-C`；后台 `pkill -f "va daemon"`。
+- 正在 ComfyUI 里跑的任务**不会因为停 aco 而取消**；下次启动 aco 会按 prompt_id 对账并收回产物。
+- 重启 aco 前先看控制台没有“运行中”的任务、agent 没在回答。
 
 ### 只看不跑
 `uv run va serve`：只开控制台（浏览 + 审阅），不出图。排队任务要等 daemon 起来才执行。
@@ -221,7 +284,7 @@ ChatGPT 订阅本身不是 API：用订阅走 `codex`；`openai` 走按量计费
 | 现象 | 检查 | 处理 |
 |---|---|---|
 | 顶栏“daemon 未运行” | `pgrep -fl "va daemon"` | 按 §2 启动；排队任务会自动继续 |
-| “ComfyUI 离线” | 打开 http://127.0.0.1:8188 | 启动 FreeVideo-local 的 ComfyUI；aco_lw 不会自己启动它 |
+| “ComfyUI 离线” | 打开 http://127.0.0.1:8188 | 按 §2「启动 ComfyUI + FreeVideo」启动；aco 不会自己启动它，连上后自动继续 |
 | 任务卡在“等待内存” | 顶栏内存 / 压力；ComfyUI 队列 | 关掉占内存的应用，或 `/cancel`；超过 10 min 会标为超时、不提交 |
 | 任务“超时” | `va status <ID>` 看 prompt_id | 生成可能仍在跑：`va recover` 对账收回；不要手动重提 |
 | 任务“失败” | 控制台详情页的错误 / ComfyUI 终端日志 | 改参数后“重做”；失败的任务允许同参数重提 |

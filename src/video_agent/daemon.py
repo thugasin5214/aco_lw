@@ -14,6 +14,8 @@ import threading
 import time
 from collections.abc import Callable
 
+import httpx
+
 from . import config, i18n, memory
 from .agent import AgentRuntime
 from .comfy import ComfyBusy
@@ -47,12 +49,38 @@ class Worker(threading.Thread):
             False
         )  # True: do not run it yet (e.g. its production is paused)
 
-    def run(self) -> None:
+    def _recover(self) -> bool:
+        """Startup reconcile. False when ComfyUI is unreachable: the caller retries
+        instead of letting the worker thread die (the daemon may start before ComfyUI)."""
         try:
             for tid, outcome in self.orch.recover():
                 log.info("Recovered %s: %s", tid, outcome)
         except SchedulerBusy as e:
             log.warning("Startup reconcile skipped: %s", e)
+        except (httpx.HTTPError, OSError) as e:
+            log.warning("Startup reconcile failed (ComfyUI offline?): %s; retrying in 30 s", e)
+            return False
+        return True
+
+    def _reconcile_timeouts(self) -> None:
+        try:
+            collected = self.orch.reconcile_timeouts()
+        except (httpx.HTTPError, OSError) as e:
+            log.warning("Timeout reconcile failed (ComfyUI offline?): %s", e)
+            return
+        for tid, state in collected:
+            log.info("Collected %s after timeout: %s", tid, state)
+            t = self.store.get(tid)
+            if t["round_id"]:
+                rnd, ready = self.studio.refresh_round(t["round_id"])
+                if ready:
+                    self.notify(rnd)
+
+    def run(self) -> None:
+        # queued work waits until the startup reconcile has gone through
+        while not self._recover():
+            if self.stop.wait(30):
+                return
         self._refresh_rounds()
         last_reconcile = 0.0
         while not self.stop.is_set():
@@ -62,13 +90,7 @@ class Worker(threading.Thread):
             # periodically collect tasks that finished after their watch timed out
             if time.monotonic() - last_reconcile > 120:
                 last_reconcile = time.monotonic()
-                for tid, state in self.orch.reconcile_timeouts():
-                    log.info("Collected %s after timeout: %s", tid, state)
-                    t = self.store.get(tid)
-                    if t["round_id"]:
-                        rnd, ready = self.studio.refresh_round(t["round_id"])
-                        if ready:
-                            self.notify(rnd)
+                self._reconcile_timeouts()
             drafts = [t for t in self.store.by_state("draft") if not self.hold(t)]
             task = self.orch.resources.choose_next(drafts)
             if task is None:
