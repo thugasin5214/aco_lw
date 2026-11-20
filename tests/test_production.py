@@ -625,3 +625,22 @@ def test_pause_can_stop_the_running_task(prod):
     pr = prod.create("novel-to-film", "x", {"source": "..."})
     out = prod.pause(pr["id"], stop_running=True)
     assert stopped == [pr["id"]] and out["interrupted"] == "t1"
+
+
+def test_system_override_and_role(prod):
+    p = prod
+    settings = {"system_override": {"adaptation": "CUSTOM RULES"}, "system_role": "user"}
+    pr = p.create("novel-to-film", "Lost cat", {"source": "Mei lost her cat..."}, settings)
+    run_skills(p)
+    ((_, msgs),) = [c for c in p.fake_llm.calls if c[0] == "adaptation"]
+    # no system message; the overridden prompt + output contract lead the user message
+    assert [m["role"] for m in msgs] == ["user"]
+    text = msgs[0]["content"]
+    assert text.startswith("CUSTOM RULES") and '"scenes"' in text
+    assert "short-film treatment" not in text and "Mei lost her cat" in text
+    # "*" applies to every skill stage; "" drops the skill part but keeps the contract
+    p.update_settings(pr["id"], {"system_override": {"*": ""}, "system_role": "system"})
+    p.review(pr["id"], "adaptation", "approve")
+    run_skills(p)
+    sys_msg = next(m for s, m in p.fake_llm.calls if s == "bible")[0]
+    assert sys_msg["role"] == "system" and sys_msg["content"].startswith("## Output contract")

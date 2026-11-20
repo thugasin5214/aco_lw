@@ -16,6 +16,7 @@ import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from . import llm
 from .backends import ChatResult, FuncBackend, LMStudioBackend, OpenAICompatBackend
@@ -82,8 +83,10 @@ SUMMARY_SCHEMA = {
 RULES_FILE = ROOT / "prompts" / "planner_rules.md"
 
 
-def load_rules() -> str:
-    return RULES_FILE.read_text().strip()
+def load_rules(name: str = "planner_rules.md", data_dir: Path | None = None) -> str:
+    """Rules prompt `prompts/<name>`; a local `<data_dir>/prompts/<name>` (gitignored) replaces it."""
+    local = (data_dir or ROOT / "data") / "prompts" / name
+    return (local if local.is_file() else ROOT / "prompts" / name).read_text().strip()
 
 
 class PlannerUnavailable(RuntimeError):
@@ -232,7 +235,10 @@ class Planner:
         self, project_id: str | None, session: dict | None, rules: str | None = None
     ) -> str:
         """Stable prefix: rules + templates (static) → project memory → session summary. Nothing volatile."""
-        parts = [rules or load_rules(), "## 可用模板\n" + self._templates_text()]
+        parts = [
+            rules or load_rules(data_dir=self.cfg.data_dir),
+            "## 可用模板\n" + self._templates_text(),
+        ]
         if project_id:
             p = self.store.get_project(project_id)
             mems = self.store.memories(project_id, "active")
