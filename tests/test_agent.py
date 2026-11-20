@@ -403,3 +403,22 @@ def test_parked_message_tells_you_once_and_resumes_when_film_ends(env):
     assert last_run(studio)["status"] == "done" and len(script.seen) == 1
     texts = [t for t, _ in said]
     assert texts[-2].startswith("Memory is free") and texts[-1] == "answer"
+
+
+def test_local_rules_override(env):
+    studio, make, _ = env
+    a, _ = make()
+    rt = a.runtime
+    default_agent = rt.system_prompt(None, None)
+    default_planner = a.planner.system_prompt(None, None)
+    local = studio.orch.cfg.data_dir / "prompts"
+    local.mkdir(parents=True, exist_ok=True)
+    (local / "agent_rules.md").write_text("MY AGENT RULES\n")
+    (local / "planner_rules.md").write_text("MY PLANNER RULES\n")
+    assert rt.system_prompt(None, None).startswith("MY AGENT RULES")
+    assert a.planner.system_prompt(None, None).startswith("MY PLANNER RULES")
+    assert "## 可用模板" in rt.system_prompt(None, None)  # templates are still appended
+    for f in local.iterdir():
+        f.unlink()
+    assert rt.system_prompt(None, None) == default_agent
+    assert a.planner.system_prompt(None, None) == default_planner
