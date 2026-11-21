@@ -219,6 +219,7 @@ ChatGPT 订阅本身不是 API：用订阅走 `codex`；`openai` 走按量计费
   - agent 会先加载 `character-consistency` skill：用 LoRA 出正脸和每个镜头的首帧，再用 `freevideo-ref` 出视频（不带参考视频，只给两张参考图，脸会贯穿整段）。
   - 长视频拆成 5–10 秒的镜头，每个镜头用自己的首帧，最后拼接。
   - `h3n-r2v` 在 Mac 上跑不了（MPS 缺 int8 矩阵乘法）。
+- **H3 视频 LoRA**（镜头、舞蹈 / 动作、画风、成人）：用模板 `h3-lora-ref`。人物图作为参考图贯穿整段，`lora` / `lora2` / `lora3` 最多叠 3 个 LoRA，触发词要写进 prompt。很多社区 LoRA 文件里没记底模，要在 `data/loras.yaml` 写 `base: minimax-h3`，agent 才知道配哪个模板。成人 LoRA 只用于明确成年的虚构角色。
 - **跟你确认**：agent 会用 `propose_memory` 提议「某人物 → 某 LoRA、强度」，你确认后，这个项目以后都会自动用上。
 
 ## 4. 资源与内存策略（自动执行）

@@ -92,7 +92,8 @@ class LoraCatalog:
         rows = []
         for f in sorted(p for p in d.rglob("*") if p.suffix in EXT):
             name = f.relative_to(d).as_posix()
-            base = base_of(read_meta(f))
+            # many community LoRAs carry no base-model metadata: data/loras.yaml `base:` fills it in
+            base = (notes.get(name) or {}).get("base") or base_of(read_meta(f))
             rows.append(
                 {
                     "file": name,
@@ -125,7 +126,7 @@ class LoraCatalog:
                 )
             else:
                 bits.append("no template takes it")
-            for k in ("person", "style", "strength", "trigger", "note"):
+            for k in ("kind", "person", "style", "strength", "trigger", "note"):
                 if r.get(k) not in (None, ""):
                     bits.append(f"{k}: {r[k]}")
             lines.append(f"- {r['file']} — " + "; ".join(bits))

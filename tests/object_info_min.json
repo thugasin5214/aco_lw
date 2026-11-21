@@ -709,8 +709,8 @@
     ],
     "lora_name": [
      [
-      "klein4b-mikkoani.safetensors",
-      "klein4b-mikkoph.safetensors",
+      "example-klein-a.safetensors",
+      "example-klein-b.safetensors",
       "minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors"
      ]
     ],
@@ -2397,6 +2397,134 @@
   "output_node": false,
   "deprecated": false,
   "experimental": false,
+  "dev_only": false,
+  "api_node": false,
+  "price_badge": null,
+  "search_aliases": null,
+  "essentials_category": null,
+  "has_intermediate_output": false
+ },
+ "FreeVideoLoRA": {
+  "input": {
+   "required": {
+    "lora": [
+     "COMBO",
+     {
+      "multiselect": false,
+      "options": [
+       "None",
+       "example-h3.safetensors"
+      ]
+     }
+    ],
+    "strength": [
+     "FLOAT",
+     {
+      "default": 1.0,
+      "min": -100.0,
+      "max": 100.0,
+      "step": 0.05
+     }
+    ]
+   },
+   "optional": {
+    "previous": [
+     "FREEVIDEO_LORAS",
+     {}
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "lora",
+    "strength"
+   ],
+   "optional": [
+    "previous"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "FREEVIDEO_LORAS"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "loras"
+  ],
+  "output_tooltips": [
+   null
+  ],
+  "output_matchtypes": null,
+  "name": "FreeVideoLoRA",
+  "display_name": "FreeVideo · LoRA",
+  "description": "FreeVideo needs no acceleration LoRA.",
+  "python_module": "custom_nodes.FreeVideo",
+  "category": "FreeVideo",
+  "output_node": false,
+  "deprecated": false,
+  "experimental": false,
+  "dev_only": false,
+  "api_node": false,
+  "price_badge": null,
+  "search_aliases": null,
+  "essentials_category": null,
+  "has_intermediate_output": false
+ },
+ "FreeVideoReference": {
+  "input": {
+   "required": {},
+   "optional": {
+    "image": [
+     "IMAGE",
+     {}
+    ],
+    "video": [
+     "VIDEO",
+     {}
+    ],
+    "audio": [
+     "AUDIO",
+     {}
+    ],
+    "previous": [
+     "FREEVIDEO_REFERENCES",
+     {}
+    ]
+   }
+  },
+  "input_order": {
+   "required": [],
+   "optional": [
+    "image",
+    "video",
+    "audio",
+    "previous"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "FREEVIDEO_REFERENCES"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "references"
+  ],
+  "output_tooltips": [
+   null
+  ],
+  "output_matchtypes": null,
+  "name": "FreeVideoReference",
+  "display_name": "FreeVideo · Reference (experimental)",
+  "description": "Append one image, video or audio reference in order. A clip is cut to the generated length, at most 15 s, and the cut is reported. Connect the stack to Generate. VDN reference quality is experimental.",
+  "python_module": "custom_nodes.FreeVideo",
+  "category": "FreeVideo",
+  "output_node": false,
+  "deprecated": false,
+  "experimental": true,
   "dev_only": false,
   "api_node": false,
   "price_badge": null,
