@@ -29,7 +29,7 @@ slots:
   # decided in that first pass (576x1024 at factor 2 = a 288x512 first pass). 1.5 / 1.2 start larger.
   upscale_factor: {node: "3", field: upscale_factor, type: str}
   two_pass:       {node: "3", field: two_pass, type: bool}
-  first_frame_reference: {node: "3", field: first_frame_reference, type: bool}   # FreeVideo: "reduces drift"
+  first_frame_reference: {node: "3", field: first_frame_reference, type: bool}   # only with continue_from: the previous part's first frame as a reference
 tiers:
   smoke:          {width: 640, height: 384, seconds: 3, verified: false}
   smoke-portrait: {width: 384, height: 640, seconds: 5, verified: false}
