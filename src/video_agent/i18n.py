@@ -11,6 +11,10 @@ _LANG = "en"
 M: dict[str, tuple[str, str]] = {
     # General
     "ack": ("Got it — thinking…", "收到，正在理解……"),
+    "media_held": (
+        "Got it ({n} attachment(s)). Tell me what to do with it — your next message within {m} min carries it along.",
+        "收到（共 {n} 个附件）。告诉我要用它做什么，{m} 分钟内你的下一条消息会带上它。",
+    ),
     "agent_parked": (
         "Queued: {why}. I'll pick this up automatically as soon as memory frees up; /status works meanwhile (no LLM needed).",
         "已排队：{why}。内存一空出来就自动接着处理；期间 /status 随时可查（不需要 LLM）。",

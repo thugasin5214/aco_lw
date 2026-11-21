@@ -24,10 +24,13 @@ from .render import ParamError
 from .scheduler import Orchestrator, SchedulerBusy
 from .skills import SkillLibrary
 from .studio import Studio, StudioError
-from .telegram import TelegramAPI, TelegramBot, lock_buttons
+from .telegram import MEDIA_ONLY, TelegramAPI, TelegramBot, lock_buttons
 
 log = logging.getLogger("aco_lw")
 Reply = Callable[..., None]
+
+
+HOLD_MEDIA_S = 30 * 60  # captionless media is attached to your next message within this time
 
 
 class Worker(threading.Thread):
@@ -217,8 +220,15 @@ class Actions:
         if text.startswith("/"):
             return self.command(channel, text, say)
         _, sid = self._ctx()
-        if self.runtime.answer_pending_question(channel, sid, text):
+        if self.runtime.answer_pending_question(channel, sid, text, attachments):
             return  # you are answering the agent's question; the run continues
+        if attachments and text == MEDIA_ONLY:
+            # a photo without a caption: keep it for your next message instead of starting a run
+            # that has no idea what the picture is for
+            held = self._held(channel) + attachments
+            self.store.set_kv(f"held_media:{channel}", {"at": time.time(), "items": held})
+            say(tr("media_held", n=len(held), m=HOLD_MEDIA_S // 60))
+            return
         pending = self.store.get_kv(f"pending:{channel}")
         if pending:
             self.store.set_kv(f"pending:{channel}", None)
@@ -228,7 +238,18 @@ class Actions:
                 )
             if pending["action"] == "reject":
                 return self.reject_note(pending["round"], text, channel, say, msg_id)
+        held = self._held(channel)
+        if held:
+            self.store.set_kv(f"held_media:{channel}", None)
+            attachments = held + (attachments or [])
         self.request(text, channel, say, msg_id, attachments)
+
+    def _held(self, channel: str) -> list[dict]:
+        """Media you sent without a caption in the last HOLD_MEDIA_S seconds."""
+        h = self.store.get_kv(f"held_media:{channel}")
+        if not h or time.time() - h["at"] > HOLD_MEDIA_S:
+            return []
+        return list(h["items"])
 
     def _ctx(self) -> tuple[str, str]:
         pid = self.studio.current_project()["id"]
