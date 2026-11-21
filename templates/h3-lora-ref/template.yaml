@@ -4,11 +4,14 @@ model: freevideo-h3
 source: 标准实验室/03-图生视频-首帧驱动-API.json (first frame replaced by a FreeVideoReference, plus a FreeVideoLoRA chain)
 release_after: free
 # The character picture is a reference (identity across the whole clip, not only frame 1).
+# image2 (optional) = a face close-up: a full-body picture alone gives too few face pixels and
+# the face drifts in close-ups. When given it is Picture 1 and `image` is Picture 2.
 # Up to three H3 LoRAs stack (e.g. camera + motion + content); unused ones stay "None".
 # Put each LoRA's trigger words into the prompt yourself.
 slots:
   prompt:         {node: "3", field: text, type: str}
   image:          {node: "1", field: image, type: image, required: true}
+  image2:         {node: "2", field: image, type: image, drop_if_unset: ["2", "9"]}
   lora:           {node: "6", field: lora, type: str, required: true}
   lora_strength:  {node: "6", field: strength, type: float, min: 0.0, max: 1.5}
   lora2:          {node: "7", field: lora, type: str}

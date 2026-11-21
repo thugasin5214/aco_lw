@@ -5,11 +5,30 @@
       "image": "reference.png"
     }
   },
+  "2": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "face.png"
+    }
+  },
+  "9": {
+    "class_type": "FreeVideoReference",
+    "inputs": {
+      "image": [
+        "2",
+        0
+      ]
+    }
+  },
   "5": {
     "class_type": "FreeVideoReference",
     "inputs": {
       "image": [
         "1",
+        0
+      ],
+      "previous": [
+        "9",
         0
       ]
     }

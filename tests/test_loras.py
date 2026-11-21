@@ -94,3 +94,14 @@ def test_notes_give_the_base_model_when_the_file_has_none(make_orch, fake, tmp_p
     text = LoraCatalog(orch.cfg, orch.registry).text()
     assert "zoom.safetensors — base minimax-h3; use with h3-lora-ref" in text
     assert "kind: camera" in text and "trigger: crash_zm" in text
+
+
+def test_h3_lora_face_reference_is_optional(make_orch, fake):
+    t = make_orch(fake).registry.template("h3-lora-ref")
+    base = {"prompt": "p", "image": "body.png", "lora": "zoom.safetensors"}
+    _, p = resolve(t, base, None, allow_unverified=True)
+    g = render(t, p)
+    assert "2" not in g and "9" not in g and "previous" not in g["5"]["inputs"]
+    _, p = resolve(t, {**base, "image2": "face.png"}, None, allow_unverified=True)
+    g = render(t, p)
+    assert g["2"]["inputs"]["image"] == "face.png" and g["5"]["inputs"]["previous"] == ["9", 0]
