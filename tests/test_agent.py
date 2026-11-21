@@ -403,3 +403,80 @@ def test_parked_message_tells_you_once_and_resumes_when_film_ends(env):
     assert last_run(studio)["status"] == "done" and len(script.seen) == 1
     texts = [t for t, _ in said]
     assert texts[-2].startswith("Memory is free") and texts[-1] == "answer"
+
+
+# ---------------- LoRA catalog in the prompt; cost-based approval ----------------
+def test_agent_prompt_lists_installed_loras(env, tmp_path):
+    studio, make, _ = env
+    loras = tmp_path / "ComfyUI" / "models" / "loras"
+    loras.mkdir(parents=True)
+    from test_loras import write_lora
+
+    write_lora(loras / "face.safetensors", {"modelspec.architecture": "Flux.2-klein-4b/lora"})
+    studio.orch.cfg.comfy_output_dir = str(tmp_path / "ComfyUI" / "output")
+    a, script = make({"text": "ok"})
+    a.inbound("web", "hi", lambda t, b=None: None)
+    run_all(a)
+    system = script.seen[0][0]["content"]
+    assert "## LoRAs installed in ComfyUI" in system and "face.safetensors" in system
+
+
+def _measured(studio, tpl, tier, exec_s):
+    t = studio.store.create(
+        template=tpl,
+        template_sha="x",
+        kind="video",
+        tier=tier,
+        params={},
+        params_hash=f"{tier}{exec_s}",
+    )
+    studio.store.update(t["id"], metrics={"exec_s": exec_s})
+    for st in ("validated", "waiting_memory", "submitted", "review"):
+        studio.store.transition(t["id"], st)
+
+
+def test_unmeasured_tier_runs_without_asking_when_within_budget(env):
+    studio, make, said = env
+    _measured(studio, "h3-t2v", "smoke", 300)  # smoke 5 min → smoke-10s scales to ~10 min
+    a, _ = make(
+        {
+            "tool_calls": [
+                call("queue_round", {"template": "h3-t2v", "prompt": "rain", "tier": "smoke-10s"})
+            ]
+        },
+        {"text": "queued"},
+    )
+    a.inbound("web", "a rainy street", lambda t, b=None: None)
+    run_all(a)
+    assert studio.store.rounds()[0]["tier"] == "smoke-10s"
+    assert not any("要跑吗" in t or "Run it?" in t for t, _ in said)
+
+
+def test_unmeasured_tier_over_budget_or_unknown_asks_with_estimate(env):
+    studio, make, said = env
+    _measured(studio, "h3-t2v", "smoke", 300)  # hd-60s scales far above 20 min
+    a, _ = make(
+        {
+            "tool_calls": [
+                call("queue_round", {"template": "h3-t2v", "prompt": "rain", "tier": "hd-60s"})
+            ]
+        },
+    )
+    a.inbound("web", "a rainy street", lambda t, b=None: None)
+    run_all(a)
+    assert last_run(studio)["status"] == "waiting_approval" or studio.store.rounds() == []
+    ask = [t for t, b in said if b][-1]
+    assert "hd-60s" in ask and "?" not in ask.split("约")[-1][:3]
+    # no measurement at all for the template: time unknown → asks, shown as "?"
+    a2, _ = make(
+        {
+            "tool_calls": [
+                call(
+                    "queue_round", {"template": "freevideo-ref", "prompt": "x", "tier": "light-10s"}
+                )
+            ]
+        },
+    )
+    a2.inbound("web", "go", lambda t, b=None: None)
+    run_all(a2)
+    assert "?" in [t for t, b in said if b][-1]

@@ -168,7 +168,7 @@ Free text goes to the agent. The LLM only **proposes** tool calls; the orchestra
 
 | Tool | What it does | Approval |
 |---|---|---|
-| Generation tools (`queue_round`, `wait_for_round`, productions, ComfyUI exploration…) | Images, video, review, productions | Unmeasured video tiers |
+| Generation tools (`queue_round`, `wait_for_round`, productions, ComfyUI exploration…) | Images, video, review, productions | Unmeasured video tiers, only when the estimate is over 20 min (`budget_min` in `policies.yaml`) or unknown; never when your message named the tier |
 | `web_fetch` | Read a page as text (no login, no JS) | No |
 | `run_command` | zsh command in the run's working dir `data/agent-work/<run>/` (e.g. agent-reach, ffmpeg) | **Yes** (see permissions) |
 | `read_file` / `write_file` | Read `data/` and skill dirs; write the working dir only | No |
@@ -201,6 +201,25 @@ Free text goes to the agent. The LLM only **proposes** tool calls; the orchestra
 | `claude_code` | Whole request to Claude Code | Local Claude Code login |
 
 A ChatGPT subscription is not an API: use it through `codex`; `openai` bills an API key. Codex / Claude Code only get aco_lw's tools (over MCP), and commands still follow the permission mode.
+
+### 3.11 Character LoRAs: keep one person
+- **Where**: put LoRA files in `FreeVideo-local/ComfyUI/models/loras/`. aco reads each file's base model, lists it in the agent prompt and says which templates take it.
+- **Notes (recommended)**: in `data/loras.yaml` (not in git), give each LoRA a person, style, strength and trigger word, e.g.:
+  ```yaml
+  my-face.safetensors:
+    person: heroine
+    style: photo
+    strength: 0.5
+    trigger: null
+  ```
+  No restart needed: the next conversation picks it up.
+- **Templates**: `flux2-lora-t2i` (text-to-image) and `flux2-lora-edit` (reference image + LoRA). `lora` is required; `lora_strength` is usually 0.45–0.6.
+- **Locking the person in video**:
+  - These are Klein 4B image LoRAs and cannot be loaded into the H3 video model. Make images of the person with the LoRA first, then hand those to the video.
+  - The agent loads the `character-consistency` skill: LoRA front portrait and per-shot first frames, then `freevideo-ref` with no reference video, just two reference pictures, so the face holds through the whole clip.
+  - Long videos are split into 5–10 s shots, each with its own first frame, then joined.
+  - `h3n-r2v` doesn't run on a Mac (int8 matmul missing on MPS).
+- **Confirmed by you**: the agent proposes "character → LoRA, strength" with `propose_memory`; once you confirm, the project uses it from then on.
 
 ## 4. Resources and memory policy (automatic)
 

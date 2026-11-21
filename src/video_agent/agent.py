@@ -27,6 +27,7 @@ from pathlib import Path
 
 import jsonschema
 
+from .assets import LoraCatalog
 from .config import ROOT
 from .freevideo import FreeVideoError
 from .i18n import tr
@@ -215,15 +216,23 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
 
         rule = rt.policies.approval("queue_round", "unmeasured_video")
         named = explicit_tier(ctx["origin_text"], tier) if tier else False
+        est = studio.orch.resources.estimator.estimate(tpl, tier) if unmeasured else None
+        # no measurement to scale from at all: the time is unknown, so it counts as over budget
+        minutes = est.exec_s * (a.get("n") or 1) / 60 if est and est.source != "default" else 1e9
+        # over_budget: an unmeasured tier only asks when its estimated render time is above the
+        # budget (the estimate is scaled from the measured tiers of the same template)
+        budget = rt.policies.tool("queue_round").get("budget_min", 20)
         if (
             tpl.kind == "video"
             and unmeasured
-            and (rule == "always" or (rule == "unless_named" and not named))
+            and not (rule == "unless_named" and named)
+            and not (rule == "over_budget" and (named or minutes <= budget))
+            and rule != "never"
         ):
             return Pending(
                 "approval",
                 "",
-                tr("agent_tier_approval", t=tier, tpl=tpl.name),
+                tr("agent_tier_approval", t=tier, tpl=tpl.name, m=round(minutes) if minutes < 1e9 else "?"),
                 on_approve={"tool": "queue_round_approved", "args": a},
                 rule=f"round:{tpl.name}",
             )
@@ -1164,6 +1173,7 @@ class AgentRuntime:
         from .toolbox import Toolbox
 
         self.toolbox = Toolbox(self.cfg, self)
+        self.loras = LoraCatalog(self.cfg, studio.orch.registry)
         # sending you files (injected per channel by the daemon; by default just a message with the
         # paths)
         self.send_files: Callable[[str, list], None] = lambda ch, items: self.say_for(ch)(
@@ -1182,6 +1192,12 @@ class AgentRuntime:
         skills = self.toolbox.skills_index()
         if skills:
             rules += "\n\n## Skills (load_skill before a task one covers)\n" + skills
+        loras = self.loras.text()
+        if loras:
+            rules += (
+                "\n\n## LoRAs installed in ComfyUI (a LoRA only works with its own base model)\n"
+                + loras
+            )
         mem = self.toolbox.memory_index()
         if mem:
             rules += "\n\n## Your memory index (memory_read for details)\n" + mem

@@ -78,8 +78,8 @@ M: dict[str, tuple[str, str]] = {
         "已按 {t} 档排队（未实测——首次运行，注意内存）：{n} 个候选",
     ),
     "agent_tier_approval": (
-        "Tier “{t}” of {tpl} hasn't been measured (memory and time unknown). Run it?",
-        "{tpl} 的「{t}」档还没实测过（内存与耗时未知）。要跑吗？",
+        "Tier “{t}” of {tpl} hasn't been measured; estimated ~{m} min (scaled from measured tiers). Run it?",
+        "{tpl} 的「{t}」档还没实测过，估算约 {m} 分钟（按已实测档位折算）。要跑吗？",
     ),
     "agent_select_approval": (
         "Proposed: select #{idx} of “{t}”{r}. {why}",
