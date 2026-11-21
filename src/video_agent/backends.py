@@ -39,6 +39,8 @@ class ChatResult:
     ttft_s: float = 0.0
     total_s: float = 0.0
     load_s: float = 0.0
+    # generation stopped at max_tokens (tool-call arguments may be cut off mid-JSON)
+    truncated: bool = False
 
     @property
     def cached_tokens_est(self) -> int:
@@ -153,6 +155,8 @@ class OpenAICompatBackend:
                 for ch in d.get("choices") or []:
                     if not res.ttft_s:
                         res.ttft_s = time.monotonic() - t
+                    if ch.get("finish_reason") == "length":
+                        res.truncated = True
                     delta = ch.get("delta") or {}
                     parts.append(delta.get("content") or "")
                     thinking.append(delta.get("reasoning_content") or delta.get("reasoning") or "")
@@ -286,11 +290,13 @@ class FuncBackend:
 
     def chat(self, messages, schema=None, max_tokens=4096, tools=None) -> ChatResult:
         self.calls.append(messages)
+        self.max_tokens = max_tokens
         out = self.fn(messages, schema) if tools is None else self.fn(messages, tools)
         if isinstance(out, dict):  # for tests: {"text": ..., "tool_calls": [...]}
             return ChatResult(
                 text=out.get("text", ""),
                 tool_calls=out.get("tool_calls", []),
+                truncated=out.get("truncated", False),
                 prompt_tokens=sum(len(m.get("content") or "") for m in messages) // 2,
             )
         return ChatResult(
@@ -453,6 +459,7 @@ class AnthropicBackend:
         resp = self.client.beta.messages.create(betas=betas, **kwargs)
         total = time.monotonic() - t
         text = "".join(b.text for b in resp.content if b.type == "text")
+        truncated = resp.stop_reason == "max_tokens"
         if resp.stop_reason == "refusal":
             cat = getattr(resp.stop_details, "category", None) if resp.stop_details else None
             text = f"(declined by Claude's safety classifier: {cat or 'unspecified'})"
@@ -474,6 +481,7 @@ class AnthropicBackend:
             raw_content=[b.model_dump(exclude_none=True) for b in resp.content],
             cached_tokens=read,
             backend=f"anthropic:{resp.model}",
+            truncated=truncated,
         )
 
     def prewarm(self, messages: list[dict], tools: list[dict] | None = None) -> None:
