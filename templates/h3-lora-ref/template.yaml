@@ -25,9 +25,15 @@ slots:
   base_steps:     {node: "3", field: base_steps, type: int, min: 4, max: 16}
   refine_steps:   {node: "3", field: refine_steps, type: int, min: 0, max: 8}
   force_regenerate: {node: "3", field: force_regenerate, type: bool}
+  # FreeVideo samples a first pass at size / upscale_factor and refines at full size: the face is
+  # decided in that first pass (576x1024 at factor 2 = a 288x512 first pass). 1.5 / 1.2 start larger.
+  upscale_factor: {node: "3", field: upscale_factor, type: str}
+  two_pass:       {node: "3", field: two_pass, type: bool}
+  first_frame_reference: {node: "3", field: first_frame_reference, type: bool}   # FreeVideo: "reduces drift"
 tiers:
   smoke:          {width: 640, height: 384, seconds: 3, verified: false}
   smoke-portrait: {width: 384, height: 640, seconds: 5, verified: false}
   portrait:       {width: 576, height: 1024, seconds: 5, verified: false}
   hd:             {width: 1280, height: 736, seconds: 5, verified: false}
+  native-portrait: {width: 480, height: 864, seconds: 5, two_pass: false, verified: false}   # H3's native size, one pass: the face is decided at full resolution
 default_tier: smoke-portrait
