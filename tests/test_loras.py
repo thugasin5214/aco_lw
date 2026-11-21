@@ -53,7 +53,7 @@ def test_catalog_reads_base_model_and_personal_notes(make_orch, fake, tmp_path):
         "face.safetensors — base flux2-klein-4b; use with flux2-lora-edit, flux2-lora-t2i" in text
     )
     assert "person: heroine; strength: 0.5" in text
-    assert "speed.safetensors — base minimax-h3; use with h3-lora-ref" in text
+    assert "speed.safetensors — base minimax-h3; use with h3-lora-flf, h3-lora-ref" in text
     assert "broken.safetensors — base unknown" in text
     assert cat.text() is text  # cached: the prompt prefix stays byte-identical
     assert read_meta(loras / "broken.safetensors") == {} and base_of({}) == ""
@@ -92,7 +92,7 @@ def test_notes_give_the_base_model_when_the_file_has_none(make_orch, fake, tmp_p
         "zoom.safetensors:\n  base: minimax-h3\n  kind: camera\n  trigger: crash_zm\n"
     )
     text = LoraCatalog(orch.cfg, orch.registry).text()
-    assert "zoom.safetensors — base minimax-h3; use with h3-lora-ref" in text
+    assert "zoom.safetensors — base minimax-h3; use with h3-lora-flf, h3-lora-ref" in text
     assert "kind: camera" in text and "trigger: crash_zm" in text
 
 
@@ -105,3 +105,16 @@ def test_h3_lora_face_reference_is_optional(make_orch, fake):
     _, p = resolve(t, {**base, "image2": "face.png"}, None, allow_unverified=True)
     g = render(t, p)
     assert g["2"]["inputs"]["image"] == "face.png" and g["5"]["inputs"]["previous"] == ["9", 0]
+
+
+def test_h3_lora_first_last_frame_template(make_orch, fake):
+    t = make_orch(fake).registry.template("h3-lora-flf")
+    base = {"prompt": "p", "first": "body.png", "lora": "zoom.safetensors"}
+    _, p = resolve(t, {**base, "last": "face.png"}, None, allow_unverified=True)
+    g = render(t, p)
+    assert g["3"]["inputs"]["first"] == ["1", 0] and g["3"]["inputs"]["last"] == ["2", 0]
+    assert "references" not in g["3"]["inputs"] and g["3"]["inputs"]["loras"] == ["8", 0]
+    _, p = resolve(t, base, None, allow_unverified=True)
+    g = render(t, p)
+    assert "2" not in g and "last" not in g["3"]["inputs"]
+    assert g["3"]["inputs"]["two_pass"] is False and g["3"]["inputs"]["width"] == 480

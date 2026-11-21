@@ -1,0 +1,34 @@
+title: 首尾帧生视频 + H3 LoRA · FreeVideo / MiniMax H3（首帧 → 尾帧，锁住结尾的脸）
+kind: video
+model: freevideo-h3
+source: 标准实验室/03-图生视频-首帧驱动-API.json (plus a last frame and a FreeVideoLoRA chain)
+release_after: free
+# First and (optional) last frame + up to three H3 LoRAs. The video starts exactly on `first` and
+# ends exactly on `last`: e.g. a crash zoom from a full-body still to the casting close-up, so the
+# close-up face is the casting photo itself. FreeVideo takes first/last frames OR references, not
+# both. Crop both pictures to the video's aspect ratio first. In the prompt the first frame is
+# <Picture 1> and the last frame <Picture 2>.
+slots:
+  prompt:         {node: "3", field: text, type: str}
+  first:          {node: "1", field: image, type: image, required: true}
+  last:           {node: "2", field: image, type: image, drop_if_unset: ["2"]}
+  lora:           {node: "6", field: lora, type: str, required: true}
+  lora_strength:  {node: "6", field: strength, type: float, min: 0.0, max: 1.5}
+  lora2:          {node: "7", field: lora, type: str}
+  lora2_strength: {node: "7", field: strength, type: float, min: 0.0, max: 1.5}
+  lora3:          {node: "8", field: lora, type: str}
+  lora3_strength: {node: "8", field: strength, type: float, min: 0.0, max: 1.5}
+  seed:           {node: "3", field: seed, type: int, min: 0}
+  width:          {node: "3", field: width, type: int, min: 256, max: 1920, multiple_of: 32}
+  height:         {node: "3", field: height, type: int, min: 256, max: 1920, multiple_of: 32}
+  seconds:        {node: "3", field: seconds, type: float, min: 1.625, max: 15}
+  base_steps:     {node: "3", field: base_steps, type: int, min: 4, max: 16}
+  refine_steps:   {node: "3", field: refine_steps, type: int, min: 0, max: 8}
+  force_regenerate: {node: "3", field: force_regenerate, type: bool}
+  upscale_factor: {node: "3", field: upscale_factor, type: str}
+  two_pass:       {node: "3", field: two_pass, type: bool}
+tiers:
+  smoke-portrait:  {width: 384, height: 640, seconds: 5, verified: false}
+  native-portrait: {width: 480, height: 864, seconds: 5, two_pass: false, verified: false}   # H3's native size, one pass
+  native:          {width: 864, height: 480, seconds: 5, two_pass: false, verified: false}
+default_tier: native-portrait
