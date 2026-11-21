@@ -117,4 +117,4 @@ def test_h3_lora_first_last_frame_template(make_orch, fake):
     _, p = resolve(t, base, None, allow_unverified=True)
     g = render(t, p)
     assert "2" not in g and "last" not in g["3"]["inputs"]
-    assert g["3"]["inputs"]["two_pass"] is False and g["3"]["inputs"]["width"] == 480
+    assert g["3"]["inputs"]["two_pass"] is True and g["3"]["inputs"]["upscale_factor"] == "1.2"

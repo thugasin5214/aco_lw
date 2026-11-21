@@ -26,9 +26,11 @@ slots:
   refine_steps:   {node: "3", field: refine_steps, type: int, min: 0, max: 8}
   force_regenerate: {node: "3", field: force_regenerate, type: bool}
   upscale_factor: {node: "3", field: upscale_factor, type: str}
-  two_pass:       {node: "3", field: two_pass, type: bool}
 tiers:
   smoke-portrait:  {width: 384, height: 640, seconds: 5, verified: false}
-  native-portrait: {width: 480, height: 864, seconds: 5, two_pass: false, verified: false}   # H3's native size, one pass
-  native:          {width: 864, height: 480, seconds: 5, two_pass: false, verified: false}
+  # keyframes need FreeVideo's two-pass path: with two_pass false the first / last frames came out as
+  # noise and the last frame was ignored (measured 2026-11-21). upscale_factor 1.2 keeps the first pass
+  # near H3's native size (400x720) so the face is still decided at a usable resolution.
+  native-portrait: {width: 480, height: 864, seconds: 5, upscale_factor: "1.2", verified: false}
+  native:          {width: 864, height: 480, seconds: 5, upscale_factor: "1.2", verified: false}
 default_tier: native-portrait
