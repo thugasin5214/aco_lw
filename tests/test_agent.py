@@ -763,3 +763,21 @@ def test_deleting_a_production_wakes_the_agent_waiting_on_it(env, tmp_path):
     res = json.loads(next(m for m in script.seen[1] if m.get("tool_call_id") == "1")["content"])
     assert res["deleted"] is True
     assert last_run(studio)["status"] == "done" and said[-1][0] == "it was deleted"
+
+def test_local_rules_override(env):
+    studio, make, _ = env
+    a, _ = make()
+    rt = a.runtime
+    default_agent = rt.system_prompt(None, None)
+    default_planner = a.planner.system_prompt(None, None)
+    local = studio.orch.cfg.data_dir / "prompts"
+    local.mkdir(parents=True, exist_ok=True)
+    (local / "agent_rules.md").write_text("MY AGENT RULES\n")
+    (local / "planner_rules.md").write_text("MY PLANNER RULES\n")
+    assert rt.system_prompt(None, None).startswith("MY AGENT RULES")
+    assert a.planner.system_prompt(None, None).startswith("MY PLANNER RULES")
+    assert "## 可用模板" in rt.system_prompt(None, None)  # templates are still appended
+    for f in local.iterdir():
+        f.unlink()
+    assert rt.system_prompt(None, None) == default_agent
+    assert a.planner.system_prompt(None, None) == default_planner

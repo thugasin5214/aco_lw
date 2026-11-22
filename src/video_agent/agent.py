@@ -28,18 +28,16 @@ from pathlib import Path
 import jsonschema
 
 from .assets import LoraCatalog
-from .config import ROOT
 from .freevideo import FreeVideoError
 from .i18n import tr
 from .mcp_client import MCPError
-from .planner import AGENT_CLIS, ONLINE_APIS
+from .planner import AGENT_CLIS, ONLINE_APIS, load_rules
 from .policy import Policies, classify_round
 from .production import ProductionError
 from .render import ParamError
 from .studio import StudioError
 
 log = logging.getLogger("aco_lw.agent")
-RULES_FILE = ROOT / "prompts" / "agent_rules.md"
 TERMINAL_RUN = {"done", "failed", "cancelled"}
 MAX_RESULT_CHARS = 4000
 FREEVIDEO_ENV = (
@@ -1461,7 +1459,7 @@ class AgentRuntime:
     def system_prompt(self, project_id: str, session: dict | None) -> str:
         # agent rules + the same template docs, project memory and session summary as the planner
         # (stable prefix)
-        rules = RULES_FILE.read_text().strip()
+        rules = load_rules("agent_rules.md", self.studio.orch.cfg.data_dir)
         skills = self.toolbox.skills_index()
         if skills:
             rules += "\n\n## Skills (load_skill before a task one covers)\n" + skills
