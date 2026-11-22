@@ -71,6 +71,7 @@ class ModelInfo(BaseModel):
     adaptive: bool = False
     resource: Literal["memory", "cpu"] = "memory"  # cpu: skips the memory gate (e.g. FFmpeg)
     exec_s: float | None = None  # default duration when there is no history (estimate)
+    lora_base: list[str] | None = None  # LoRA families this model loads (see assets.base_of)
 
 
 def load_template(dir_: Path, origin: str = "builtin") -> Template:

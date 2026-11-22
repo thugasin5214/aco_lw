@@ -3,6 +3,7 @@ flux2-klein-4b-q8:
   kind: image
   peak_gib: 16      # cold-start ComfyUI RSS 15.7 GiB
   measured: true
+  lora_base: [flux2-klein-4b]   # Klein 4B LoRAs (flux2-lora-t2i / flux2-lora-edit)
 freevideo-h3:
   kind: video
   peak_gib: 54      # FreeVideo ram_peak_bytes（phys_footprint）53.4–54.2 GiB
