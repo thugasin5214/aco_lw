@@ -1272,7 +1272,7 @@ class AgentRuntime:
         planner,
         enqueue: Callable[[Callable[[], None]], None],
         say_for: Callable[[str], Callable],
-        max_steps: int = 16,
+        max_steps: int = 0,
     ):
         """enqueue: put a step into the planner queue (single thread); say_for(channel): a function that sends a message to that channel."""
         self.studio, self.planner, self.store = studio, planner, studio.store
@@ -1481,7 +1481,7 @@ class AgentRuntime:
                 return
             if self._unresolved(run_id):
                 return  # some tool results are still out; wait for the event / approval
-            if run["steps"] >= self.max_steps:
+            if self.max_steps and run["steps"] >= self.max_steps:  # 0: no limit
                 self._finish(run, tr("agent_step_budget", n=self.max_steps), "done")
                 return
             kind, what = self._choose(run)

@@ -27,8 +27,9 @@ class Settings:
     # once the last call's prompt exceeds this, compact older messages
     session_summary_tokens: int = 16000
     session_keep_messages: int = 8  # recent messages kept verbatim when compacting
-    # max LLM calls by the agent per request (general tasks take many steps)
-    agent_max_steps: int = 40
+    # max LLM calls by the agent per request; 0 = no limit (the repeat guard still stops a loop of
+    # identical calls)
+    agent_max_steps: int = 0
     # max output tokens per agent LLM call (long write_file contents need room; capped by the
     # context window together with the prompt)
     agent_max_tokens: int = 16384
@@ -133,7 +134,7 @@ EDITABLE: list[tuple[str, str, str, str]] = [
     ("llm", "llm_idle_ttl_s", "空闲卸载秒数", "live"),
     ("llm", "llm_restore_after_video", "视频渲染结束后重新加载 LLM", "live"),
     ("llm", "planner_fast", "末尾加 /no_think（思考更少、更快）", "live"),
-    ("agent", "agent_max_steps", "一次请求最多调用 LLM 的次数", "live"),
+    ("agent", "agent_max_steps", "一次请求最多调用 LLM 的次数（0 = 不限）", "live"),
     ("agent", "agent_max_tokens", "每次 LLM 调用最多输出的 tokens", "live"),
     ("agent", "session_summary_tokens", "超过此 prompt 长度压缩较早消息", "live"),
     ("agent", "session_keep_messages", "压缩时保留的最近原话条数", "live"),

@@ -193,7 +193,7 @@ class Actions:
             planner,
             enqueue=lambda fn: self.jobs.put((fn, lambda *a, **k: None, False)),
             say_for=lambda ch: self._say(ch, self.channel_send.get(ch, self.channel_send["web"])),
-            max_steps=getattr(studio.orch.cfg, "agent_max_steps", 16),
+            max_steps=getattr(studio.orch.cfg, "agent_max_steps", 0),
         )
         studio.decision_listeners.append(self.runtime.on_round_decided)
         self.runtime.llm_control = self.llm_control
