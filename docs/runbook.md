@@ -109,6 +109,7 @@ Both `200` means all good.
 
 ### 3.1 A full creative loop
 1. **Ask** — in the console (*Projects & Chat*) or in Telegram, in English or Chinese. Example: “Same blonde academy girl, half-body, looking back at the camera, warm evening window light.” You can **attach a reference image** (📎 in the console, or send a photo in Telegram) and say “use this face”.
+   A photo sent in Telegram **without a caption** doesn't start anything: aco confirms it and your next message within 30 min carries it along (e.g. send the casting photo, then “make a video with this face”). When the agent asks for a picture, just send it — that is the answer.
    The planner acknowledges immediately, understands the request (typically 10–20 s; the first message after a cold start adds ~15 s for loading) and queues a round (4 images by default, 1 for video).
 2. **Wait** — images take ~12 s each; a 640×384×3 s video takes ~5–6 min. When done, the *Review* tab shows a badge and Telegram receives the original files with buttons.
 3. **Review** (console `#review` or Telegram buttons — equivalent):
