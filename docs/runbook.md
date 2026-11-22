@@ -23,21 +23,84 @@ This runbook answers three questions: **how to start / stop**, **how to use it d
 
 ## 2. Start and stop
 
-### Start order
-1. **ComfyUI** — make sure http://127.0.0.1:8188 opens (FreeVideo-local environment).
-2. **LM Studio** — the app just needs to be running; aco_lw loads the model when needed.
-3. **aco_lw** — run:
+### Three services
+
+| Service | Address | Role |
+|---|---|---|
+| ComfyUI (with the FreeVideo plugin) | http://127.0.0.1:8188 | Renders images and video. FreeVideo is not a separate program: it is a ComfyUI plugin and is there whenever ComfyUI is up |
+| LM Studio | http://127.0.0.1:1234 | Local LLM (aco's brain) |
+| aco (`va daemon`) | http://127.0.0.1:8790 | Orchestrator + console + Telegram |
+
+Start them in any order: if aco comes up first it retries ComfyUI every 30 s, and queued tasks wait until it connects.
+
+### 1) Start ComfyUI + FreeVideo
+FreeVideo.app is not installed on this machine; ComfyUI is started directly with FreeVideo-local's own Python (same arguments as the FreeVideo launcher; don't change them).
+
+Foreground (keep a terminal window for it; `Ctrl-C` stops it):
+
+```sh
+cd ~/Documents/ChatGPT/jev/FreeVideo-local/ComfyUI
+../envs/comfyui-630aa60d8624e901/bin/python main.py --listen 127.0.0.1 --port 8188
+```
+
+Background (keeps running after the terminal closes):
+
+```sh
+cd ~/Documents/ChatGPT/jev/FreeVideo-local/ComfyUI
+nohup ../envs/comfyui-630aa60d8624e901/bin/python main.py --listen 127.0.0.1 --port 8188 >/dev/null 2>&1 &
+```
+
+- Ready in about 10–20 s (measured 18 s, together with aco). Check: `curl -s http://127.0.0.1:8188/system_stats` returns JSON, or open http://127.0.0.1:8188 in a browser.
+- FreeVideo panel: open http://127.0.0.1:8188 → **Workflow → Browse templates → FreeVideo → FreeVideo-All-in-One**; the FreeVideo agent chat is under **Extensions → FreeVideo**.
+- Log: the FreeVideo plugin writes ComfyUI's output to `~/Documents/ChatGPT/jev/FreeVideo-local/launcher/comfy-runs/connected-<time>-<pid>/comfy.log` (the newest folder is the current run).
+- Stop: `Ctrl-C` in the foreground; `pkill -f "ComfyUI/main.py"` in the background. Make sure no video is rendering first, or it is cut off.
+- The `envs/comfyui-<hash>` folder name may change after a FreeVideo upgrade; the `python` entry in `FreeVideo-local/launcher/comfy-host.json` is authoritative.
+
+### 2) Start LM Studio
+Open the LM Studio app (or `lms server start` in a terminal). No need to load a model: aco loads it when needed and unloads it when idle. Check: `curl -s http://127.0.0.1:1234/v1/models`.
+
+### 3) Start aco
+Foreground (`Ctrl-C` stops it; the log also goes to `data/daemon.log`):
 
 ```sh
 cd ~/workplace/video-agent
 uv run va daemon 2>&1 | tee -a data/daemon.log
 ```
 
-Ready when you see `Telegram listener started (whitelist [...])` and `Console: http://127.0.0.1:8790`. Startup reconciles unfinished tasks (`recover`): it only collects finished results and **never resubmits**.
+Background:
+
+```sh
+cd ~/workplace/video-agent
+nohup uv run va daemon --port 8790 >> data/daemon.log 2>&1 &
+```
+
+- Ready when the log shows `Telegram listener started (whitelist [...])` and `Console: http://127.0.0.1:8790`. Check: `curl -s http://127.0.0.1:8790/api/system` shows `comfy.online: true` and `daemon.alive: true`.
+- Console: open http://127.0.0.1:8790; on Telegram just message the bot.
+- Startup reconciles unfinished tasks (`recover`): it only collects finished results and **never resubmits**. With ComfyUI down the log shows `Startup reconcile failed (ComfyUI offline?)`; once ComfyUI is up it carries on by itself, no aco restart needed.
+- Follow the log: `tail -f data/daemon.log`.
+
+### Start everything (background)
+
+```sh
+FV=~/Documents/ChatGPT/jev/FreeVideo-local
+(cd $FV/ComfyUI && nohup ../envs/comfyui-630aa60d8624e901/bin/python main.py --listen 127.0.0.1 --port 8188 >/dev/null 2>&1 &)
+(cd ~/workplace/video-agent && nohup uv run va daemon --port 8790 >> data/daemon.log 2>&1 &)
+```
+
+### What is running
+
+```sh
+pgrep -fl "ComfyUI/main.py"; pgrep -fl "va daemon"
+curl -s -o /dev/null -w "ComfyUI %{http_code}\n" http://127.0.0.1:8188/system_stats
+curl -s -o /dev/null -w "aco %{http_code}\n" http://127.0.0.1:8790/api/system
+```
+
+Both `200` means all good.
 
 ### Stop
-- `Ctrl-C` in the daemon terminal, or `pkill -f "va daemon"`.
-- A job already running inside ComfyUI is **not cancelled**; the next daemon start reconciles it by prompt_id and collects its outputs.
+- aco: `Ctrl-C` in the foreground; `pkill -f "va daemon"` in the background.
+- A job already running inside ComfyUI is **not cancelled by stopping aco**; the next aco start reconciles it by prompt_id and collects its outputs.
+- Before restarting aco, check the console shows no running task and the agent isn't mid-answer.
 
 ### Console only
 `uv run va serve` opens the console (browse + review) without rendering; queued tasks run once the daemon is up.
@@ -222,7 +285,7 @@ A ChatGPT subscription is not an API: use it through `codex`; `openai` bills an 
 | Symptom | Check | Fix |
 |---|---|---|
 | Header shows “daemon not running” | `pgrep -fl "va daemon"` | Start it (§2); queued tasks continue |
-| “ComfyUI offline” | Open http://127.0.0.1:8188 | Start FreeVideo-local's ComfyUI; aco_lw won't start it |
+| “ComfyUI offline” | Open http://127.0.0.1:8188 | Start it as in §2 “Start ComfyUI + FreeVideo”; aco won't start it, and carries on once it is up |
 | Task stuck in “waiting memory” | Header memory / pressure; ComfyUI queue | Close memory-heavy apps or `/cancel`; after 10 min it times out without submitting |
 | Task “timed out” | `va status <ID>` for the prompt_id | It may still be running: `va recover` collects it; don't resubmit by hand |
 | Task “failed” | Error in the console details / ComfyUI terminal | Adjust and redo; failed tasks may be resubmitted with the same parameters |
