@@ -1,0 +1,82 @@
+# One episode of a novel-series, created by the series' `episodes` stage — not meant to be created
+# by hand. Cast cards, bible and direction come from the series; this production adapts the
+# episode's chapters faithfully, storyboards scene by scene and films it.
+name: novel-episode
+title: Series episode
+description: An episode of a novel series (created by the series); reuses the series' cast, bible and camera design.
+settings:
+  episode_minutes: 5
+  max_clip_seconds: 10
+  fidelity: faithful
+  interiority: visual
+  video_candidates: 1
+  film_quality: medium
+  aspect: "16:9"
+  subtitles: true
+  auto_advance: true
+  language: English
+  width: 1280
+  height: 720
+  fps: 24
+stages:
+  - id: source
+    title: Episode text
+    kind: input
+  - id: series
+    title: Series context (previously · next)
+    kind: input
+  - id: bible
+    title: Series bible
+    kind: input
+  - id: cards
+    title: Cast cards
+    kind: input
+  - id: direction
+    title: Series direction
+    kind: input
+
+  - id: brief
+    title: Text intake
+    kind: tool
+    tool: ingest
+    needs: [source]
+    gate: auto
+
+  - id: adaptation
+    title: Adaptation (faithful)
+    kind: skill
+    skill: adapt-novel
+    needs: [brief, series, bible]
+    schema: adaptation
+
+  - id: storyboard
+    title: Storyboard (scene by scene)
+    kind: skill
+    skill: storyboard-film
+    extra_skills: [h3-prompt-writing]
+    needs: [adaptation, bible, cards, direction]
+    schema: storyboard-film
+    chunk_by: {items: adaptation.scenes, merge: shots, id_format: "sh{n:02d}", budget_minutes: episode_minutes, weight: beats}
+    cap: {list: shots, field: seconds, setting: max_clip_seconds}
+
+  - id: clips
+    title: Film (FreeVideo takes)
+    kind: film
+    cast: cards
+    needs: [storyboard, cards]
+    confirm: true
+    fan_out: {items: storyboard.shots, key: id}
+
+  - id: edit
+    title: Edit (order · trims · subtitles)
+    kind: skill
+    skill: edit-timeline
+    needs: [storyboard, clips]
+    schema: timeline
+
+  - id: final
+    title: Final cut
+    kind: assemble
+    needs: [edit, clips]
+    timeline: edit
+    clips: clips

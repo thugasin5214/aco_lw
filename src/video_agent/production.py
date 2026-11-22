@@ -56,6 +56,20 @@ class ChunkBy(BaseModel):
     # weighted by the length of `weight` in the item (e.g. its beats)
     budget_minutes: str | None = None
     weight: str | None = None
+    # upstream stages left out of each call's inputs (e.g. the whole novel when the item is a
+    # chapter of it)
+    omit_inputs: list[str] = []
+
+
+class Cap(BaseModel):
+    """A number in every element of a list in the output must not exceed a setting, e.g. shot
+    seconds ≤ settings.max_clip_seconds (one generation renders only so many seconds)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    list: str
+    field: str
+    setting: str
 
 
 class RenderSpec(BaseModel):
@@ -106,6 +120,7 @@ class Stage(BaseModel):
     output_schema: dict | str | None = Field(None, alias="schema")
     fan_out: FanOut | None = None
     chunk_by: ChunkBy | None = None  # skill: one LLM call per item, replies merged
+    cap: Cap | None = None  # skill: a per-element limit checked like the schema (one repair)
     render: RenderSpec | None = None
     alternatives: list[Alternative] = []
     timeline: str | None = None  # assemble: which stage the timeline comes from
@@ -258,6 +273,11 @@ class Production:
         # deterministic tools of tool stages: fn(production, stage, inputs) -> data; more can be
         # registered
         self.tools: dict[str, Callable] = {"ingest": self._tool_ingest, **(tools or {})}
+        from .series import SeriesTools
+
+        self.series = SeriesTools(self)
+        self.tools.setdefault("chapters", self.series.chapters)
+        self.tools.setdefault("series_spawn", self.series.spawn)
         # film stage (FreeVideo multi-shot film); without FreeVideo these stages cannot start
         self.film = None
         if freevideo is not None:
@@ -350,6 +370,17 @@ class Production:
         self._wake.set()
         self.log(f"production {production_id}: resumed")
         return self.store.get_production(production_id)
+
+    @staticmethod
+    def _gate(prod: dict, st: Stage) -> str:
+        """auto when the workflow says so or the production lists the stage in auto_approve."""
+        auto = st.id in (prod["settings"].get("auto_approve") or [])
+        return "auto" if st.gate == "auto" or auto else "review"
+
+    @staticmethod
+    def _confirm(prod: dict, st: Stage) -> bool:
+        """confirm stages wait for you to press start unless the production lists them in auto_start."""
+        return st.confirm and st.id not in (prod["settings"].get("auto_start") or [])
 
     def _wf(self, prod: dict) -> Workflow:
         return self.workflows[prod["workflow"]]
@@ -520,8 +551,8 @@ class Production:
                         "needs": st.needs,
                         "state": sstate,
                         "blocked_by": blocked_by,
-                        "gate": st.gate,
-                        "confirm": st.confirm,
+                        "gate": self._gate(prod, st),
+                        "confirm": self._confirm(prod, st),
                         "items": items,
                         "counts": {s: sum(1 for i in items if i["state"] == s) for s in states},
                     }
@@ -560,13 +591,16 @@ class Production:
             elif not done and prod["state"] == "done":
                 prod = self.store.update_production(production_id, state="active")
                 self._wake.set()  # its queued jobs can run now
-            return {
+            result = {
                 "production": prod,
                 "workflow": {"name": wf.name, "title": wf.title},
                 "stages": stages,
                 "next_action": nxt,
                 "done": done,
             }
+            if prod["settings"].get("series"):
+                self.series.handoff(prod, result)
+            return result
 
     # ---- execute ----
     def run_stage(
@@ -689,7 +723,8 @@ class Production:
             )
             if p
         )
-        inputs = {n: ctx[n] for n in st.needs}
+        omit = set(st.chunk_by.omit_inputs) if st.chunk_by and extra else set()
+        inputs = {n: ctx[n] for n in st.needs if n not in omit}
         user = {"production": prod["title"], "settings": prod["settings"], "inputs": inputs}
         prev_id = (art["meta"] or {}).get("previous")
         if prev_id:
@@ -719,7 +754,7 @@ class Production:
                 data, stats, raw, violation = self._run_chunks(prod, st, art)
             else:
                 messages = self.skill_messages(prod, st, art)
-                data, stats, raw, violation = self._llm_json(st, messages)
+                data, stats, raw, violation = self._llm_json(st, messages, prod)
             if violation is not None:
                 art = self.store.update_artifact(
                     art["id"],
@@ -736,7 +771,7 @@ class Production:
             art = self.store.update_artifact(art["id"], status="failed", note=str(e)[:500])
             self._emit(prod, st, art, "failed")
             return art
-        status = "current" if st.gate == "auto" else "review"
+        status = "current" if self._gate(prod, st) == "auto" else "review"
         art = self.store.update_artifact(
             art["id"], status=status, data=data, meta={**art["meta"], "llm": stats}
         )
@@ -746,14 +781,44 @@ class Production:
             self.advance(prod["id"])
         return art
 
-    def _llm_json(self, st: Stage, messages: list[dict]) -> tuple[Any, dict, str, str | None]:
-        """One reply validated against the stage schema, with one explicit repair chance (policy:
-        repair once, do not change what the task means). Returns (data, stats, raw, violation)."""
-        text, stats = self.llm(st, messages, st.output_schema)
-        try:
+    @staticmethod
+    def _cap_violation(prod: dict, st: Stage, data: Any) -> str | None:
+        if st.cap is None or not isinstance(data, dict):
+            return None
+        limit = prod["settings"].get(st.cap.setting)
+        if not limit:
+            return None
+        over = [
+            f"{el.get('id', i)}={el.get(st.cap.field)}"
+            for i, el in enumerate(data.get(st.cap.list) or [])
+            if isinstance(el, dict) and float(el.get(st.cap.field) or 0) > float(limit)
+        ]
+        if not over:
+            return None
+        return (
+            f"{st.cap.list}[].{st.cap.field} must be at most {limit} ({st.cap.setting}): "
+            + ", ".join(over[:8])
+            + ". Split each one into consecutive elements of at most that length."
+        )
+
+    def _llm_json(
+        self, st: Stage, messages: list[dict], prod: dict | None = None
+    ) -> tuple[Any, dict, str, str | None]:
+        """One reply validated against the stage schema (and its cap), with one explicit repair
+        chance (policy: repair once, do not change what the task means).
+        Returns (data, stats, raw, violation)."""
+
+        def check(text: str) -> Any:
             data = extract_json(text)
             jsonschema.validate(data, st.output_schema)
-            return data, stats, text, None
+            cap = self._cap_violation(prod, st, data) if prod else None
+            if cap:
+                raise jsonschema.ValidationError(cap)
+            return data
+
+        text, stats = self.llm(st, messages, st.output_schema)
+        try:
+            return check(text), stats, text, None
         except (json.JSONDecodeError, jsonschema.ValidationError) as e:
             msg = e.message if isinstance(e, jsonschema.ValidationError) else str(e)
         messages = [
@@ -767,9 +832,7 @@ class Production:
         text, stats2 = self.llm(st, messages, st.output_schema)
         stats = {**stats, "repair": stats2}
         try:
-            data = extract_json(text)
-            jsonschema.validate(data, st.output_schema)
-            return data, stats, text, None
+            return check(text), stats, text, None
         except (json.JSONDecodeError, jsonschema.ValidationError) as e2:
             msg = e2.message if isinstance(e2, jsonschema.ValidationError) else str(e2)
             return None, stats, text, msg
@@ -793,7 +856,7 @@ class Production:
             if merged:
                 extra["previous_element"] = merged[-1]  # continuity across the seam
             data, stats, raw, violation = self._llm_json(
-                st, self.skill_messages(prod, st, art, extra)
+                st, self.skill_messages(prod, st, art, extra), prod
             )
             all_stats.append(stats)
             if violation is not None:
@@ -823,7 +886,7 @@ class Production:
             art = self.store.update_artifact(art["id"], status="failed", note=str(e)[:500])
             self._emit(prod, st, art, "failed")
             return art
-        status = "current" if st.gate == "auto" else "review"
+        status = "current" if self._gate(prod, st) == "auto" else "review"
         art = self.store.update_artifact(art["id"], status=status, data=data)
         self._emit(prod, st, art, status)
         if status == "current":
@@ -1181,8 +1244,11 @@ class Production:
         prod = self._prod(art["production_id"])
         st = self._wf(prod).stage(art["stage"])
         art = self._sync(art)
-        if st.gate == "auto" and art["status"] == "review":
-            ok = next(t for t in self.store.round_tasks(rnd["id"]) if t["outputs"])
+        if self._gate(prod, st) == "auto" and art["status"] == "review":
+            ok = next((t for t in self.store.round_tasks(rnd["id"]) if t["outputs"]), None)
+            if ok is None:  # nothing usable: leave it for you
+                self._emit(prod, st, art, art["status"])
+                return
             self.studio.select(rnd["id"], ok["id"], note="auto (gate: auto)", origin="production")
         else:
             self._emit(prod, st, art, art["status"])

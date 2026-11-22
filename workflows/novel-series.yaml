@@ -1,0 +1,107 @@
+# A whole novel → a series. The novel is split into chapters in code, read chapter by chapter, and
+# planned into episodes; cast (bible, casting, FreeVideo cards) and camera style (direction) are
+# decided once for the whole series. Then one `novel-episode` production per episode is created;
+# they reuse those decisions and run one after another (the next starts when the previous has
+# finished shooting).
+name: novel-series
+title: Novel → series (whole book, episode by episode)
+description: Give the whole novel; it is split, planned into episodes, cast and styled once, then each episode is adapted faithfully, storyboarded and filmed in turn.
+settings:
+  episode_minutes: 5        # target screen time per episode
+  episode_review: final     # final: you review each episode's final cut; storyboard: also each storyboard; all: every stage
+  auto_shoot: false         # true: each episode starts shooting without waiting for you (hours per episode)
+  max_clip_seconds: 10      # one generation renders at most this long; longer moments become consecutive shots
+  chapter_chars: 6000       # longer chapters are read in parts
+  style: ""                 # camera style; empty: the direction stage proposes options
+  fidelity: faithful
+  interiority: visual
+  image_tier: standard
+  image_candidates: 4
+  video_candidates: 1
+  film_quality: medium
+  aspect: "16:9"
+  subtitles: true
+  auto_advance: true
+  youtube_frames: 4
+  language: English
+  width: 1280
+  height: 720
+  fps: 24
+stages:
+  - id: source
+    title: Novel
+    kind: input
+
+  - id: brief
+    title: Text intake
+    kind: tool
+    tool: ingest
+    needs: [source]
+    gate: auto
+
+  - id: chapters
+    title: Chapters (split in code)
+    kind: tool
+    tool: chapters
+    needs: [brief]
+    gate: auto
+
+  - id: notes
+    title: Chapter notes (read chapter by chapter)
+    kind: skill
+    skill: chapter-notes
+    needs: [chapters]
+    schema: chapter-notes
+    gate: auto
+    chunk_by: {items: chapters.chapters, merge: chapters, omit_inputs: [chapters]}
+
+  - id: plan
+    title: Episode plan
+    kind: skill
+    skill: plan-series
+    needs: [notes]
+    schema: series-plan
+
+  - id: bible
+    title: Series bible (characters · style · voices)
+    kind: skill
+    skill: story-bible
+    needs: [notes, plan]
+    schema: bible
+
+  - id: characters
+    title: Character sheets (casting)
+    kind: render
+    needs: [bible]
+    fan_out: {items: bible.characters, key: id}
+    render:
+      template: flux2-t2i
+      tier: "{settings.image_tier}"
+      n: "{settings.image_candidates}"
+      params:
+        prompt: "Character reference sheet, full body, neutral pose, plain background. {item.look}. Style: {bible.style.look}"
+
+  - id: cards
+    title: FreeVideo cast cards
+    kind: tool
+    tool: freevideo_cards
+    needs: [bible, characters]
+    gate: auto
+
+  - id: direction
+    title: Series direction (style · camera design)
+    kind: skill
+    skill: film-direction
+    needs: [plan, bible]
+    schema: direction
+    instructions: |
+      This is a whole series: `inputs.plan.episodes` takes the place of the adaptation's scenes.
+      The director's book holds for every episode. Write one `scenes` entry per episode, with the
+      episode id (e01, e02, …) as its id: its camera strategy and key moment.
+
+  - id: episodes
+    title: Episodes (one production each)
+    kind: tool
+    tool: series_spawn
+    needs: [plan, chapters, bible, cards, direction]
+    gate: auto

@@ -9,12 +9,19 @@ From `inputs.adaptation` (and `inputs.brief.text` for detail), define everything
 **identical across shots**. These descriptions are pasted verbatim into image prompts, so write
 them as concrete visual descriptions, not prose.
 
+## A whole series (`inputs.notes`, `inputs.plan`)
+When the inputs are chapter notes and an episode plan instead of an adaptation, build the bible for
+the **whole novel**: every recurring character across all chapters (merge aliases into one entry;
+use the descriptions quoted in the notes, the earliest one wins unless the story changes it),
+the recurring locations, and one style for the series. Characters seen in a single chapter only can
+stay out. Each episode will reuse this bible verbatim, so names and looks must be final.
+
 ## Style (`style`)
 - `look`: one line that fixes medium, era, lighting and finish — e.g. "35mm film still, soft
   overcast light, muted teal and amber grade, shallow depth of field". Every prompt ends with it.
 - `palette`, `lens`: optional extra constraints.
 
-## Characters (`characters`, at most 6 — main cast only)
+## Characters (`characters`, at most 6 — main cast only; a whole series: up to 12 recurring characters)
 - `id`: lowercase slug (`mei`, `old_fisherman`); used as a reference key by later stages.
 - `look`: age, build, face, hair, skin, distinctive marks **and** default wardrobe in one dense
   sentence. Avoid anything that changes between shots (expressions, poses, actions).

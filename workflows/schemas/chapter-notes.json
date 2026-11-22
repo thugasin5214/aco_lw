@@ -1,0 +1,36 @@
+{
+  "type": "object",
+  "required": ["chapters"],
+  "properties": {
+    "chapters": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "summary", "characters"],
+        "properties": {
+          "id": {"type": "string"},
+          "title": {"type": "string"},
+          "summary": {"type": "string"},
+          "events": {"type": "array", "items": {"type": "string"}},
+          "characters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["name"],
+              "properties": {
+                "name": {"type": "string"},
+                "aliases": {"type": "array", "items": {"type": "string"}},
+                "role": {"type": "string"},
+                "appearance": {"type": "string", "description": "physical description and clothing as stated in this chapter (quote or close paraphrase)"}
+              }
+            }
+          },
+          "locations": {"type": "array", "items": {"type": "string"}},
+          "mood": {"type": "string"},
+          "screen_minutes": {"type": "number", "description": "estimated minutes on screen if filmed faithfully"}
+        }
+      }
+    }
+  }
+}

@@ -32,7 +32,7 @@
     },
     "characters": {
       "type": "array",
-      "maxItems": 6,
+      "maxItems": 12,
       "items": {
         "type": "object",
         "required": [
