@@ -161,6 +161,16 @@ llm_fallback = ["anthropic", "claude_code", "codex"]  # 依次尝试
 - **工作流 `story-to-film`**：人物变成 **FreeVideo 角色卡**（最多 6 张标注图 + 声音；卡库里有同名卡就复用，否则用已通过的定妆图新建）。镜头由 **一部 FreeVideo 电影** 拍：每镜按 `video_candidates` 拍几条 take，以角色卡为参考；标了 *continue* 的镜头从你选中那条的末帧续拍。take 拍完以一轮候选出现在 **审阅** 里；选中会告诉 FreeVideo；*重做 / 带意见打回* 变成 FreeVideo 按你的意见重拍。续拍镜头至少 10 秒、质量只能 light / medium。暂停时选“立即停止”会取消没拍完的 take。
 - **工作流 `novel-to-series`（小说 → 剧集，忠实改编）**：流程和 `story-to-film` 一样，但每次放一章（或几章），拍成约 `episode_minutes` 分钟（默认 5）的一集。改编保留原文每一场戏、每个动作和每句对白（`fidelity: faithful`）；内心独白只用画面表现：眼神、动作、道具特写、停顿，不加旁白（`interiority: visual`）。分镜**逐场生成**再合并、重新编号，所以一集 35–50 个镜头也不会超出本地模型单次输出的长度；每场分到的时长按它的节拍数分配。默认每镜只拍 1 条 take：按实测（480×864 每秒成片约 3 分钟渲染），一集 5 分钟约要 15 小时（估算），开拍前先看分镜。长小说就一集一集建制片。
 - **导演设计（`direction` 阶段，`story-to-film` 和 `novel-to-series` 都有）**：在分镜之前，按整集剧本设计一套统一的运镜方案：视觉主题、运镜偏好和禁用、景别、焦段、构图、光色、平均镜头时长、轴线规则、视觉母题，外加每场戏的运镜策略和高潮镜头。风格有两种定法：一是**你自己说**，建制片时写 `style`（如「王家卫」「侯孝贤式长镜头」或一段描述），或者在聊天里告诉 agent，它会改设置并重做这一步；二是**你没说**，它会提出 2–3 个适合这个故事的风格方案，按推荐的一个写完整方案，你在审阅里通过，或者用「重做」写「换方案 2」。分镜逐场生成时必须遵守这份方案。风格参考来自 DirectorSKILL（MIT）的 20 位导演风格参数，精简后放在 `skills/film-direction/references/`。
+- **工作流 `novel-series`（整本小说 → 剧集）**：把整本小说一次放进来。
+  1. **切章**：代码按章节标题切开（「第X章 / 第X回 / 卷X / Chapter N」），没有标题就按长度切；超过 `chapter_chars`（默认 6000 字）的章节会再分成几段。
+  2. **逐章摘要**：本地模型一章一章读，不会把整本书塞进一次调用。
+  3. **你审一次分集规划**：按 `episode_minutes` 把章节合成若干集。
+  4. **全剧只定一次**：人物设定、选角、角色卡和导演风格，选角、人物设定和导演风格各审一次。
+  5. **自动建各集**：之后每集自动建一个 `novel-episode` 制片，沿用全剧的人物、角色卡和风格，改编时附上前几集的梗概。
+  6. **一集接一集**：只有第 1 集先开始，前一集拍完，下一集自动开始。
+  - 每集要你审多少，用 `episode_review` 设：`final` 只审成片（默认），`storyboard` 另外审分镜，`all` 每步都审。
+  - `auto_shoot: true` 表示每集写完分镜就自动开拍，不等你按开始。
+  - 单个镜头不超过 `max_clip_seconds`（默认 10 秒，一次生成只能出这么长）；更长的连续动作会拆成几个相连的镜头接着拍，最后剪辑拼接。分镜超长时会让模型重写一次。
 - 提示词遵循 MiniMax 官方 **h3-prompt-writing** skill（装在 `data/skills/`）；FreeVideo 把每个镜头编成 H3 参考格式。
 - **ComfyUI 工具（artokun/comfyui-mcp，由我们的 daemon 启动）**：agent 可以查模型和节点、读与搭建 workflow、读模型族指南（`comfy_catalog`、`comfy`）。运行 workflow 走我们的队列（`run_comfy_workflow`，可追踪，受暂停与内存闸门）。装节点、下模型、训练要你批准（按钮）；重启 ComfyUI、删模型、动队列里别人的任务、释放显存、改 ComfyUI 设置、云端 / 付费节点一律拒绝。
 - **FreeVideo 的批准**：FreeVideo 可以要求开拍电影、长时间重拍前由你在它的页面上批准（ComfyUI → Extensions → FreeVideo → agent 对话）。设置是文件 `~/Documents/ChatGPT/jev/FreeVideo-local/ComfyUI/output/FreeVideo/.agent/confirm.json`（这个 FreeVideo 版本没有页面开关；默认 `{"start": true, "reshoot_seconds": 300}`）。**2026-10-27 按用户要求设为 `{"start": false, "reshoot_seconds": null}`**：开拍与重拍在 FreeVideo 里不再询问；我们自己的「开始」按钮和审核照常。要恢复：把 `start` 改回 `true`，和 / 或把 `reshoot_seconds` 设成秒数。FreeVideo 每次检查都会重读这个文件。

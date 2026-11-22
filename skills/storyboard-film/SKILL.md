@@ -16,7 +16,9 @@ The director's book is binding: use its `camera_grammar` (prefer / avoid, motion
 for every shot, and keep its `continuity` rules (axis, screen direction, eyelines). For each scene
 follow the matching `direction.scenes[]` entry (same id): its `camera_strategy`, `shot_families`,
 the strongest camera choice on its `key_moment`, and its `transition_out`. Carry the `motifs`.
-When the book and the "Craft" defaults below disagree, the book wins.
+When the book and the "Craft" defaults below disagree, the book wins. In a series episode the
+per-scene entries are replaced by `direction.episode_strategy` (this episode's strategy and key
+moment).
 
 ## Per shot
 - `id`: `sh01`, `sh02`, … in screen order. `scene`: the scene id.
@@ -28,7 +30,11 @@ When the book and the "Craft" defaults below disagree, the book wins.
 - `camera`: one move in H3 terms: static shot, push in, pull out, pan, truck, tilt, tracking shot,
   arc shot, with amplitude and speed ("slow push in with small amplitude").
 - `motion`: the single action that happens during the shot. One clear action per shot.
-- `seconds`: 4–15. A shot that continues the previous one must be **at least 10 s**.
+- `seconds`: 4 to `settings.max_clip_seconds` (default 10) — one generation renders only that
+  long. A longer continuous moment (a long exchange, an unbroken action) becomes **several
+  consecutive shots** with `continue: true` on all but the first, each with its own slice of the
+  action and lines. A shot that continues the previous one must be **at least 10 s**, so with
+  `max_clip_seconds` below 10 cut instead of continuing.
 - `continue`: true when the shot is the same moment and place as the previous shot, carried on
   from its last frame (real video continuation — best for keeping faces, light and positions).
   Start a new scene, a time jump or a big change of angle without `continue`.

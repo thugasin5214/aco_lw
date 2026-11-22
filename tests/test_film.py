@@ -7,7 +7,7 @@ from video_agent.production import Production, load_workflows
 from video_agent.skills import SkillLibrary
 from video_agent.studio import Studio
 
-from .test_production import FakeLLM, run_skills, select_all, stage
+from .test_production import DIRECTION, FakeLLM, run_skills, select_all, stage
 
 BOARD = {"shots": [
     {"id": "sh01", "scene": "s1", "cast": ["mei", "cat"], "frame": "Mei at the gate", "framing": "wide",
@@ -409,3 +409,98 @@ def test_direction_designs_camera_before_storyboard(film_prod):
     run_skills(p)
     board_in = json.loads(next(m for sid, m in p.fake_llm.calls if sid == "storyboard")[1]["content"])
     assert board_in["inputs"]["direction"]["book"]["visual_thesis"] == "the market swallows her"
+
+
+NOVEL = "\n\n".join(f"第{n}章 标题{n}\n" + f"第{n}章的正文。" * 30 for n in "一二三")
+PLAN = {
+    "title": "雨夜",
+    "episodes": [
+        {"id": "e01", "title": "起", "chapters": ["c001", "c002"], "synopsis": "Mei loses the cat."},
+        {"id": "e02", "title": "终", "chapters": ["c003"], "synopsis": "Mei finds it."},
+    ],
+}
+
+
+def note(cid):
+    return {"chapters": [{"id": cid, "summary": "s", "characters": [{"name": "Mei"}]}]}
+
+
+def to_series(p, **settings):
+    p.fake_llm.out.update(
+        notes=[note("c001"), note("c002"), note("c003")],
+        plan=[PLAN],
+        direction=[{**DIRECTION, "scenes": [{"id": "e01", "camera_strategy": "still, distant"}]}],
+    )
+    pr = p.create("novel-series", "雨夜", {"source": NOVEL}, settings)
+    run_skills(p)
+    p.review(pr["id"], "plan", "approve")
+    run_skills(p)
+    p.review(pr["id"], "bible", "approve")
+    select_all(p)  # casting → cards
+    run_skills(p)
+    p.review(pr["id"], "direction", "approve")  # → episodes are created
+    run_skills(p)
+    return pr
+
+
+def test_series_reads_chapter_by_chapter_plans_once_and_spawns_episodes(film_prod):
+    p = film_prod
+    pr = to_series(p, episode_review="final", auto_shoot=False)
+    # chapter notes: one call per chapter, the whole novel is not sent along
+    notes_calls = [json.loads(m[1]["content"]) for sid, m in p.fake_llm.calls if sid == "notes"]
+    assert [c["item"]["id"] for c in notes_calls] == ["c001", "c002", "c003"]
+    assert all("chapters" not in c["inputs"] for c in notes_calls)
+    assert "第一章的正文" in notes_calls[0]["item"]["text"]
+
+    eps = p.series.episodes(p.store.get_production(pr["id"]))
+    assert [e["workflow"] for e in eps] == ["novel-episode", "novel-episode"]
+    assert [e["state"] for e in eps] == ["active", "paused"]  # one after another
+    s0 = eps[0]["settings"]
+    assert s0["auto_approve"] == ["adaptation", "storyboard", "clips", "edit"]
+    assert s0["auto_start"] == [] and "episode_review" not in s0
+    # the episode reuses the series' cast and style; previously-on reaches the next episode
+    idx = p._index(eps[1]["id"])
+    series_in = p._current(idx, "series")["data"]
+    assert series_in["previously"] == ["Mei loses the cat."] and series_in["index"] == 1
+    assert p._current(idx, "cards")["data"]["characters"]
+    direction = p._current(p._index(eps[0]["id"]), "direction")["data"]
+    assert direction["episode_strategy"]["camera_strategy"] == "still, distant"
+    text = p._current(p._index(eps[0]["id"]), "source")["data"]["text"]
+    assert "第一章" in text and "第二章" in text and "第三章" not in text
+
+    # episode 1 writes itself (auto-approved) and stops before shooting
+    plan1 = p.plan(eps[0]["id"])
+    assert stage(plan1, "adaptation")["state"] == "completed"
+    assert stage(plan1, "storyboard")["state"] == "completed"
+    assert plan1["next_action"]["stage"] == "clips" and plan1["next_action"]["confirm"] is True
+
+    # rerunning the spawn keeps the existing episodes
+    p.run_stage(pr["id"], "episodes")
+    run_skills(p)
+    assert len(p.series.episodes(p.store.get_production(pr["id"]))) == 2
+
+    # episode 1 finished shooting → episode 2 starts
+    p.series.handoff(p.store.get_production(eps[0]["id"]), {"done": True, "stages": []})
+    assert p.store.get_production(eps[1]["id"])["state"] == "active"
+
+
+def test_series_auto_shoot_starts_filming_without_waiting(film_prod):
+    p = film_prod
+    pr = to_series(p, episode_review="storyboard", auto_shoot=True)
+    ep1 = p.series.episodes(p.store.get_production(pr["id"]))[0]
+    assert ep1["settings"]["auto_start"] == ["clips"]
+    plan1 = p.plan(ep1["id"])
+    assert stage(plan1, "storyboard")["state"] == "review"  # episode_review: storyboard
+    p.review(ep1["id"], "storyboard", "approve")
+    assert stage(p.plan(ep1["id"]), "clips")["state"] in ("active", "running")
+    assert len(p.fv.started) == 1
+
+
+def test_clip_length_cap_gets_one_repair(film_prod):
+    p = film_prod
+    long_board = {"shots": [dict(BOARD["shots"][0], seconds=14)]}
+    p.fake_llm.out["storyboard"] = [long_board, BOARD]
+    pr = to_film(p)
+    board_calls = [m for sid, m in p.fake_llm.calls if sid == "storyboard"]
+    assert len(board_calls) == 2 and "max_clip_seconds" in board_calls[1][-1]["content"]
+    assert stage(p.plan(pr["id"]), "storyboard")["state"] == "completed"

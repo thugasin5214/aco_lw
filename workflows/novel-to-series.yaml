@@ -6,6 +6,7 @@ name: novel-to-series
 title: Novel → series episode (faithful, long)
 description: Faithful adaptation of a chapter into an episode of about episode_minutes minutes; the storyboard is written scene by scene; one take per shot by default.
 settings:
+  max_clip_seconds: 10      # one generation renders at most this long; longer moments become consecutive shots
   style: ""                 # camera style, e.g. a director (王家卫, Hou Hsiao-hsien) or a description; empty: the direction stage proposes 2–3 options
   episode_minutes: 5        # target screen time; sets how many shots each scene gets
   fidelity: faithful        # keep every scene, beat and line (adapt-novel)
@@ -92,6 +93,7 @@ stages:
     extra_skills: [h3-prompt-writing]
     needs: [adaptation, bible, cards, direction]
     schema: storyboard-film
+    cap: {list: shots, field: seconds, setting: max_clip_seconds}
     chunk_by: {items: adaptation.scenes, merge: shots, id_format: "sh{n:02d}", budget_minutes: episode_minutes, weight: beats}
 
   - id: clips
