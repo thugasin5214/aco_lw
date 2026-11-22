@@ -234,7 +234,8 @@ kbd{font:11.5px ui-monospace,monospace;border:1px solid var(--line);border-radiu
 <header>
   <h1 data-t="title">aco_lw Console</h1>
   <span class="stat"><span class="dot" id="d-daemon"></span><b id="s-daemon">–</b>
-    <button class="btn sm" id="pause-all" data-t="pause.all">Pause all</button></span>
+    <button class="btn sm" id="pause-all" data-t="pause.all">Pause all</button>
+    <button class="btn sm danger" id="clear-queue" data-t="q.clear">Clear queue</button></span>
   <span class="stat"><span class="dot" id="d-mem"></span><span data-t="memory">Memory</span> <b id="s-mem">–</b></span>
   <span class="stat"><span class="dot" id="d-comfy"></span>ComfyUI <b id="s-comfy">–</b></span>
   <span class="stat"><span class="dot" id="d-llm"></span>LLM <b id="s-llm">–</b></span>
@@ -427,6 +428,9 @@ const I18N = {
     "pause.all": "Pause all", "resume.all": "Resume", "pause.prod": "Pause", "resume.prod": "Resume",
     "pause.ask": "Pause — queued work is kept and nothing new starts.", "pause.soft": "Pause (let the running task finish)",
     "pause.hard": "Pause and stop the running task now",
+    "q.clear": "⏹ Clear queue", "q.ask": "Clear the waiting queue — stop every agent run, drop all queued renders and LLM jobs, pause the productions. Results already made are kept.",
+    "q.soft": "Clear (let the running render finish)", "q.hard": "Clear and stop the running render now",
+    "q.done": "Stopped {runs} agent run(s), dropped {tasks} queued render(s) and {jobs} LLM job(s)",
     "tab.queue": "Queue", "q.now": "Now", "q.mem": "Memory (last 30 min)", "q.runs": "Agent runs", "q.plan": "Queue & ETA",
     "q.idle": "No render running.", "q.rendering": "Rendering {k}: {t}", "q.family": "Resident model family: {f}",
     "q.llm": "LLM: {l}{f}", "q.inflight": " · answering now", "q.empty": "Nothing queued.", "q.noruns": "No agent run is waiting.",
@@ -539,6 +543,9 @@ const I18N = {
     "pause.all": "全部暂停", "resume.all": "继续", "pause.prod": "暂停", "resume.prod": "继续",
     "pause.ask": "暂停——排队的任务保留，不再开始新的。", "pause.soft": "暂停（让正在跑的跑完）",
     "pause.hard": "暂停，并立即停止正在跑的任务",
+    "q.clear": "⏹ 清空队列", "q.ask": "清空等待队列——停止所有 agent 任务，丢弃所有排队的渲染和 LLM 作业，并暂停各制片。已生成的结果保留。",
+    "q.soft": "清空（让正在生成的渲染跑完）", "q.hard": "清空，并立即停止正在生成的渲染",
+    "q.done": "已停止 {runs} 个 agent 任务，丢弃 {tasks} 个排队渲染、{jobs} 个 LLM 作业",
     "tab.queue": "队列", "q.now": "当前", "q.mem": "内存（最近 30 分钟）", "q.runs": "Agent 运行", "q.plan": "排队与预计时间",
     "q.idle": "没有渲染在跑。", "q.rendering": "正在渲染{k}：{t}", "q.family": "常驻模型族：{f}",
     "q.llm": "LLM：{l}{f}", "q.inflight": " · 正在回答", "q.empty": "没有排队的任务。", "q.noruns": "没有在等待的 agent 运行。",
@@ -1581,6 +1588,16 @@ function askPause(onPick){
 $("#pause-all").onclick = () => {
   if ($("#pause-all").dataset.paused) return act("/api/resume", {});
   askPause(hard => act("/api/pause", {stop_running: hard}));
+};
+$("#clear-queue").onclick = () => {
+  modal(`<h3>${t("q.ask")}</h3><div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">
+    <button class="btn" id="cq-soft">${t("q.soft")}</button><button class="btn danger" id="cq-hard">${t("q.hard")}</button>
+    <button class="btn" onclick="closeModal()">${t("cancel")}</button></div>`);
+  const go = async hard => { closeModal();
+    try { const r = await api("/api/queue/clear", {stop_running: hard}); toast(t("q.done", r)); refreshAll(true); }
+    catch(e){ toast(t("not.done") + e.message, true); } };
+  $("#cq-soft").onclick = () => go(false);
+  $("#cq-hard").onclick = () => go(true);
 };
 async function refreshAll(force){
   await pollSystem();

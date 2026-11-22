@@ -557,3 +557,65 @@ def test_deleting_a_production_wakes_the_agent_waiting_on_it(env, tmp_path):
     res = json.loads(next(m for m in script.seen[1] if m.get("tool_call_id") == "1")["content"])
     assert res["deleted"] is True
     assert last_run(studio)["status"] == "done" and said[-1][0] == "it was deleted"
+
+
+def test_cancel_during_the_llm_call_stays_cancelled_and_drops_its_renders(env):
+    """You cancelled while the LLM was thinking; when it answered, the run executed its tool
+    calls and was running again. Now the answer is dropped and its queued renders go too."""
+    studio, make, _said = env
+    holder = {}
+
+    def queue(msgs):
+        return {"tool_calls": [call("queue_round", {"template": "flux2-t2i", "prompt": "girl"})]}
+
+    def wait(msgs):
+        rid = json.loads(msgs[-1]["content"])["round_id"]
+        return {"tool_calls": [call("wait_for_round", {"round_id": rid})]}
+
+    def cancelled_meanwhile(msgs):
+        holder["a"].runtime.cancel(last_run(studio)["id"])
+        return {"tool_calls": [call("queue_round", {"template": "flux2-t2i", "prompt": "more"})]}
+
+    a, _script = make(queue, wait)
+    holder["a"] = a
+    a.inbound("web", "make portraits", lambda t, b=None: None)
+    run_all(a)
+    run = last_run(studio)
+    assert run["status"] == "waiting_event"
+    queued = studio.store.by_state("draft")
+    assert queued
+    out = a.runtime.cancel(run["id"])
+    assert out["dropped_tasks"] == len(queued) and studio.store.by_state("draft") == []
+
+    # a second request is cancelled while its LLM call is out
+    a2, _ = make(cancelled_meanwhile, {"text": "never"})
+    holder["a"] = a2
+    a2.inbound("web", "again", lambda t, b=None: None)
+    run_all(a2)
+    run2 = last_run(studio)
+    assert run2["status"] == "cancelled"
+    assert studio.store.by_state("draft") == []  # its tool call never ran
+    assert not any(m["role"] == "tool" for m in studio.store.agent_msgs(run2["id"]))
+
+
+def test_clear_queue_stops_runs_and_drops_queued_renders(env):
+    studio, make, _said = env
+
+    def queue(msgs):
+        return {"tool_calls": [call("queue_round", {"template": "flux2-t2i", "prompt": "girl"})]}
+
+    def wait(msgs):
+        rid = json.loads(msgs[-1]["content"])["round_id"]
+        return {"tool_calls": [call("wait_for_round", {"round_id": rid})]}
+
+    a, _ = make(queue, wait)
+    a.inbound("web", "make portraits", lambda t, b=None: None)
+    run_all(a)
+    studio.start_round("flux2-t2i", {"seed": 3})  # queued by hand
+    out = a.clear_queue()
+    assert out["runs"] == 1 and out["tasks"] == 4
+    assert last_run(studio)["status"] == "cancelled" and studio.store.by_state("draft") == []
+    # a late round result does not wake the cancelled run
+    a.runtime.resolve(f"round:{studio.store.rounds()[0]['id']}", {"state": "review"})
+    run_all(a)
+    assert last_run(studio)["status"] == "cancelled"

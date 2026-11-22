@@ -81,6 +81,7 @@ Ready when you see `Telegram listener started (whitelist [...])` and `Console: h
 | `/reopen [ROUND_ID]` | Change the decision of the latest (or given) decided round |
 | `/pause` `/resume` | Pause / resume rendering (the running task finishes) |
 | `/cancel` | Cancel this project's queued tasks and interrupt our running task |
+| `/cancel all [now]` | Clear the whole queue (console: ⏹ Clear queue): stop every agent run — it stays stopped even if an LLM call returns later — drop all queued renders and production LLM jobs, pause the productions; `now` also interrupts the running render |
 | `/mode [on_demand\|session\|always\|command_only]` | LLM residency (default on demand) |
 | `/project` · `/projects` · `/project new NAME` · `/project use NAME` · `/project done` | Projects |
 | `/session` · `/session new [TITLE]` · `/session use N` | Sessions (N: 1 = most recent) |

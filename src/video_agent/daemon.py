@@ -481,6 +481,31 @@ class Actions:
         say(tr("unknown_button", d=data))
         return False
 
+    # ---- stop everything that waits ----
+    def clear_queue(self, stop_running: bool = False) -> dict:
+        """Clear the waiting queue: stop every live agent run (they stay stopped even when an LLM
+        call returns later), drop all queued renders this system submitted, and drop queued
+        production LLM / tool jobs. Productions are paused so nothing restarts by itself. With
+        stop_running the render ComfyUI is working on is interrupted too."""
+        live = self.store.runs(
+            None, "running", "waiting_resources", "waiting_event", "waiting_user"
+        )
+        tasks = sum(self.runtime.cancel(r["id"])["dropped_tasks"] for r in live)
+        tasks += self.studio.cancel_queued(None, "queue cleared")
+        jobs = 0
+        prod = getattr(self, "production", None)
+        if prod is not None:
+            for a in prod.pending_skill_jobs():
+                self.store.update_artifact(
+                    a["id"], status="failed", note="cancelled: queue cleared"
+                )
+                jobs += 1
+            for p in self.store.productions():
+                if p["state"] == "active":
+                    prod.pause(p["id"])
+        cur = self.worker.stop_current() if stop_running and self.worker else None
+        return {"runs": len(live), "tasks": tasks, "jobs": jobs, "interrupted": cur and cur["id"]}
+
     # ---- commands ----
     def command(self, channel: str, text: str, say: Reply) -> None:
         cmd, *args = text.split()
@@ -509,6 +534,10 @@ class Actions:
         elif cmd == "/resume":
             store.set_kv("paused", False)
             say(tr("resumed"))
+        elif cmd == "/cancel" and args[:1] == ["all"]:
+            r = self.clear_queue(stop_running=args[1:2] == ["now"])
+            x = tr("queue_cleared_running") if r["interrupted"] else ""
+            say(tr("queue_cleared", **r, x=x))
         elif cmd == "/cancel":
             n = s.cancel_queued(s.current_project()["id"])
             for r in store.runs(
