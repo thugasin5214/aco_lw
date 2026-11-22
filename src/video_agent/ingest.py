@@ -24,6 +24,8 @@ import httpx
 MAX_PAGE_BYTES = 5 * 2**20
 MAX_IMAGE_BYTES = 15 * 2**20
 MAX_TEXT_CHARS = 20000
+TEXT_KINDS = ("text", "file", "url", "youtube")
+TEXT_EXT = (".txt", ".md", ".markdown", ".text")
 # honest about who we are, not posing as a browser
 UA = "aco_lw/0.1 (local video agent; fetches pages the user links)"
 YT_HOSTS = ("youtube.com", "youtu.be", "m.youtube.com", "www.youtube.com", "music.youtube.com")
@@ -58,8 +60,12 @@ class Ingest:
         resolve_upload: Callable[[str], str] | None = None,
         http: httpx.Client | None = None,
         ytdl: Callable[[dict], object] | None = None,
+        file_roots: list[Path] | None = None,
     ):
         self.work_dir = work_dir
+        # text files may be read only from inside these folders (e.g. data/: agent work dirs,
+        # downloads, uploads)
+        self.file_roots = [Path(r).resolve() for r in (file_roots or [])]
         self.resolve_upload = resolve_upload or (lambda x: x)
         self.http = http or httpx.Client(
             timeout=20, follow_redirects=True, headers={"User-Agent": UA}
@@ -72,9 +78,16 @@ class Ingest:
             source = {"text": source, "sources": []}
         self.work_dir.mkdir(parents=True, exist_ok=True)
         texts, refs, report = [], [], []
-        if (source.get("text") or "").strip():
-            texts.append(("Brief / source text", source["text"].strip()))
-            report.append({"kind": "text", "status": "ok", "chars": len(source["text"])})
+        text = (source.get("text") or "").strip()
+        as_file = self._as_file(text)
+        if as_file is not None:  # the text is just a path to a text file: read the file
+            source = {
+                **source,
+                "sources": [{"kind": "file", "path": text}, *(source.get("sources") or [])],
+            }
+        elif text:
+            texts.append(("Brief / source text", text))
+            report.append({"kind": "text", "status": "ok", "chars": len(text)})
         for i, src in enumerate(source.get("sources") or [], 1):
             kind = src.get("kind") or (
                 "image" if src.get("upload") else classify(src.get("url", ""))
@@ -83,6 +96,12 @@ class Ingest:
             try:
                 if kind == "text":
                     texts.append((src.get("title") or f"Note {i}", src["text"].strip()))
+                elif kind == "file":
+                    body = self._read_file(src["path"])
+                    entry.update(path=src["path"], chars=len(body))
+                    texts.append(
+                        (src.get("title") or f"Source text ({Path(src['path']).name})", body)
+                    )
                 elif kind == "image":
                     refs.append(self._image(src, len(refs) + 1))
                     entry["ref"] = refs[-1]["id"]
@@ -123,8 +142,53 @@ class Ingest:
             report.append(entry)
         if not texts and not refs:
             raise ValueError("no usable source (all failed or empty)")
+        failed = [e for e in report if e["status"] == "failed" and e["kind"] in TEXT_KINDS]
+        if failed and settings.get("fidelity") == "faithful":
+            # a faithful adaptation of half the source is a changed story: stop and say why
+            raise ValueError(
+                "faithful adaptation needs the whole source, but some text failed to load: "
+                + "; ".join(
+                    f"{e['kind']} {e.get('path') or e.get('url') or ''}: {e['error']}"
+                    for e in failed
+                )
+            )
         body = "\n\n".join(f"## {h}\n\n{t}" for h, t in texts)
-        return {"text": body[: MAX_TEXT_CHARS * 2], "references": refs, "sources": report}
+        limit = settings.get("max_source_chars", MAX_TEXT_CHARS * 2)
+        out = {"text": body, "references": refs, "sources": report}
+        if limit and len(body) > limit:
+            out["text"] = body[:limit]
+            out["truncated"] = {"chars": len(body), "kept": limit}
+        return out
+
+    # ---- text files ----
+    def _as_file(self, text: str) -> Path | None:
+        """A one-line text that names an existing text file inside the allowed folders."""
+        if not text or "\n" in text or len(text) > 500 or not text.endswith(TEXT_EXT):
+            return None
+        try:
+            return self._resolve(text)
+        except (FileNotFoundError, PermissionError):
+            return None
+
+    def _resolve(self, path: str) -> Path:
+        p = Path(path).expanduser()
+        cands = [p] if p.is_absolute() else [r / p for r in self.file_roots]
+        for c in cands:
+            c = c.resolve()
+            if c.is_file():
+                if not any(c.is_relative_to(r) for r in self.file_roots):
+                    raise PermissionError(f"{path} is outside the allowed folders")
+                return c
+        raise FileNotFoundError(f"text file {path} not found")
+
+    def _read_file(self, path: str) -> str:
+        raw = self._resolve(path).read_bytes()
+        for enc in ("utf-8", "gb18030", "big5"):
+            try:
+                return raw.decode(enc).strip()
+            except UnicodeDecodeError:
+                continue
+        return raw.decode("utf-8", errors="replace").strip()
 
     # ---- images ----
     def _ref(self, n: int, path: str, label: str, role: str, use: str, origin: str = "") -> dict:
