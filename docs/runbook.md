@@ -284,6 +284,7 @@ A ChatGPT subscription is not an API: use it through `codex`; `openai` bills an 
   - The agent loads the `character-consistency` skill: LoRA front portrait and per-shot first frames, then `freevideo-ref` with no reference video, just two reference pictures, so the face holds through the whole clip.
   - Long videos are split into 5–10 s shots, each with its own first frame, then joined.
   - `h3n-r2v` doesn't run on a Mac (int8 matmul missing on MPS).
+- **H3 video LoRAs** (camera moves, dance / motion, style, adult): template `h3-lora-ref`. The character picture is a reference for the whole clip; `lora` / `lora2` / `lora3` stack up to three LoRAs, and their trigger words go into the prompt. Many community LoRAs record no base model, so add `base: minimax-h3` in `data/loras.yaml` for the agent to match them to the template. Adult LoRAs are only for clearly adult fictional characters.
 - **Confirmed by you**: the agent proposes "character → LoRA, strength" with `propose_memory`; once you confirm, the project uses it from then on.
 
 ## 4. Resources and memory policy (automatic)

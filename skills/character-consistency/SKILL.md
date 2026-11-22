@@ -16,6 +16,8 @@ and the bigger the motion, the further it drifts. Lock the identity at every ste
   loaded into the H3 video model — they reach the video through the images you make with them.
 - Strength: use the `strength` noted for that LoRA; otherwise 0.45–0.6. Higher locks the face
   harder but freezes pose, light and style; lower drifts.
+- **H3 video LoRAs** (base minimax-h3: camera moves, dance / motion, style, adult content) go into
+  `h3-lora-ref` — see section 3. They don't hold a face; the reference picture does.
 - Several LoRAs of the same person in different styles (photo / anime): pick the style the user
   wants; don't stack them.
 - **Only a casting photo, no LoRA**: use it as the reference image (`flux2-edit`, `zimage-i2i`) and
@@ -33,10 +35,13 @@ With `flux2-lora-edit` (casting photo as `image`, LoRA on) make what the video n
 | Need | Route |
 |---|---|
 | One clip, face must hold the whole time | `freevideo-ref` **without `ref_video`**: `ref_image` = front portrait, `ref_image2` = the shot's first frame; prompt names them `<Picture 1>` / `<Picture 2>`. Start at `draft-5s`. |
+| A clip that needs a camera move, dance / motion, style or adult LoRA | `h3-lora-ref`: `image` = the front portrait (a reference for the whole clip), `lora` / `lora2` / `lora3` = up to three H3 LoRAs (e.g. camera + motion + content), each at its noted strength (1.0 if none; lower to 0.6–0.8 when stacking three). Write each LoRA's trigger words into the prompt. Start at `smoke-portrait` (384×640, 5 s). |
 | Short clip (≤ 10 s), little head turning | `h3-i2v` with the LoRA first frame as `image`. |
 | Long action (e.g. a 60 s timeline) | Don't render one long i2v clip. Split it into 5–10 s shots, each with its own LoRA first frame (or `freevideo-ref`), then join them with `ffmpeg-assemble`. |
 | Multi-shot film, several characters | FreeVideo cast card (story-to-film workflow or `delegate_freevideo`) with the LoRA images as the card's pictures. |
 | Copy a reference video's moves with this person | `freevideo-ref` with `ref_video` + the LoRA portrait as `ref_image` (see the video replication rules). |
+
+Adult LoRAs are only for characters that are clearly adults: say the age in the prompt ("an adult woman in her mid-20s"), and never use them with a real person's face or with anyone who looks underage.
 
 `h3n-r2v` (native 4-reference) needs CUDA: on Apple silicon it fails (`aten::_int_mm` missing on MPS), so don't use it on a Mac.
 
