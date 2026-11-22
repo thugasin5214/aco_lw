@@ -10,6 +10,14 @@ description: Break an approved adaptation into a shot list for a FreeVideo film 
 can be cast with a consistent face. Each shot becomes one H3 video take (with the cast cards as
 references); the user picks the best take per shot.
 
+## Follow the direction (`inputs.direction`)
+The director's book is binding: use its `camera_grammar` (prefer / avoid, motion budget, height),
+`shot_size_bias`, `lens_policy`, `composition`, `light_and_color` and `editing.avg_shot_seconds`
+for every shot, and keep its `continuity` rules (axis, screen direction, eyelines). For each scene
+follow the matching `direction.scenes[]` entry (same id): its `camera_strategy`, `shot_families`,
+the strongest camera choice on its `key_moment`, and its `transition_out`. Carry the `motifs`.
+When the book and the "Craft" defaults below disagree, the book wins.
+
 ## Per shot
 - `id`: `sh01`, `sh02`, … in screen order. `scene`: the scene id.
 - `cast`: ids of the characters visible (at most 3). Only ids present in `inputs.cards.characters`.

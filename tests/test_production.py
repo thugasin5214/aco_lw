@@ -67,9 +67,27 @@ BOARD = {
 }
 
 
+DIRECTION = {
+    "style_options": [{"id": "hou_hsiao_hsien", "name": "Hou Hsiao-hsien", "why": "quiet search"}],
+    "chosen": {"id": "hou_hsiao_hsien", "source": "proposal"},
+    "book": {
+        "visual_thesis": "the market swallows her",
+        "camera_grammar": {"prefer": ["static shot"], "avoid": ["handheld"]},
+        "shot_size_bias": ["wide"],
+        "editing": {"avg_shot_seconds": 8},
+    },
+    "scenes": [{"id": "s1", "camera_strategy": "distant and still"}],
+}
+
+
 class FakeLLM:
     def __init__(self):
-        self.out = {"adaptation": [ADAPT], "bible": [BIBLE], "storyboard": [BOARD]}
+        self.out = {
+            "adaptation": [ADAPT],
+            "bible": [BIBLE],
+            "direction": [DIRECTION],
+            "storyboard": [BOARD],
+        }
         self.calls = []
         self.park = False
 
