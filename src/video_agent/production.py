@@ -32,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from .executors.ffmpeg import probe_seconds
 
 RUNNING = ("queued", "running")
+ACTIVE_TASK = ("submitted", "running")  # renders ComfyUI / FreeVideo is working on
 
 
 # ---------------------------------------------------------------- spec
@@ -292,6 +293,8 @@ class Production:
         self.work_dir = work_dir or (self.store.jobs_dir.parent / "productions")
         # a stage enters review / fails / completes → notify
         self.listeners: list[Callable[[dict], None]] = []
+        # a production was deleted → its id (agent runs waiting on it are woken)
+        self.deleted_listeners: list[Callable[[str], None]] = []
         self.stop_running: Callable[[str], dict | None] = lambda pid: (
             None
         )  # injected by the daemon: interrupt this production's running task
@@ -373,6 +376,55 @@ class Production:
         self._wake.set()
         self.log(f"production {production_id}: resumed")
         return self.store.get_production(production_id)
+
+    # ---- delete ----
+    def delete(self, production_id: str) -> dict:
+        """Delete a production for real: its series episodes, the render rounds it created (with
+        their files), its artifacts and its work directory. Unsubmitted drafts are dropped; refused
+        while ComfyUI / FreeVideo runs one of its renders (pause with "stop now" first). An LLM call in flight is dropped when it
+        returns. Agents waiting on it are woken with `deleted`."""
+        from .i18n import tr
+
+        prod = self._prod(production_id)
+        family = [*self.series.episodes(prod), prod]
+        with self._lock:
+            rounds = {p["id"]: self.store.production_rounds(p["id"]) for p in family}
+            tasks = {
+                p["id"]: [t for r in rounds[p["id"]] for t in self.store.round_tasks(r["id"])]
+                for p in family
+            }
+            # drafts not yet submitted are simply dropped (paused → the Worker no longer takes
+            # them); only what ComfyUI / FreeVideo is already working on blocks
+            busy = [t for ts in tasks.values() for t in ts if t["state"] in ACTIVE_TASK]
+            if busy:
+                raise ProductionError(tr("prod_delete_busy", n=len(busy)))
+            for p in family:
+                self.store.update_production(p["id"], state="paused")
+            if self.film is not None:
+                for p in family:
+                    self.film.cancel(p["id"])  # FreeVideo takes not yet shot
+            out = {"productions": 0, "artifacts": 0, "rounds": 0, "tasks": 0, "freed_mb": 0.0}
+            for p in family:
+                freed = sum(self.studio._remove_files(t) for t in tasks[p["id"]])
+                self.store.delete_tasks([t["id"] for t in tasks[p["id"]]])
+                for r in rounds[p["id"]]:
+                    self.store.delete_round_row(r["id"])
+                out["artifacts"] += self.store.delete_production_rows(p["id"])
+                shutil.rmtree(self.work_dir / p["id"], ignore_errors=True)
+                out["productions"] += 1
+                out["rounds"] += len(rounds[p["id"]])
+                out["tasks"] += len(tasks[p["id"]])
+                out["freed_mb"] += round(freed / 2**20, 1)
+                for cb in list(self.deleted_listeners):
+                    try:
+                        cb(p["id"])
+                    except Exception as e:  # noqa: BLE001
+                        self.log(f"production delete listener failed: {e}")
+        self.log(f"production {production_id}: deleted ({out})")
+        return {**out, "title": prod["title"]}
+
+    def _gone(self, production_id: str) -> bool:
+        return self.store.get_production(production_id) is None
 
     @staticmethod
     def _gate(prod: dict, st: Stage) -> str:
@@ -788,8 +840,13 @@ class Production:
             self.store.update_artifact(art["id"], status="queued")
             raise
         except Exception as e:  # noqa: BLE001 — record the reason; you decide whether to rerun
+            if self._gone(prod["id"]):
+                return art  # deleted while the LLM was working
             art = self.store.update_artifact(art["id"], status="failed", note=str(e)[:500])
             self._emit(prod, st, art, "failed")
+            return art
+        if self._gone(prod["id"]):
+            self.log(f"production {prod['id']}: deleted during {st.id}, result dropped")
             return art
         status = "current" if self._gate(prod, st) == "auto" else "review"
         art = self.store.update_artifact(
@@ -869,6 +926,8 @@ class Production:
         rest: dict = {}
         all_stats: list = []
         for i, item in enumerate(items):
+            if self._gone(prod["id"]):
+                raise ProductionError("production deleted")
             chunk = {"index": i + 1, "of": len(items), "elements_so_far": len(merged)}
             if budget:
                 chunk["target_seconds"] = round(budget * weights[i] / sum(weights))
@@ -903,9 +962,13 @@ class Production:
             if st.output_schema:
                 jsonschema.validate(data, st.output_schema)
         except Exception as e:  # noqa: BLE001 — record the reason; you decide whether to rerun
+            if self._gone(prod["id"]):
+                return art
             art = self.store.update_artifact(art["id"], status="failed", note=str(e)[:500])
             self._emit(prod, st, art, "failed")
             return art
+        if self._gone(prod["id"]):
+            return art  # deleted while the tool ran
         status = "current" if self._gate(prod, st) == "auto" else "review"
         art = self.store.update_artifact(art["id"], status=status, data=data)
         self._emit(prod, st, art, status)
@@ -1332,7 +1395,9 @@ class Production:
                         raise ProductionError("输出未通过 schema 校验；请手改后提交或重做")
                     art = self.store.update_artifact(art["id"], status="current", note=note)
                 self._supersede(art)
-                self.store.log_message(origin, "in", f"approved {stage_id}", prod["project_id"])
+                # into the current session: a message without one resurfaces in a "history
+                # session" after you delete sessions
+                self.studio.log(origin, "in", f"approved {stage_id}", prod["project_id"])
                 self.advance(production_id)
                 return art
             if action == "redo":

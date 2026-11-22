@@ -99,6 +99,10 @@ M: dict[str, tuple[str, str]] = {
         "Used by the active production “{p}”; finish or delete that production first.",
         "进行中的制片「{p}」还在用它；先结束或删除那个制片。",
     ),
+    "prod_delete_busy": (
+        "{n} of this production's render(s) are still queued or running; pause it with “stop now” first.",
+        "这个制片还有 {n} 个渲染在排队或生成中；先「暂停 → 立即停止」再删。",
+    ),
     "no_round": ("No round {r}.", "没有这一轮：{r}。"),
     "no_task": ("No task {t}.", "没有这个任务：{t}。"),
     "log_deleted": (
