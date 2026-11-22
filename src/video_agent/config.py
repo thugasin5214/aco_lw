@@ -80,6 +80,11 @@ class Settings:
     memory_wait_s: float = 600.0
     poll_interval_s: float = 2.0
     task_timeout_s: float = 5400.0
+    # the resource scheduler attributes Docker's share of unified memory (read-only probe).
+    # Visibility only: on macOS the Docker Desktop VM already counts in psutil used/available,
+    # so this does not change the admission math (that would double-count).
+    docker_aware: bool = True
+    docker_poll_s: float = 5.0  # cache window for the read-only `docker stats` probe
     # use the FreeVideo agent API (character cards, multi-shot films); off in tests
     freevideo_agent: bool = True
     language: str = "en"  # default language of the console / system messages: en | zh
@@ -155,6 +160,7 @@ EDITABLE: list[tuple[str, str, str, str]] = [
     ("render", "round_size", "每轮候选数", "restart"),
     ("render", "memory_margin_gib", "渲染前预留内存（GiB）", "live"),
     ("render", "memory_wait_s", "等内存的最长秒数", "live"),
+    ("render", "docker_aware", "资源曲线计入 Docker 占用（只读）", "live"),
     ("render", "task_timeout_s", "单个任务超时秒数", "live"),
     ("render", "comfy_output_dir", "ComfyUI output 目录（删除产物时连同原图）", "live"),
     ("system", "language", "系统消息语言：en / zh", "live"),

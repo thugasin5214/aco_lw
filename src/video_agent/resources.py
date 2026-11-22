@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
-from . import llm
+from . import docker, llm
 from .memory import snapshot
 from .registry import ModelInfo, Template
 
@@ -157,6 +157,7 @@ class RenderGate:
     actions: list[str] = field(default_factory=list)
     unloaded_llm: bool = False
     last: dict = field(default_factory=dict)
+    docker: dict = field(default_factory=dict)  # Docker's share of unified memory at submit (read-only)
     waited_s: float = 0.0
 
 
@@ -177,6 +178,12 @@ class ResourceManager:
         self.resident_family: str | None = None
         self.listeners: list[Callable[[], None]] = []  # render finished → wake parked LLM jobs
         self.history: collections.deque = collections.deque(maxlen=720)  # about 1 hour (every 5 s)
+        # read-only Docker attribution (visibility only; psutil already counts the VM in avail/used).
+        # Injected like `executors` so tests can supply a fake probe.
+        self.docker_probe: Callable[[], dict] = docker.docker_snapshot
+        self.docker_aware: bool = getattr(cfg, "docker_aware", True)
+        self.docker_poll_s: float = getattr(cfg, "docker_poll_s", 5.0)
+        self._docker_cache: tuple[float, dict] | None = None
         # injected by the orchestrator: cross-process gating asks the executors directly
         self.executors: dict | None = None
         # FreeVideo films being shot (production film stage): they skip prepare_render but hold the
@@ -192,13 +199,40 @@ class ResourceManager:
         snap = self.snap()
         with self._lock:
             ra = self.render_active
+        du = self.docker_usage()
         self.history.append(
-            {"t": time.time(), **snap, "render": ra and ra["kind"], "llm": self.llm.in_flight > 0}
+            {
+                "t": time.time(),
+                **snap,
+                "render": ra and ra["kind"],
+                "llm": self.llm.in_flight > 0,
+                "docker_gib": du.get("total_gib", 0.0) if du.get("available") else 0.0,
+            }
         )
 
     @staticmethod
     def snap() -> dict:
         return snapshot()  # looked up at runtime so tests can replace the module-level snapshot
+
+    def docker_usage(self) -> dict:
+        """Read-only, cached: how much unified memory Docker holds, and per container.
+
+        Attribution only — the admission math already sees Docker through psutil's
+        avail/used, so this value is never subtracted again. Never raises; the probe runs
+        at most once per `docker_poll_s`. Returns `docker.DockerSnapshot.as_dict()` shape.
+        """
+        if not self.docker_aware:
+            return {"available": False, "total_gib": 0.0, "containers": [], "error": "disabled"}
+        now = time.monotonic()
+        cached = self._docker_cache
+        if cached and now - cached[0] < self.docker_poll_s:
+            return cached[1]
+        try:
+            usage = self.docker_probe()
+        except Exception as e:  # noqa: BLE001 - a probe failure must never break scheduling
+            usage = {"available": False, "total_gib": 0.0, "containers": [], "error": str(e)}
+        self._docker_cache = (now, usage)
+        return usage
 
     # ---- LLM gate ----
     def exclusive_classes(self) -> set[str]:
@@ -356,6 +390,7 @@ class ResourceManager:
                 continue
             self.sleep(10)
         res.waited_s = round(time.monotonic() - start, 1)
+        res.docker = self.docker_usage()  # read-only attribution recorded at submit time
         if res.ok:
             with self._lock:
                 self.render_active = {
