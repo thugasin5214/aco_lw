@@ -67,9 +67,27 @@ BOARD = {
 }
 
 
+DIRECTION = {
+    "style_options": [{"id": "hou_hsiao_hsien", "name": "Hou Hsiao-hsien", "why": "quiet search"}],
+    "chosen": {"id": "hou_hsiao_hsien", "source": "proposal"},
+    "book": {
+        "visual_thesis": "the market swallows her",
+        "camera_grammar": {"prefer": ["static shot"], "avoid": ["handheld"]},
+        "shot_size_bias": ["wide"],
+        "editing": {"avg_shot_seconds": 8},
+    },
+    "scenes": [{"id": "s1", "camera_strategy": "distant and still"}],
+}
+
+
 class FakeLLM:
     def __init__(self):
-        self.out = {"adaptation": [ADAPT], "bible": [BIBLE], "storyboard": [BOARD]}
+        self.out = {
+            "adaptation": [ADAPT],
+            "bible": [BIBLE],
+            "direction": [DIRECTION],
+            "storyboard": [BOARD],
+        }
         self.calls = []
         self.park = False
 
@@ -625,3 +643,41 @@ def test_pause_can_stop_the_running_task(prod):
     pr = prod.create("novel-to-film", "x", {"source": "..."})
     out = prod.pause(pr["id"], stop_running=True)
     assert stopped == [pr["id"]] and out["interrupted"] == "t1"
+
+
+def test_chunked_storyboard_runs_scene_by_scene_and_renumbers(prod):
+    """novel-to-series: one storyboard call per scene, shots joined and renumbered, each scene
+    gets its share of episode_minutes by number of beats."""
+    p = prod
+    two = {
+        **ADAPT,
+        "scenes": [
+            {**ADAPT["scenes"][0], "id": "s1", "beats": ["a", "b", "c"]},
+            {**ADAPT["scenes"][0], "id": "s2", "beats": ["d"]},
+        ],
+    }
+    p.fake_llm.out["adaptation"] = [two]
+    pr = p.create("novel-to-series", "Ep 1", {"source": "Chapter one ..."})
+    run_skills(p)
+    sys_msg = p.fake_llm.calls[-1][1][0]["content"]
+    assert "Fidelity" in sys_msg  # adapt-novel carries the faithful mode
+    assert json.loads(p.fake_llm.calls[-1][1][1]["content"])["settings"]["fidelity"] == "faithful"
+    p.review(pr["id"], "adaptation", "approve")
+
+    shot = {**BOARD["shots"][0], "seconds": 5}
+    p.fake_llm.out["storyboard"] = [
+        {"shots": [{**shot, "id": "x"}, {**BOARD["shots"][1], "id": "y", "seconds": 5}]},
+        {"shots": [{**shot, "id": "x", "scene": "s2"}]},
+    ]
+    st = p._wf(p.store.get_production(pr["id"])).stage("storyboard")
+    n0 = len(p.fake_llm.calls)
+    data, _, _, violation = p._run_chunks(
+        p.store.get_production(pr["id"]), st, {"meta": {}, "note": None}
+    )
+    assert violation is None
+    assert [s["id"] for s in data["shots"]] == ["sh01", "sh02", "sh03"]
+    assert [s["scene"] for s in data["shots"]] == ["s1", "s1", "s2"]
+    users = [json.loads(m[1]["content"]) for _, m in p.fake_llm.calls[n0:]]
+    assert [u["item"]["id"] for u in users] == ["s1", "s2"]
+    assert [u["chunk"]["target_seconds"] for u in users] == [225, 75]  # 5 min split 3:1 by beats
+    assert "previous_element" not in users[0] and users[1]["previous_element"]["scene"] == "s1"

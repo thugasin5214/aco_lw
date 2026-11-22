@@ -90,7 +90,9 @@ def to_film(p):
     p.review(pr["id"], "adaptation", "approve")
     run_skills(p)
     p.review(pr["id"], "bible", "approve")
-    select_all(p)  # casting → character cards (tool, automatic) → storyboard
+    select_all(p)  # casting → character cards (tool, automatic); direction runs alongside
+    run_skills(p)
+    p.review(pr["id"], "direction", "approve")  # → storyboard
     run_skills(p)
     p.review(pr["id"], "storyboard", "approve")
     return pr
@@ -382,3 +384,28 @@ def test_take_failed_before_a_task_is_imported_without_job_lookup(film_prod):
     (task,) = [t for t in p.store.by_state("failed") if t["template"] == "freevideo-take"]
     notes = [r[0] for r in p.store.db.execute("SELECT note FROM events WHERE task_id=?", (task["id"],))]
     assert task["state"] == "failed" and any("接续" in (n or "") for n in notes)
+
+
+def test_direction_designs_camera_before_storyboard(film_prod):
+    """direction gets settings.style and the condensed director lenses; a style named at review
+    goes back as the revision request; the storyboard sees the approved direction."""
+    p = film_prod
+    pr = p.create("story-to-film", "Lost cat", {"source": "Mei lost her cat"}, {"style": "王家卫"})
+    run_skills(p)
+    p.review(pr["id"], "adaptation", "approve")
+    run_skills(p)
+    p.review(pr["id"], "bible", "approve")
+    select_all(p)
+    run_skills(p)
+    sys_msg, user_msg = next(m for sid, m in p.fake_llm.calls if sid == "direction")
+    assert "Director style lenses" in sys_msg["content"] and "wong_kar_wai" in sys_msg["content"]
+    assert json.loads(user_msg["content"])["settings"]["style"] == "王家卫"
+    assert stage(p.plan(pr["id"]), "storyboard")["state"] == "blocked"
+    p.review(pr["id"], "direction", "redo", note="option 2: 侯孝贤 long takes")
+    run_skills(p)
+    last = [m for sid, m in p.fake_llm.calls if sid == "direction"][-1]
+    assert "侯孝贤" in json.loads(last[1]["content"])["revision_request"]
+    p.review(pr["id"], "direction", "approve")
+    run_skills(p)
+    board_in = json.loads(next(m for sid, m in p.fake_llm.calls if sid == "storyboard")[1]["content"])
+    assert board_in["inputs"]["direction"]["book"]["visual_thesis"] == "the market swallows her"

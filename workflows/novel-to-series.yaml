@@ -1,0 +1,117 @@
+# novel chapter → one episode of a series, filmed like story-to-film (FreeVideo cast cards, takes,
+# continuations) but faithful to the source: every scene, beat and line is kept, and the storyboard
+# is written scene by scene so a 5-minute episode (35–50 shots) fits the local LLM's reply size.
+# Give it one chapter (or a few) per production; long novels go in episode by episode.
+name: novel-to-series
+title: Novel → series episode (faithful, long)
+description: Faithful adaptation of a chapter into an episode of about episode_minutes minutes; the storyboard is written scene by scene; one take per shot by default.
+settings:
+  style: ""                 # camera style, e.g. a director (王家卫, Hou Hsiao-hsien) or a description; empty: the direction stage proposes 2–3 options
+  episode_minutes: 5        # target screen time; sets how many shots each scene gets
+  fidelity: faithful        # keep every scene, beat and line (adapt-novel)
+  interiority: visual       # inner monologue becomes looks, gestures, inserts — no voice-over
+  image_tier: standard
+  image_candidates: 4
+  video_candidates: 1       # one take per shot: a 5-minute episode is already ~15 h of rendering (estimate)
+  film_quality: medium
+  aspect: "16:9"
+  subtitles: true
+  auto_advance: true
+  youtube_frames: 4
+  language: English
+  width: 1280
+  height: 720
+  fps: 24
+stages:
+  - id: source
+    title: Sources
+    kind: input
+
+  - id: brief
+    title: Brief (text · references)
+    kind: tool
+    tool: ingest
+    needs: [source]
+    gate: auto
+
+  - id: adaptation
+    title: Adaptation (faithful)
+    kind: skill
+    skill: adapt-novel
+    needs: [brief]
+    schema: adaptation
+
+  - id: bible
+    title: Story bible (characters · style · voices)
+    kind: skill
+    skill: story-bible
+    needs: [brief, adaptation]
+    schema: bible
+
+  - id: characters
+    title: Character sheets (casting)
+    kind: render
+    needs: [bible]
+    fan_out: {items: bible.characters, key: id}
+    render:
+      template: flux2-t2i
+      tier: "{settings.image_tier}"
+      n: "{settings.image_candidates}"
+      params:
+        prompt: "Character reference sheet, full body, neutral pose, plain background. {item.look}. Style: {bible.style.look}"
+    alternatives:
+      - when: {path: ref.use, equals: as_is}
+        provide: "{ref.path}"
+      - when: {path: ref.use, equals: stylize}
+        render:
+          template: flux2-edit
+          tier: "{settings.image_tier}"
+          n: "{settings.image_candidates}"
+          params:
+            image: "{ref.path}"
+            prompt: "Character reference sheet of this person, full body, neutral pose, plain background, same face and build. {item.look}. Style: {bible.style.look}"
+
+  - id: cards
+    title: FreeVideo cast cards
+    kind: tool
+    tool: freevideo_cards
+    needs: [bible, characters]
+    gate: auto
+
+  - id: direction
+    title: Direction (style · camera design)
+    kind: skill
+    skill: film-direction
+    needs: [adaptation, bible]
+    schema: direction
+
+  - id: storyboard
+    title: Storyboard (scene by scene)
+    kind: skill
+    skill: storyboard-film
+    extra_skills: [h3-prompt-writing]
+    needs: [adaptation, bible, cards, direction]
+    schema: storyboard-film
+    chunk_by: {items: adaptation.scenes, merge: shots, id_format: "sh{n:02d}", budget_minutes: episode_minutes, weight: beats}
+
+  - id: clips
+    title: Film (FreeVideo takes)
+    kind: film
+    cast: cards
+    needs: [storyboard, cards]
+    confirm: true
+    fan_out: {items: storyboard.shots, key: id}
+
+  - id: edit
+    title: Edit (order · trims · subtitles)
+    kind: skill
+    skill: edit-timeline
+    needs: [storyboard, clips]
+    schema: timeline
+
+  - id: final
+    title: Final cut
+    kind: assemble
+    needs: [edit, clips]
+    timeline: edit
+    clips: clips
