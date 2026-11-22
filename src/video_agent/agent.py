@@ -51,6 +51,16 @@ FREEVIDEO_ENV = (
 )
 
 
+def _json_args(raw: str | None) -> str:
+    """Tool-call arguments as a JSON object string; anything else becomes "{}" (old truncated calls)."""
+    try:
+        if isinstance(json.loads(raw or ""), dict):
+            return raw
+    except json.JSONDecodeError:
+        pass
+    return "{}"
+
+
 # ---------------- tool definitions ----------------
 @dataclass
 class Done:
@@ -1202,7 +1212,7 @@ class AgentRuntime:
                     {
                         "id": c["id"],
                         "type": "function",
-                        "function": {"name": c["name"], "arguments": c["arguments"]},
+                        "function": {"name": c["name"], "arguments": _json_args(c["arguments"])},
                     }
                     for c in m["tool_calls"]
                 ]
@@ -1404,7 +1414,7 @@ class AgentRuntime:
             self._log_policy(
                 run, f"local LLM unavailable → this step used {res.backend or backend.name}"
             )
-        calls = res.tool_calls
+        calls = [self._check_args(c, res.truncated) for c in res.tool_calls]
         extra = (
             {"anthropic": res.raw_content} if (res.backend or "").startswith("anthropic") else {}
         )
@@ -1440,7 +1450,12 @@ class AgentRuntime:
             rm.llm.inference() if getattr(backend, "local", False) else contextlib.nullcontext()
         )
         with inflight:
-            return backend.chat(self.messages_for(run), None, tools=self.spec)
+            return backend.chat(
+                self.messages_for(run),
+                None,
+                max_tokens=self.cfg.agent_max_tokens,
+                tools=self.spec,
+            )
 
     # ---- hand off to a local agent CLI (Claude Code / Codex) ----
     def _delegate(self, run: dict, name: str) -> None:
@@ -1568,7 +1583,30 @@ class AgentRuntime:
             "call the same tool again to keep waiting",
         }
 
+    def _check_args(self, call: dict, truncated: bool) -> dict:
+        """Arguments that are not valid JSON (usually cut off at max_tokens) are stored as "{}" plus
+        an error, so the history replays cleanly and the tool is not run with missing parameters."""
+        raw = call.get("arguments") or ""
+        if not truncated and not raw.strip():
+            return {**call, "arguments": "{}"}
+        try:
+            if isinstance(json.loads(raw), dict):  # complete even if the turn was cut off later
+                return call
+        except json.JSONDecodeError:
+            pass
+        if truncated:
+            err = (
+                f"output hit max_tokens ({self.cfg.agent_max_tokens}) and the tool call was cut off "
+                f"after {len(raw)} characters of arguments; nothing was run. Split large content "
+                "into several smaller calls (e.g. several smaller files)."
+            )
+        else:
+            err = f"arguments are not valid JSON ({len(raw)} characters); nothing was run"
+        return {**call, "arguments": "{}", "bad_args": err}
+
     def _execute(self, run: dict, call: dict, say) -> None:
+        if call.get("bad_args"):
+            return self._tool_done(run, call, {}, {"error": call["bad_args"]})
         tool = self.tools.get(call["name"])
         ctx = {
             "run_id": run["id"],

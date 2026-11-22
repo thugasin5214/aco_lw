@@ -114,6 +114,38 @@ def test_multiple_tool_calls_keep_order_and_ids(env):
     assert sent[-4]["tool_calls"][2]["id"] == "C"
 
 
+def test_truncated_tool_call_is_not_run_and_replays_as_valid_json(env):
+    """Output cut off at max_tokens: the half-written call is not executed, the model is told to
+    split the content, and the replayed arguments are "{}" (LM Studio 500s on invalid JSON)."""
+    studio, make, _ = env
+    a, script = make(
+        {"tool_calls": [{"id": "W", "name": "write_file", "arguments": ""}], "truncated": True},
+        {
+            "tool_calls": [{"id": "X", "name": "write_file", "arguments": '{"path": "a.md", "con'}],
+            "truncated": True,
+        },
+        {"text": "ok"},
+    )
+    a.inbound("web", "write a long script", lambda t, b=None: None)
+    run_all(a)
+    assert a.planner.backend.max_tokens == studio.orch.cfg.agent_max_tokens == 16384
+    sent = script.seen[2]
+    tool_msgs = [m for m in sent if m["role"] == "tool"]
+    assert all("max_tokens" in m["content"] for m in tool_msgs)
+    replayed = [c for m in sent if m["role"] == "assistant" for c in m.get("tool_calls") or []]
+    assert [c["function"]["arguments"] for c in replayed] == ["{}", "{}"]
+    assert last_run(studio)["status"] == "done"
+
+
+def test_old_invalid_arguments_in_history_replay_as_empty_object():
+    from video_agent.agent import _json_args
+
+    assert _json_args("") == "{}"
+    assert _json_args('{"path": "a') == "{}"
+    assert _json_args("[1]") == "{}"
+    assert _json_args('{"a": 1}') == '{"a": 1}'
+
+
 def test_parks_while_video_renders_and_resumes(env):
     studio, make, _ = env
     a, script = make({"text": "answer"})
