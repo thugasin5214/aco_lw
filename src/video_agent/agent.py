@@ -1459,7 +1459,12 @@ class AgentRuntime:
             rm.llm.inference() if getattr(backend, "local", False) else contextlib.nullcontext()
         )
         with inflight:
-            return backend.chat(self.messages_for(run), None, tools=self.spec)
+            return backend.chat(
+                self.messages_for(run),
+                None,
+                max_tokens=self.cfg.llm_max_tokens or None,
+                tools=self.spec,
+            )
 
     # ---- hand off to a local agent CLI (Claude Code / Codex) ----
     def _delegate(self, run: dict, name: str) -> None:

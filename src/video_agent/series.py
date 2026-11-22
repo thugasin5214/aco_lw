@@ -108,10 +108,27 @@ class SeriesTools:
         return sorted(rows, key=lambda p: p["settings"]["series"]["index"])
 
     def spawn(self, prod: dict, st, inputs: dict) -> dict:
-        """One `novel-episode` production per planned episode, reusing the series' cast cards,
-        bible and direction. Only the first episode starts; each next one starts when the previous
-        one has finished shooting (see `handoff`). Rerunning keeps episodes that already exist."""
-        plan = inputs["plan"]
+        """Create the first episode that does not exist yet — only one at a time. The next one is
+        created when the previous has finished shooting (`handoff`), so the queue never fills with
+        a whole season. Rerunning keeps the episodes that exist."""
+        existing = {p["settings"]["series"]["index"]: p for p in self.episodes(prod)}
+        eps = inputs["plan"].get("episodes", [])
+        if not existing and eps:
+            self.create_episode(prod, inputs, 0)
+        made = [p["id"] for p in self.episodes(prod)]
+        return {"episodes": made, "planned": len(eps)}
+
+    def series_inputs(self, prod: dict) -> dict:
+        """The series' approved plan, chapters, bible, cards and direction."""
+        e = self.engine
+        ctx = e._ctx(prod, e._wf(prod), e._index(prod["id"]))
+        return {k: ctx.get(k) for k in ("plan", "chapters", "bible", "cards", "direction")}
+
+    def create_episode(self, prod: dict, inputs: dict, i: int) -> dict:
+        """One `novel-episode` production for episode i, reusing the series' cast cards, bible and
+        direction, with previously-on synopses."""
+        eps = inputs["plan"].get("episodes", [])
+        ep = eps[i]
         chapters = {c["id"]: c for c in (inputs.get("chapters") or {}).get("chapters", [])}
         settings = {k: v for k, v in prod["settings"].items() if k not in SERIES_ONLY}
         settings["auto_approve"] = REVIEW_LEVELS.get(
@@ -120,51 +137,41 @@ class SeriesTools:
         settings["auto_start"] = ["clips"] if prod["settings"].get("auto_shoot") else []
         direction = inputs.get("direction") or {}
         per_episode = {s.get("id"): s for s in direction.get("scenes", [])}
-        existing = {p["settings"]["series"]["index"]: p for p in self.episodes(prod)}
-        eps = plan.get("episodes", [])
-        made = []
-        for i, ep in enumerate(eps):
-            if i in existing:
-                made.append(existing[i]["id"])
-                continue
-            text = "\n\n".join(
-                f"{chapters[c]['title']}\n\n{chapters[c]['text']}"
-                for c in ep.get("chapters", [])
-                if c in chapters
-            )
-            series = {
-                "parent": prod["id"],
-                "index": i,
-                "of": len(eps),
-                "title": ep.get("title", ""),
-                "synopsis": ep.get("synopsis", ""),
-                "previously": [e.get("synopsis", "") for e in eps[:i]][-5:],
-                "next": eps[i + 1].get("synopsis", "") if i + 1 < len(eps) else "",
-            }
-            child = self.engine.create(
-                "novel-episode",
-                f"{prod['title']} · E{i + 1:02d} {ep.get('title', '')}".strip(),
-                {
-                    "source": {"text": text, "sources": []},
-                    "series": series,
-                    "bible": inputs.get("bible") or {},
-                    "cards": inputs.get("cards") or {},
-                    "direction": {
-                        **{k: v for k, v in direction.items() if k != "scenes"},
-                        "scenes": [],
-                        "episode_strategy": per_episode.get(ep.get("id"), {}),
-                    },
+        text = "\n\n".join(
+            f"{chapters[c]['title']}\n\n{chapters[c]['text']}"
+            for c in ep.get("chapters", [])
+            if c in chapters
+        )
+        series = {
+            "parent": prod["id"],
+            "index": i,
+            "of": len(eps),
+            "title": ep.get("title", ""),
+            "synopsis": ep.get("synopsis", ""),
+            "previously": [e.get("synopsis", "") for e in eps[:i]][-5:],
+            "next": eps[i + 1].get("synopsis", "") if i + 1 < len(eps) else "",
+        }
+        self.engine.log(f"series {prod['id']}: episode {i + 1}/{len(eps)} created")
+        return self.engine.create(
+            "novel-episode",
+            f"{prod['title']} · E{i + 1:02d} {ep.get('title', '')}".strip(),
+            {
+                "source": {"text": text, "sources": []},
+                "series": series,
+                "bible": inputs.get("bible") or {},
+                "cards": inputs.get("cards") or {},
+                "direction": {
+                    **{k: v for k, v in direction.items() if k != "scenes"},
+                    "scenes": [],
+                    "episode_strategy": per_episode.get(ep.get("id"), {}),
                 },
-                {**settings, "series": {"parent": prod["id"], "index": i}},
-                project_id=prod["project_id"],
-            )
-            if i > 0:  # waits for the previous episode (handoff)
-                self.engine.pause(child["id"])
-            made.append(child["id"])
-        return {"episodes": made}
+            },
+            {**settings, "series": {"parent": prod["id"], "index": i}},
+            project_id=prod["project_id"],
+        )
 
     def handoff(self, prod: dict, plan: dict) -> None:
-        """An episode finished shooting (its clips are complete) → start the next paused one."""
+        """An episode finished shooting (its clips are complete) → create the next one."""
         info = prod["settings"].get("series") or {}
         if not info or prod["settings"].get("series_handed_off"):
             return
@@ -175,16 +182,10 @@ class SeriesTools:
             prod["id"], settings={**prod["settings"], "series_handed_off": True}
         )
         parent = self.engine.store.get_production(info["parent"])
-        if parent is None:
-            return
-        nxt = next(
-            (
-                p
-                for p in self.episodes(parent)
-                if p["settings"]["series"]["index"] == info["index"] + 1
-            ),
-            None,
-        )
-        if nxt is not None and nxt["state"] == "paused":
-            self.engine.log(f"series {parent['id']}: episode {info['index'] + 2} starts")
-            self.engine.resume(nxt["id"])
+        if parent is None or parent["state"] == "paused":
+            return  # a paused series does not start new episodes
+        inputs = self.series_inputs(parent)
+        nxt = info["index"] + 1
+        exists = any(p["settings"]["series"]["index"] == nxt for p in self.episodes(parent))
+        if inputs.get("plan") and nxt < len(inputs["plan"].get("episodes", [])) and not exists:
+            self.create_episode(parent, inputs, nxt)

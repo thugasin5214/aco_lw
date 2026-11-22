@@ -341,7 +341,9 @@ class Planner:
         inflight = self.resources.llm.inference() if self.resources else contextlib.nullcontext()
         # inference in progress: the render gate waits for the answer before unloading the LLM
         with inflight:
-            res: ChatResult = self.backend.chat(messages, schema)
+            res: ChatResult = self.backend.chat(
+                messages, schema, getattr(self.cfg, "llm_max_tokens", 0) or None
+            )
         data = _parse_json(res.text)
         if log:
             self.store.log_message(

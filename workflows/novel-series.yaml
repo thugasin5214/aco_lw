@@ -67,7 +67,8 @@ stages:
     title: Series bible (characters · style · voices)
     kind: skill
     skill: story-bible
-    needs: [notes, plan]
+    needs: [brief, notes, plan]
+    pick: {brief: [references]}   # the user's casting photos, not the whole novel
     schema: bible
 
   - id: characters
@@ -81,6 +82,17 @@ stages:
       n: "{settings.image_candidates}"
       params:
         prompt: "Character reference sheet, full body, neutral pose, plain background. {item.look}. Style: {bible.style.look}"
+    alternatives:   # the user's own casting photo for a character: as is, or restyled
+      - when: {path: ref.use, equals: as_is}
+        provide: "{ref.path}"
+      - when: {path: ref.use, equals: stylize}
+        render:
+          template: flux2-edit
+          tier: "{settings.image_tier}"
+          n: "{settings.image_candidates}"
+          params:
+            image: "{ref.path}"
+            prompt: "Character reference sheet of this person, full body, neutral pose, plain background, same face and build. {item.look}. Style: {bible.style.look}"
 
   - id: cards
     title: FreeVideo cast cards

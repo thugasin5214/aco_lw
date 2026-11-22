@@ -18,6 +18,9 @@ import httpx
 
 from . import llm
 
+# the Messages API requires max_tokens; used when no cap is configured (llm_max_tokens = 0)
+ANTHROPIC_MAX_TOKENS = 32000
+
 
 @dataclass
 class ChatResult:
@@ -39,6 +42,7 @@ class ChatResult:
     ttft_s: float = 0.0
     total_s: float = 0.0
     load_s: float = 0.0
+    finish_reason: str = ""  # "length" = stopped at the output cap
 
     @property
     def cached_tokens_est(self) -> int:
@@ -61,6 +65,9 @@ class ChatResult:
             "cache_hit": self.cache_hit,
             "cached_tokens_est": self.cached_tokens_est,
             "via": self.backend,
+            "finish_reason": self.finish_reason,
+            "text_chars": len(self.text),
+            "reasoning_chars": len(self.reasoning),
         }
 
 
@@ -85,7 +92,7 @@ class OpenAICompatBackend:
         self,
         messages: list[dict],
         schema: dict | None,
-        max_tokens: int,
+        max_tokens: int | None,
         tools: list[dict] | None = None,
     ) -> dict:
         # only the local template understands reasoning_content
@@ -102,15 +109,22 @@ class OpenAICompatBackend:
             "model": self.model,
             "messages": messages,
             "temperature": 0.3,
-            "max_tokens": max_tokens,
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        # no cap (None / 0): the model may write until its context is full — a thinking model
+        # spends thousands of tokens before the answer. LM Studio takes -1 for that; other
+        # servers get no field and use their own maximum.
+        if max_tokens:
+            body["max_tokens"] = max_tokens
+        elif self.name == "lmstudio":
+            body["max_tokens"] = -1
         # official OpenAI API: reasoning models only accept max_completion_tokens and the default
         # temperature
         if self.name == "openai":
             body.pop("temperature")
-            body["max_completion_tokens"] = body.pop("max_tokens")
+            if "max_tokens" in body:
+                body["max_completion_tokens"] = body.pop("max_tokens")
         if tools:
             body["tools"] = tools
         if schema:
@@ -128,7 +142,7 @@ class OpenAICompatBackend:
         self,
         messages: list[dict],
         schema: dict | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
         tools: list[dict] | None = None,
     ) -> ChatResult:
         load_s = self.prepare()
@@ -153,6 +167,7 @@ class OpenAICompatBackend:
                 for ch in d.get("choices") or []:
                     if not res.ttft_s:
                         res.ttft_s = time.monotonic() - t
+                    res.finish_reason = ch.get("finish_reason") or res.finish_reason
                     delta = ch.get("delta") or {}
                     parts.append(delta.get("content") or "")
                     thinking.append(delta.get("reasoning_content") or delta.get("reasoning") or "")
@@ -284,7 +299,7 @@ class FuncBackend:
         self.fn = fn
         self.calls: list[list[dict]] = []
 
-    def chat(self, messages, schema=None, max_tokens=4096, tools=None) -> ChatResult:
+    def chat(self, messages, schema=None, max_tokens=None, tools=None) -> ChatResult:
         self.calls.append(messages)
         out = self.fn(messages, schema) if tools is None else self.fn(messages, tools)
         if isinstance(out, dict):  # for tests: {"text": ..., "tool_calls": [...]}
@@ -426,9 +441,10 @@ class AnthropicBackend:
         self,
         messages: list[dict],
         schema: dict | None = None,
-        max_tokens: int = 16000,
+        max_tokens: int | None = None,
         tools: list[dict] | None = None,
     ) -> ChatResult:
+        max_tokens = max_tokens or ANTHROPIC_MAX_TOKENS  # the API requires a cap
         system, msgs, atools = self.convert(messages, tools)
         if schema:  # JSON output in simple mode: constrain with instructions, the caller validates
             system += (

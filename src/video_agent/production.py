@@ -121,6 +121,9 @@ class Stage(BaseModel):
     fan_out: FanOut | None = None
     chunk_by: ChunkBy | None = None  # skill: one LLM call per item, replies merged
     cap: Cap | None = None  # skill: a per-element limit checked like the schema (one repair)
+    # skill: pass only these fields of an input (e.g. {brief: [references]} — the photos, not the
+    # whole novel)
+    pick: dict[str, list[str]] = {}
     render: RenderSpec | None = None
     alternatives: list[Alternative] = []
     timeline: str | None = None  # assemble: which stage the timeline comes from
@@ -624,6 +627,8 @@ class Production:
                 raise ProductionError(f"{stage_id} 还在等上游：{', '.join(ps['blocked_by'])}")
             if st.kind == "input":
                 raise ProductionError("输入阶段不需要运行；要改原文请新建一个版本")
+            if keys is not None and st.kind in ("skill", "tool"):
+                keys = ["main"]  # one artifact per stage, whatever key was asked for
             busy_states = ("running",) if overrides else ("running", "review")
             busy = {i["key"] for i in ps["items"] if i["state"] in busy_states}
             if keys is None:
@@ -633,8 +638,20 @@ class Production:
                     if i["state"] not in ("current", "running", "review")
                 ]
             elif busy & set(keys):
+                running = [
+                    a
+                    for k in busy & set(keys)
+                    if (a := self._latest(self._index(production_id), stage_id, k))
+                    and a["status"] in RUNNING
+                ]
+                since = (
+                    f"；已运行 {int((time.time() - min(a['created'] for a in running)) / 60)} 分钟"
+                    "（LLM 写长内容常要 10–20 分钟，不是卡死，等它完成）"
+                    if running
+                    else ""
+                )
                 raise ProductionError(
-                    f"这些条目正在生成或待审阅：{', '.join(sorted(busy & set(keys)))}"
+                    f"这些条目正在生成或待审阅：{', '.join(sorted(busy & set(keys)))}{since}"
                 )
             idx = self._index(production_id)
             ctx = self._ctx(prod, wf, idx)
@@ -725,6 +742,9 @@ class Production:
         )
         omit = set(st.chunk_by.omit_inputs) if st.chunk_by and extra else set()
         inputs = {n: ctx[n] for n in st.needs if n not in omit}
+        for n, fields in st.pick.items():
+            if isinstance(inputs.get(n), dict):
+                inputs[n] = {f: inputs[n].get(f) for f in fields}
         user = {"production": prod["title"], "settings": prod["settings"], "inputs": inputs}
         prev_id = (art["meta"] or {}).get("previous")
         if prev_id:

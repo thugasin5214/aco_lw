@@ -453,16 +453,13 @@ def test_series_reads_chapter_by_chapter_plans_once_and_spawns_episodes(film_pro
     assert "第一章的正文" in notes_calls[0]["item"]["text"]
 
     eps = p.series.episodes(p.store.get_production(pr["id"]))
-    assert [e["workflow"] for e in eps] == ["novel-episode", "novel-episode"]
-    assert [e["state"] for e in eps] == ["active", "paused"]  # one after another
+    assert [e["workflow"] for e in eps] == ["novel-episode"]  # one episode at a time
+    assert eps[0]["state"] == "active"
     s0 = eps[0]["settings"]
     assert s0["auto_approve"] == ["adaptation", "storyboard", "clips", "edit"]
     assert s0["auto_start"] == [] and "episode_review" not in s0
-    # the episode reuses the series' cast and style; previously-on reaches the next episode
-    idx = p._index(eps[1]["id"])
-    series_in = p._current(idx, "series")["data"]
-    assert series_in["previously"] == ["Mei loses the cat."] and series_in["index"] == 1
-    assert p._current(idx, "cards")["data"]["characters"]
+    # the episode reuses the series' cast and style
+    assert p._current(p._index(eps[0]["id"]), "cards")["data"]["characters"]
     direction = p._current(p._index(eps[0]["id"]), "direction")["data"]
     assert direction["episode_strategy"]["camera_strategy"] == "still, distant"
     text = p._current(p._index(eps[0]["id"]), "source")["data"]["text"]
@@ -474,14 +471,20 @@ def test_series_reads_chapter_by_chapter_plans_once_and_spawns_episodes(film_pro
     assert stage(plan1, "storyboard")["state"] == "completed"
     assert plan1["next_action"]["stage"] == "clips" and plan1["next_action"]["confirm"] is True
 
-    # rerunning the spawn keeps the existing episodes
+    # rerunning the spawn keeps the existing episode and creates no more
     p.run_stage(pr["id"], "episodes")
     run_skills(p)
-    assert len(p.series.episodes(p.store.get_production(pr["id"]))) == 2
+    assert len(p.series.episodes(p.store.get_production(pr["id"]))) == 1
 
-    # episode 1 finished shooting → episode 2 starts
+    # episode 1 finished shooting → episode 2 is created, with previously-on
     p.series.handoff(p.store.get_production(eps[0]["id"]), {"done": True, "stages": []})
-    assert p.store.get_production(eps[1]["id"])["state"] == "active"
+    eps = p.series.episodes(p.store.get_production(pr["id"]))
+    assert len(eps) == 2 and eps[1]["state"] == "active"
+    series_in = p._current(p._index(eps[1]["id"]), "series")["data"]
+    assert series_in["previously"] == ["Mei loses the cat."] and series_in["index"] == 1
+    # the bible saw only the photo references of the brief, not the novel
+    bible_in = json.loads(next(m for sid, m in p.fake_llm.calls if sid == "bible")[1]["content"])
+    assert bible_in["inputs"]["brief"] == {"references": []}
 
 
 def test_series_auto_shoot_starts_filming_without_waiting(film_prod):

@@ -29,6 +29,9 @@ class Settings:
     session_keep_messages: int = 8  # recent messages kept verbatim when compacting
     # max LLM calls by the agent per request (general tasks take many steps)
     agent_max_steps: int = 40
+    # output cap per LLM reply in tokens; 0 = the model's maximum (thinking models spend thousands
+    # of tokens before answering — a small cap leaves an empty answer)
+    llm_max_tokens: int = 0
     agent_skill_dirs: list[str] = field(default_factory=lambda: ["~/.claude/skills"])
     # concurrency of the background tool queue (commands, web reads, MCP calls)
     tool_workers: int = 2
@@ -131,6 +134,7 @@ EDITABLE: list[tuple[str, str, str, str]] = [
     ("llm", "llm_restore_after_video", "视频渲染结束后重新加载 LLM", "live"),
     ("llm", "planner_fast", "末尾加 /no_think（思考更少、更快）", "live"),
     ("agent", "agent_max_steps", "一次请求最多调用 LLM 的次数", "live"),
+    ("llm", "llm_max_tokens", "单次回复的输出上限（token，0 = 模型最大值）", "live"),
     ("agent", "session_summary_tokens", "超过此 prompt 长度压缩较早消息", "live"),
     ("agent", "session_keep_messages", "压缩时保留的最近原话条数", "live"),
     ("agent", "tool_workers", "后台工具并发数", "restart"),

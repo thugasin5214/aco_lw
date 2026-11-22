@@ -167,7 +167,7 @@ A production runs a **workflow** stage by stage; every stage waits for your appr
   3. **You approve the episode plan once**: chapters are grouped into episodes of about `episode_minutes`.
   4. **Decided once for the whole series**: the bible, casting, cast cards and camera direction (you review casting, the bible and the direction once each).
   5. **Episodes are created for you**: one `novel-episode` production per episode, reusing the series' cast, cards and style; each adaptation gets the previous episodes' synopses.
-  6. **One after another**: only episode 1 starts; each next one starts when the previous has finished shooting.
+  6. **One after another**: one episode exists at a time; the next is created when the previous has finished shooting, so the queue never fills with a whole season.
   - `episode_review` sets how much you review per episode: `final` (default) only the final cut, `storyboard` the storyboard too, `all` every stage.
   - `auto_shoot: true` starts each episode's shooting without waiting for you.
   - No shot exceeds `max_clip_seconds` (default 10; one generation renders only that long). Longer continuous moments become consecutive shots that continue each other and are joined in the edit; an over-long storyboard gets one rewrite.
