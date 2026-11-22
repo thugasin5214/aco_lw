@@ -39,6 +39,14 @@ BLOCKED = [
     ),
     (re.compile(r"agent/token"), "FreeVideo agent token 不能被读取"),
     (re.compile(r"\b(pkill|killall)\b|\bkill\s+-?\w*\s*\d"), "不结束进程（可能是别人的任务）"),
+<<<<<<< HEAD
+=======
+    (re.compile(r"\blms\s+(unload|load)\b"), "LLM 的加载 / 卸载由编排器按内存决定"),
+    (
+        re.compile(r"workplace/localvideo\b"),
+        "~/workplace/localvideo 是停用的旧环境；ComfyUI 在 FreeVideo-local，图片经 @upload 参数由编排器上传",
+    ),
+>>>>>>> origin/agent-run-fixes
 ]
 # the project's own CLI (`va llm ...`) is on PATH for commands
 VENV_BIN = Path(__file__).resolve().parents[2] / ".venv" / "bin"

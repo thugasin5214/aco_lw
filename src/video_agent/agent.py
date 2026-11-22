@@ -166,6 +166,28 @@ def _round_view(store, rnd: dict) -> dict:
     }
 
 
+VIDEO_EXT = (".mp4", ".mov", ".webm", ".mkv", ".m4v")
+
+
+# the same call (same tool, same arguments) in this many assistant turns in a row is refused: a
+# local model can loop on one command until the step budget is gone
+REPEAT_LIMIT = 3
+REPEAT_ERROR = (
+    "not run: you made this exact call 3 times in a row and the result will not change. "
+    "Try a different approach, or tell the user what is missing."
+)
+
+
+def attachment_note(attachments: list[dict] | None) -> str:
+    """How uploads the user attached are shown to the LLM: the exact @upload id to use."""
+    out = ""
+    for a in attachments or []:
+        name = a.get("name", "")
+        kind = "video" if name.lower().endswith(VIDEO_EXT) else "image"
+        out += f"\n[attached {kind} @upload:{a['id']} {name}]"
+    return out
+
+
 def park_reason(why: str) -> str:
     """llm_admit's internal reason → one human-readable sentence."""
     if "film" in why:
@@ -582,6 +604,13 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
         from .comfy_bridge import classify, extract_workflow
 
         tool, args = a["tool"], a.get("args") or {}
+        if isinstance(args, str):  # some models send the nested object as a JSON string
+            try:
+                args = json.loads(args)
+            except json.JSONDecodeError as e:
+                return Done({"error": f"args is not a JSON object: {e}"})
+        if not isinstance(args, dict):
+            return Done({"error": "args must be an object"})
         kind = classify(tool, args)
         if kind == "read":
             return Done(_bridge().call(tool, args))
@@ -1354,9 +1383,7 @@ class AgentRuntime:
         attachments: list[dict] | None = None,
     ) -> dict:
         run = self.store.create_run(project_id, session_id, channel, text)
-        att = "".join(
-            f"\n[attached image @upload:{a['id']} {a.get('name', '')}]" for a in attachments or []
-        )
+        att = attachment_note(attachments)
         live = self.planner.live_state(project_id)
         content = f"## Live state\n{live}\n\n## User\n{text}{att}"
         self.store.add_agent_msg(run["id"], "user", content)
@@ -1503,8 +1530,30 @@ class AgentRuntime:
             self._finish(run, None, "done", say_text=res.text)
             return
         for c in calls:
+            if self._repeats(run_id, c) >= REPEAT_LIMIT:
+                self._tool_done(run, c, {}, {"error": REPEAT_ERROR})
+                continue
             self._execute(run, c, say)
         self._advance(run_id)
+
+    @staticmethod
+    def _call_key(c: dict) -> str:
+        try:
+            args = json.dumps(json.loads(c.get("arguments") or "{}"), sort_keys=True)
+        except (json.JSONDecodeError, TypeError):
+            args = str(c.get("arguments"))
+        return f"{c.get('name')}:{args}"
+
+    def _repeats(self, run_id: str, call: dict) -> int:
+        """How many of the latest assistant turns in a row (this one included) made this same call."""
+        key, n = self._call_key(call), 0
+        for m in reversed(self.store.agent_msgs(run_id)):
+            if m["role"] != "assistant":
+                continue
+            if not any(self._call_key(c) == key for c in m["tool_calls"] or []):
+                break
+            n += 1
+        return n
 
     def _call(self, backend, run: dict, rm):
         inflight = (
@@ -1673,6 +1722,11 @@ class AgentRuntime:
             out = Done({"error": str(e)})
         except jsonschema.ValidationError as e:
             out = Done({"error": f"schema: {e.message}"})
+        # any other bug in a tool handler: report it to the agent instead of killing the step,
+        # which would leave the run stuck in "running" with a call that never gets a result
+        except Exception as e:
+            log.exception("tool %s failed", call["name"])
+            out = Done({"error": f"{type(e).__name__}: {e}"})
         if isinstance(out, Pending) and out.kind == "approval" and out.on_approve:
             how = self.auto_approval(out.rule, out.bypassable)
             # bypass mode or an "always allow" rule you set: do not ask, run the approved action
@@ -1982,11 +2036,14 @@ class AgentRuntime:
         self.resolve(m["meta"]["key"], result)
         return tr("agent_approved")
 
-    def answer_pending_question(self, channel: str, session_id: str, text: str) -> bool:
+    def answer_pending_question(
+        self, channel: str, session_id: str, text: str, attachments: list[dict] | None = None
+    ) -> bool:
+        answer = text + attachment_note(attachments)
         for run in self.store.runs(session_id, "waiting_user", "delegated"):
             if run["channel"] != channel:
                 continue
-            if self.resolve(f"ask:{run['id']}", {"answer": text}):
+            if self.resolve(f"ask:{run['id']}", {"answer": answer}):
                 return True
         return False
 

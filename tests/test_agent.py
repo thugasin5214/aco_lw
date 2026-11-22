@@ -403,3 +403,86 @@ def test_parked_message_tells_you_once_and_resumes_when_film_ends(env):
     assert last_run(studio)["status"] == "done" and len(script.seen) == 1
     texts = [t for t, _ in said]
     assert texts[-2].startswith("Memory is free") and texts[-1] == "answer"
+
+
+# ---------------- attachments, loops, tool crashes ----------------
+def test_captionless_photo_is_held_for_the_next_message(env):
+    studio, make, said = env
+    a, script = make({"text": "ok"})
+    a.inbound(
+        "telegram",
+        "(image)",
+        lambda t, b=None: said.append((t, b)),
+        [{"id": "u1", "name": "face.jpg"}],
+    )
+    run_all(a)
+    assert studio.store.runs(None) == [] and "30" in said[-1][0]  # no run for a bare photo
+    a.inbound("telegram", "make a video with this face", lambda t, b=None: None)
+    run_all(a)
+    user = script.seen[0][-1]["content"]
+    assert "[attached image @upload:u1 face.jpg]" in user
+    a.inbound("telegram", "again", lambda t, b=None: None)  # used once only
+    assert studio.store.get_kv("held_media:telegram") is None
+
+
+def test_photo_answering_a_question_carries_its_upload_id(env):
+    studio, make, _ = env
+    a, script = make(
+        {"tool_calls": [call("ask_user", {"question": "Send the photo again?"})]}, {"text": "ok"}
+    )
+    a.inbound("telegram", "make a video", lambda t, b=None: None)
+    run_all(a)
+    a.inbound("telegram", "(image)", lambda t, b=None: None, [{"id": "u2", "name": "clip.mp4"}])
+    run_all(a)
+    answer = json.loads(script.seen[-1][-1]["content"])["answer"]
+    assert "[attached video @upload:u2 clip.mp4]" in answer
+    assert len(studio.store.runs(None)) == 1
+
+
+def test_identical_call_three_times_in_a_row_is_refused(env):
+    studio, make, _ = env
+    same = call("get_round", {"round_id": "nope"})
+    a, script = make(
+        {"tool_calls": [same]},
+        {"tool_calls": [same]},
+        {"tool_calls": [same]},
+        {"text": "giving up"},
+    )
+    a.inbound("web", "loop", lambda t, b=None: None)
+    run_all(a)
+    results = [json.loads(m["content"]) for m in script.seen[-1] if m["role"] == "tool"]
+    assert "not found" in results[1]["error"] and "3 times in a row" in results[2]["error"]
+    assert last_run(studio)["status"] == "done"
+
+
+def test_a_crashing_tool_returns_an_error_instead_of_hanging_the_run(env, monkeypatch):
+    studio, make, _ = env
+    a, script = make({"tool_calls": [call("get_status")]}, {"text": "ok"})
+
+    def boom(ctx, args):
+        raise AttributeError("'str' object has no attribute 'get'")
+
+    monkeypatch.setattr(a.runtime.tools["get_status"], "handler", boom)
+    a.inbound("web", "status", lambda t, b=None: None)
+    run_all(a)
+    assert "AttributeError" in script.seen[-1][-1]["content"]
+    assert last_run(studio)["status"] == "done"
+
+
+def test_comfy_args_sent_as_a_json_string_are_decoded(env, monkeypatch):
+    _studio, make, _ = env
+    a, _ = make(
+        {
+            "tool_calls": [
+                call("comfy", {"tool": "list_local_models", "args": '{"action": "list"}'})
+            ]
+        },
+        {"text": "ok"},
+    )
+    seen = {}
+    import video_agent.comfy_bridge as cb
+
+    monkeypatch.setattr(cb, "classify", lambda tool, args: seen.setdefault("args", args) and "deny")
+    a.inbound("web", "models", lambda t, b=None: None)
+    run_all(a)
+    assert seen["args"] == {"action": "list"}
