@@ -136,6 +136,60 @@ def explicit_pick(text: str, idx: int) -> bool:
     return bool(named) and any(v in t for v in verbs)
 
 
+def stage_key(production_id: str, stage: str) -> str:
+    """Event key an agent run waits on while a production stage is running."""
+    return f"stage:{production_id}:{stage}"
+
+
+def production_key(production_id: str) -> str:
+    """Event key an agent run waits on until the production needs someone (review, failure,
+    a confirm stage) or is done — i.e. until no stage is running."""
+    return f"production:{production_id}"
+
+
+def production_busy(plan: dict) -> bool:
+    return any(s["state"] == "active" for s in plan["stages"])
+
+
+def production_result(plan: dict) -> dict:
+    """What a waiting agent gets back once nothing runs in the production any more."""
+    return {
+        "production_id": plan["production"]["id"],
+        "state": plan["production"]["state"],
+        "next_action": plan["next_action"],
+        "done": plan["done"],
+        "stages": [
+            {"id": s["id"], "state": s["state"]}
+            | (
+                {"problems": [i.get("note") for i in s["items"] if i.get("note")][:3]}
+                if s["state"] in ("failed", "invalid")
+                else {}
+            )
+            for s in plan["stages"]
+        ],
+    }
+
+
+def stage_result(plan: dict, stage: str) -> dict:
+    """What a waiting agent gets back when a stage stops running: its state, the problem if any,
+    and the plan's next action."""
+    s = next((x for x in plan["stages"] if x["id"] == stage), None) or {}
+    problems = [
+        {k: i.get(k) for k in ("key", "state", "note") if i.get(k)}
+        for i in s.get("items", [])
+        if i.get("state") in ("failed", "invalid", "rejected")
+    ]
+    return {
+        "production_id": plan["production"]["id"],
+        "stage": stage,
+        "state": s.get("state"),
+        "counts": s.get("counts"),
+        "problems": problems,
+        "next_action": plan["next_action"],
+        "stages": [{"id": x["id"], "state": x["state"]} for x in plan["stages"]],
+    }
+
+
 def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
     studio, store = rt.studio, rt.studio.store
 
@@ -473,7 +527,10 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
             a.get("settings") or {},
             ctx["project_id"],
         )
-        return Done(_plan_view(_prod().plan(prod["id"])))
+        if a.get("wait") is False:
+            return Done(_plan_view(_prod().plan(prod["id"])))
+        # planning stages start on their own: wait until the first one needs the user
+        return _until_idle(prod["id"], {"created": prod["id"]})
 
     def get_production_plan(ctx, a):
         return Done(_plan_view(_prod().plan(a["production_id"])))
@@ -489,8 +546,60 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
                     "ask them, then call again with user_confirmed=true"
                 }
             )
-        made = p.run_stage(a["production_id"], a["stage"], a.get("keys"), a.get("note"), "agent")
-        return Done({"started": len(made), "plan": _plan_view(p.plan(a["production_id"]))})
+        pid, stage = a["production_id"], a["stage"]
+        if st is None:
+            return Done({"error": f"no stage {stage}", "plan": _plan_view(plan)})
+        key = stage_key(pid, stage)
+        if st["state"] == "active":
+            # already running (an LLM stage on long text takes 10-20 min): wait for it, do not
+            # queue it again
+            return Pending("event", key, info={"production_id": pid, "stage": stage})
+
+        def start():
+            try:
+                made = p.run_stage(pid, stage, a.get("keys"), a.get("note"), "agent")
+            except Exception as e:  # noqa: BLE001 — the refusal goes back to the agent
+                rt.resolve(key, {"error": str(e), **stage_result(p.plan(pid), stage)})
+                return
+            now = p.plan(pid)
+            if not made or next(x for x in now["stages"] if x["id"] == stage)["state"] != "active":
+                rt.resolve(key, {"started": len(made), **stage_result(now, stage)})
+
+        if a.get("wait") is False:
+            made = p.run_stage(pid, stage, a.get("keys"), a.get("note"), "agent")
+            return Done({"started": len(made), "plan": _plan_view(p.plan(pid))})
+        return Pending("event", key, info={"production_id": pid, "stage": stage}, start=start)
+
+    def _until_idle(pid: str, done: dict):
+        """After an action that sets stages running: wait until the production needs someone
+        (review / failure / confirm) or is done; return right away when nothing runs."""
+        p = _prod()
+        if not production_busy(p.plan(pid)):
+            return Done({**done, **production_result(p.plan(pid))})
+        key = production_key(pid)
+
+        def recheck():  # the stage may have stopped before this wait was stored
+            plan = p.plan(pid)
+            if not production_busy(plan):
+                rt.resolve(key, {**done, **production_result(plan)})
+
+        return Pending("event", key, info={"production_id": pid, **done}, start=recheck)
+
+    def wait_for_production(ctx, a):
+        return _until_idle(a["production_id"], {})
+
+    def wait_for_stage(ctx, a):
+        p = _prod()
+        plan = p.plan(a["production_id"])
+        st = next((s for s in plan["stages"] if s["id"] == a["stage"]), None)
+        if st is None:
+            return Done({"error": f"no stage {a['stage']}", "plan": _plan_view(plan)})
+        if st["state"] != "active":
+            return Done(stage_result(plan, a["stage"]))
+        key = stage_key(a["production_id"], a["stage"])
+        return Pending(
+            "event", key, info={"production_id": a["production_id"], "stage": a["stage"]}
+        )
 
     def review_stage(ctx, a):
         p = _prod()
@@ -503,12 +612,11 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
             a.get("key") or "main",
             ctx["channel"],
         )
-        return Done(
-            {
-                "artifact": {k: art[k] for k in ("stage", "key", "version", "status")},
-                "plan": _plan_view(p.plan(a["production_id"])),
-            }
-        )
+        reviewed = {"artifact": {k: art[k] for k in ("stage", "key", "version", "status")}}
+        if a.get("wait") is False:
+            return Done({**reviewed, "plan": _plan_view(p.plan(a["production_id"]))})
+        # approving / redoing sets the next stages running: wait until they need the user again
+        return _until_idle(a["production_id"], reviewed)
 
     # ---- ComfyUI exploration / building (artokun/comfyui-mcp, scheduled by the orchestrator; see
     # comfy_bridge.py) ----
@@ -726,7 +834,8 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
             "create_production",
             "Start a multi-stage production (e.g. novel → film) from a story or description, plus "
             "optional links (web pages, YouTube) and the user's pictures (e.g. their own casting "
-            "photos). Planning stages start automatically; every stage waits for the user's review.",
+            "photos). Planning stages start automatically; you wait until the first one needs the "
+            "user's review (or fails), then get the plan — no polling.",
             _obj(
                 {
                     "workflow": S,
@@ -750,6 +859,11 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
                         "description": "e.g. fidelity (faithful = keep every scene and line), "
                         "episode_minutes, style, video_tier, image_candidates, subtitles, language",
                     },
+                    "wait": {
+                        "type": "boolean",
+                        "description": "false: return at once (default true: you are suspended "
+                        "until the production needs the user or is done)",
+                    },
                 },
                 ["workflow", "title"],
             ),
@@ -767,6 +881,9 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
         Tool(
             "run_stage",
             "Run (or re-run) a production stage — by default only missing / stale / failed items. "
+            "You are suspended until the stage stops running (needs review, done, failed or "
+            "invalid) and then get its result — LLM stages on long text take 10-20 minutes, renders "
+            "longer; do not poll. If the stage is already running you simply wait for it. "
             "Stages marked confirm (videos) need user_confirmed=true, set only when the user said so.",
             _obj(
                 {
@@ -775,6 +892,10 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
                     "keys": {"type": "array", "items": S},
                     "note": S,
                     "user_confirmed": {"type": "boolean"},
+                    "wait": {
+                        "type": "boolean",
+                        "description": "false: return right after starting (default true: wait)",
+                    },
                 },
                 ["production_id", "stage"],
             ),
@@ -782,11 +903,29 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
             run_stage,
         ),
         Tool(
+            "wait_for_production",
+            "Wait until nothing runs in a production any more — it needs the user (a review, a "
+            "failure, a confirm stage such as shooting) or is done — then get its next action.",
+            _obj({"production_id": S}, ["production_id"]),
+            "read",
+            wait_for_production,
+        ),
+        Tool(
+            "wait_for_stage",
+            "Wait until a production stage stops running (e.g. one started automatically or by the "
+            "user), then get its state, problems and the next action. You are suspended meanwhile.",
+            _obj({"production_id": S, "stage": S}, ["production_id", "stage"]),
+            "read",
+            wait_for_stage,
+        ),
+        Tool(
             "review_stage",
             "Relay the user's review of a planning stage: approve, redo (with note), reject, or "
             "keep (still valid although upstream changed). A change that concerns many shots (e.g. "
             "'all shots in Mandarin') is a redo of the storyboard stage with that note; only shots "
-            "whose text changes get re-rendered. Render stages are reviewed on their rounds.",
+            "whose text changes get re-rendered. Render stages are reviewed on their rounds. "
+            "Afterwards you wait until the next stages have run and the production needs the "
+            "user again (or is done) — no polling.",
             _obj(
                 {
                     "production_id": S,
@@ -794,6 +933,11 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
                     "action": {"type": "string", "enum": ["approve", "redo", "reject", "keep"]},
                     "note": S,
                     "key": S,
+                    "wait": {
+                        "type": "boolean",
+                        "description": "false: return at once (default true: you are suspended "
+                        "until the production needs the user or is done)",
+                    },
                 },
                 ["production_id", "stage", "action"],
             ),
@@ -1848,6 +1992,36 @@ class AgentRuntime:
     def _log_policy(self, run: dict, text: str) -> None:
         self.studio.log("agent", "out", f"⚙️ policy: {text}", run["project_id"], run_id=run["id"])
 
+    def on_stage_event(self, ev: dict) -> None:
+        """A production stage changed: runs waiting on it continue once it stops running."""
+        pid = ev["production"]["id"]
+        key, pkey = stage_key(pid, ev["stage"]), production_key(pid)
+        waiting = {m["meta"].get("key") for m in self.store.pending_tool_msgs()}
+        if getattr(self, "production", None) is None or not ({key, pkey} & waiting):
+            return
+        # checked on the queue, not here: the engine emits before it starts the next stages
+        self.enqueue(lambda: self._check_waits(pid, ev["stage"]))
+
+    def _check_waits(self, pid: str, stage: str) -> None:
+        key, pkey = stage_key(pid, stage), production_key(pid)
+        waiting = {m["meta"].get("key") for m in self.store.pending_tool_msgs()}
+        if not ({key, pkey} & waiting):
+            return
+        plan = self.production.plan(pid)
+        ev = {"stage": stage}
+        st = next((s for s in plan["stages"] if s["id"] == ev["stage"]), None)
+        if key in waiting and not (st is not None and st["state"] == "active"):
+            self.resolve(key, stage_result(plan, ev["stage"]))
+        if pkey in waiting and not production_busy(plan):
+            for m in self.store.pending_tool_msgs():
+                if m["meta"].get("key") == pkey:  # keep what the call itself reported
+                    info = {
+                        k: v
+                        for k, v in (m["meta"].get("info") or {}).items()
+                        if k != "production_id"
+                    }
+                    self.resolve_msg(m, {**info, **production_result(plan)})
+
     def on_round_decided(self, rnd: dict) -> None:
         """You decided with the normal review buttons: the approval request waiting on this round now has its answer."""
         d = rnd["decision"] or {}
@@ -1960,6 +2134,29 @@ class AgentRuntime:
                 rnd = self.store.get_round(key.split(":", 1)[1])
                 if rnd and rnd["state"] != "generating":
                     self.on_round_ready(rnd)
+            if key.startswith("production:") and getattr(self, "production", None) is not None:
+                try:
+                    plan = self.production.plan(key.split(":", 1)[1])
+                except Exception as e:  # noqa: BLE001 — e.g. the production was deleted
+                    self.resolve_msg(m, {"error": str(e)})
+                    continue
+                if not production_busy(plan):
+                    info = {
+                        k: v
+                        for k, v in (m["meta"].get("info") or {}).items()
+                        if k != "production_id"
+                    }
+                    self.resolve_msg(m, {**info, **production_result(plan)})
+            if key.startswith("stage:") and getattr(self, "production", None) is not None:
+                _, pid, stage = key.split(":", 2)
+                try:
+                    plan = self.production.plan(pid)
+                except Exception as e:  # noqa: BLE001 — e.g. the production was deleted
+                    self.resolve_msg(m, {"error": str(e)})
+                    continue
+                st = next((s for s in plan["stages"] if s["id"] == stage), None)
+                if st is None or st["state"] != "active":
+                    self.resolve_msg(m, stage_result(plan, stage))
         for run in self.store.runs(None, "running", "waiting_resources"):
             if not self._unresolved(run["id"]):
                 self.enqueue(lambda rid=run["id"]: self.step(rid))

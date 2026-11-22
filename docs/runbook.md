@@ -191,6 +191,7 @@ Free text goes to the agent. The LLM only **proposes** tool calls; the orchestra
 | `mcp_list` / `mcp_call` | `[mcp_servers.*]` in `config.toml` (Claude Code format; Exa for now) | Read-only tools no, others yes |
 | `delegate_agent` | Hand a sub-task to Claude Code / Codex and wait for the report | Yes; needs `allow_online` |
 | `delegate_freevideo` (`/fv`) | Hand a whole video task to the FreeVideo agent | Yes; needs `freevideo_agent_online` |
+- **The agent never polls.** Every slow tool suspends the agent and resumes it with the result: renders (`wait_for_round`), production stages (`run_stage`, `wait_for_stage`), whole productions (`create_production` and `review_stage` wait until the production needs you or is done; `wait_for_production`), commands, web reads, MCP calls, delegated agents. While it is suspended the local LLM is free for the work itself — an LLM stage on a long novel can take 10–20 minutes, and "running" with no output yet is normal.
 
 **Hard refusals (in every mode)**: direct ComfyUI `:8188`, reading the FreeVideo token, `kill` / `pkill`, `lms load|unload`. The execution policy is `policies.yaml` (per-tool switches, limits, MCP approval rules).
 
