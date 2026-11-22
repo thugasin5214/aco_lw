@@ -100,6 +100,55 @@ def _obj(props: dict, required: list[str] | None = None) -> dict:
 
 S = {"type": "string"}
 I = {"type": "integer"}
+N = {"type": "number"}
+B = {"type": "boolean"}
+
+LLM_CMD = re.compile(r"\b(?:lms\s+load|va\s+llm\s+(?:use|load|reload))\s+([^\s;&|]+)?")
+
+
+def command_estimate(cmd: str, a: dict, need_gib=None) -> dict:
+    """Memory the command will use: the agent's own estimate (memory_gib / exclusive), or — for
+    loading an LLM — the model size (more reliable). `va llm` switches are gated by the daemon itself."""
+    est = {
+        "gib": float(a.get("memory_gib") or 0),
+        "exclusive": bool(a.get("exclusive")),
+        "minutes": a.get("minutes"),
+        "source": "agent" if a.get("memory_gib") or a.get("exclusive") else None,
+        "gate": True,
+    }
+    m = LLM_CMD.search(cmd)
+    if m:
+        if "va" in m.group(0).split()[0]:
+            est["gate"] = False  # LLMControl checks memory, waits for answers, unloads the old one
+        if need_gib and m.group(1):
+            # unknown model: keep the agent's estimate
+            with contextlib.suppress(Exception):
+                est["gib"], est["source"] = need_gib(m.group(1)), "model size"
+    return est
+
+
+def need_gib_fn(rt):
+    ctl = getattr(rt, "llm_control", None)
+    return (lambda name: ctl.need_gib(ctl.resolve(name))) if ctl else None
+
+
+def gated_command(rt, ctx, a, key):
+    """An approved command: wait until resources allow (by its estimate), run it, release."""
+    tb, rm = rt.toolbox, rt.studio.orch.resources
+    timeout = int(a.get("timeout_s") or 600)
+    est = command_estimate(a["command"], a, need_gib_fn(rt))
+    if not est["gate"] or not (est["gib"] or est["exclusive"]):
+        return tb.run_command(ctx["run_id"], a["command"], timeout)
+    label = a["command"].strip().splitlines()[0][:60]
+    gate = rm.admit_command(key, est["gib"], est["exclusive"], label)
+    info = {**{k: v for k, v in est.items() if k != "gate"}, **gate}
+    if not gate["ok"]:
+        return {"error": f"not started: {gate['reason']}", "resources": info}
+    try:
+        out = tb.run_command(ctx["run_id"], a["command"], timeout)
+    finally:
+        rm.command_done(key)
+    return {**out, "resources": info}
 
 
 def _round_view(store, rnd: dict) -> dict:
@@ -406,15 +455,11 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
         )
 
     def run_command_approved(ctx, a):
-        tb = rt.toolbox
         key = f"job:{ctx['run_id']}:{ctx['call_id']}"
-        timeout = int(a.get("timeout_s") or 600)
         return Pending(
             "event",
             key,
-            start=lambda: tb.jobs.start(
-                key, lambda: tb.run_command(ctx["run_id"], a["command"], timeout)
-            ),
+            start=lambda: rt.toolbox.jobs.start(key, lambda: gated_command(rt, ctx, a, key)),
         )
 
     # ---- production pipeline (stage 3): the agent only reads the plan, runs it as planned or
@@ -885,12 +930,23 @@ def general_tools(rt: AgentRuntime) -> list[Tool]:
         why = blocked(cmd)
         if why:
             return Done({"error": f"refused: {why}"})
+        a = {**a, "command": cmd}
         if tb().auto_allowed(cmd):
-            return job(
-                ctx,
-                lambda: tb().run_command(ctx["run_id"], cmd, int(a.get("timeout_s") or 600)),
+            key = f"job:{ctx['run_id']}:{ctx['call_id']}"
+            return Pending(
+                "event",
+                key,
+                start=lambda: tb().jobs.start(key, lambda: gated_command(rt, ctx, a, key)),
             )
         reason = f"\n{a['reason']}" if a.get("reason") else ""
+        est = command_estimate(cmd, a, need_gib_fn(rt))
+        if est["gib"] or est["exclusive"]:
+            reason += "\n" + tr(
+                "agent_cmd_estimate",
+                g=round(est["gib"], 1),
+                x=tr("agent_cmd_exclusive") if est["exclusive"] else "",
+                src=est["source"] or "",
+            )
         return Pending(
             "approval",
             "",
@@ -1000,9 +1056,23 @@ def general_tools(rt: AgentRuntime) -> list[Tool]:
             "run_command",
             "Run a shell command (zsh) in this run's own working directory. The user approves "
             "every command (shown verbatim with your reason) unless policy pre-approves it; then "
-            "it runs in the background and you get exit code, output tail and new files. Never "
-            "use it to reach ComfyUI/FreeVideo (use the generation tools) or to manage the LLM.",
-            _obj({"command": S, "reason": S, "timeout_s": I}, ["command", "reason"]),
+            "the orchestrator runs it in the background when resources allow, and you get exit "
+            "code, output tail and new files. For heavy commands give memory_gib (peak unified "
+            "memory you expect it to use) and exclusive=true if nothing else big may run "
+            "alongside (the LLM is unloaded meanwhile); the orchestrator waits for memory before "
+            "starting it. To switch your own local model use `va llm use <name>` (`va llm list` "
+            "shows models). Never use it to reach ComfyUI/FreeVideo (use the generation tools).",
+            _obj(
+                {
+                    "command": S,
+                    "reason": S,
+                    "timeout_s": I,
+                    "memory_gib": N,
+                    "exclusive": B,
+                    "minutes": N,
+                },
+                ["command", "reason"],
+            ),
             "approval",
             run_command,
         ),
@@ -1174,6 +1244,7 @@ class AgentRuntime:
         from .toolbox import Toolbox
 
         self.toolbox = Toolbox(self.cfg, self)
+        self.llm_control = None  # injected by Actions (switching / loading the local LLM)
         # sending you files (injected per channel by the daemon; by default just a message with the
         # paths)
         self.send_files: Callable[[str, list], None] = lambda ch, items: self.say_for(ch)(

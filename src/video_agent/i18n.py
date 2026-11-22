@@ -188,6 +188,14 @@ M: dict[str, tuple[str, str]] = {
         "The agent wants to run a command:\n```\n{cmd}\n```{why}",
         "agent 想执行命令：\n```\n{cmd}\n```{why}",
     ),
+    "agent_cmd_estimate": (
+        "Expected memory: ~{g} GiB{x} ({src}); it starts when that much is free.",
+        "预计占用内存：约 {g} GiB{x}（{src}）；内存够了才开始执行。",
+    ),
+    "agent_cmd_exclusive": (
+        ", exclusive (the LLM is unloaded meanwhile)",
+        "，独占（期间卸载 LLM）",
+    ),
     "style_set": ("Planner style: {s}", "规划方式：{s}"),
     "locked_as": ("Locked as “{r}”", "已锁定为「{r}」"),
     "ask_lock": ("Lock it into the baseline pack?", "要锁进基准包吗？"),
@@ -260,6 +268,17 @@ M: dict[str, tuple[str, str]] = {
         "已新开会话「{t}」。项目记忆会带过来，之前的对话不会。",
     ),
     "session_use": ("Switched to session “{t}”", "已切换到会话「{t}」"),
+    "llm_list": (
+        "Local models (✅ loaded, ← in use by aco):\n{rows}\n/llm use NAME|N · /llm load · /llm unload",
+        "本地模型（✅ 已加载，← aco 在用）：\n{rows}\n/llm use 名称|序号 · /llm load · /llm unload",
+    ),
+    "llm_switching": (
+        "Switching to {m} (needs ~{g} GiB, estimate)… I'll tell you when it's loaded.",
+        "正在切换到 {m}（约需 {g} GiB，估算）……加载好了告诉你。",
+    ),
+    "llm_ready": ("{m} is loaded ({s} s).", "{m} 已加载（{s} 秒）。"),
+    "llm_already": ("{m} is already loaded.", "{m} 已经加载着。"),
+    "llm_unloaded": ("Unloaded {m}.", "已卸载 {m}。"),
     "session_deleted": (
         "Deleted session “{t}” ({m} messages). Current session: “{c}”",
         "已删除会话「{t}」（{m} 条消息）。当前会话：「{c}」",
@@ -383,6 +402,7 @@ HELP = (
 /mode [on_demand|session|always|command_only] LLM residency
 /project · /projects · /project new NAME · /project use NAME · /project done
 /session · /session new [TITLE] · /session use N · /session delete N
+/llm · /llm use NAME · /llm load · /llm unload
 /memory · /memory add TEXT · /memory del ID
 /pack current baseline pack
 /whoami show your chat_id
@@ -402,6 +422,7 @@ Anything else: a request or note — wakes the LLM.""",
 /mode [on_demand|session|always|command_only] LLM 驻留模式
 /project · /projects · /project new 名称 · /project use 名称 · /project done
 /session · /session new [标题] · /session use 序号 · /session delete 序号
+/llm · /llm use 名称 · /llm load · /llm unload
 /memory · /memory add 文本 · /memory del 编号
 /pack 当前基准包
 /whoami 显示 chat_id

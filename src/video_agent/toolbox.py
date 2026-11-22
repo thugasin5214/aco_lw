@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import subprocess
 import threading
@@ -38,8 +39,9 @@ BLOCKED = [
     ),
     (re.compile(r"agent/token"), "FreeVideo agent token 不能被读取"),
     (re.compile(r"\b(pkill|killall)\b|\bkill\s+-?\w*\s*\d"), "不结束进程（可能是别人的任务）"),
-    (re.compile(r"\blms\s+(unload|load)\b"), "LLM 的加载 / 卸载由编排器按内存决定"),
 ]
+# the project's own CLI (`va llm ...`) is on PATH for commands
+VENV_BIN = Path(__file__).resolve().parents[2] / ".venv" / "bin"
 
 
 def blocked(command: str) -> str | None:
@@ -163,6 +165,7 @@ class Toolbox:
                 errors="replace",
                 timeout=min(max(timeout_s, 1), MAX_TIMEOUT_S),
                 stdin=subprocess.DEVNULL,
+                env={**os.environ, "PATH": f"{VENV_BIN}:{os.environ.get('PATH', '')}"},
             )
             code, out, err = p.returncode, p.stdout, p.stderr
         except subprocess.TimeoutExpired as e:

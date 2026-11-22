@@ -782,7 +782,18 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
         return {"language": cfg.language, "comfy_url": cfg.comfy_url}
 
     # ---- settings window: editable config.toml keys + runtime switches + local LLM loading ----
-    llm_job: dict = {"state": "idle", "error": None}
+    from ..llm_control import LLMControl, LLMControlError
+
+    ctl = getattr(actions, "llm_control", None) or LLMControl(
+        cfg, studio.orch.resources, actions.planner
+    )
+    llm_job = ctl.job
+
+    def llm_guard(fn):
+        try:
+            return fn()
+        except LLMControlError as e:
+            raise HTTPException(409, str(e)) from e
 
     def _runtime_cfg() -> dict:
         rt = actions.runtime if hasattr(actions, "runtime") else None
@@ -842,11 +853,14 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
         from .. import i18n
         from ..planner import BRAINS
 
-        clean = {}
+        clean, new_model = {}, None
         for name, v in values.items():
             if name in config.SECRET and (v is None or v == ""):
                 continue  # empty secret = leave unchanged
             clean[name] = guard(lambda n=name, v=v: config.coerce(n, v))
+        if clean.get("llm_model") and clean["llm_model"] != cfg.llm_model:
+            # switching the model goes through LLMControl (unloads the previous one, checks memory)
+            new_model = clean.pop("llm_model")
         restart = [n for n in clean if {e[1]: e[3] for e in config.EDITABLE}[n] == "restart"]
         if clean:
             if cfg.config_path:
@@ -873,7 +887,21 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
             threading.Thread(
                 target=_llm_bg, args=(lambda: actions.planner.set_mode(mode),), daemon=True
             ).start()
-        return {"saved": sorted(clean), "restart": restart, "runtime": _runtime_cfg()}
+        switched = None
+        if new_model:
+            if llm.loaded(cfg.llm_model):  # live switch: unload the old model, load the new one
+                switched = llm_guard(lambda: ctl.use(new_model))
+            else:
+                cfg.llm_model = new_model
+                if cfg.config_path:
+                    guard(lambda: config.save({"llm_model": new_model}, cfg.config_path))
+            clean["llm_model"] = new_model
+        return {
+            "saved": sorted(clean),
+            "restart": restart,
+            "runtime": _runtime_cfg(),
+            "switch": switched,
+        }
 
     def _llm_bg(fn) -> None:
         llm_job.update(state="working", error=None)
@@ -883,39 +911,31 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
         except Exception as e:  # noqa: BLE001 — the result shows in the settings window
             llm_job.update(state="error", error=str(e))
 
+    @app.get("/api/llm")
+    def llm_status() -> dict:
+        return ctl.status()
+
+    @app.post("/api/llm/use")
+    def llm_use(model: str = Body(..., embed=True), wait: bool = Body(False, embed=True)) -> dict:
+        """Switch aco's local model (used by `va llm use` and the agent through run_command)."""
+        out = llm_guard(lambda: ctl.use(model))
+        if wait and out["state"] == "working":
+            out["job"] = ctl.wait()
+        return out
+
     @app.post("/api/llm/load")
-    def llm_load(reload: bool = Body(False, embed=True)) -> dict:
-        """Load with the current settings (reload: unload first, then load with the new options). Refused during inference / an exclusive render."""
-        rm = studio.orch.resources
-        if llm_job["state"] == "working":
-            raise HTTPException(409, "上一次加载 / 卸载还没结束")
-        ok, why = rm.llm_admit()
-        if not ok:
-            raise HTTPException(409, f"现在不能加载：{why}")
-        is_loaded = rm.llm.loaded()
-        if is_loaded and not reload:
-            return {"state": "loaded"}
-        if is_loaded and not rm.llm.wait_idle(0):
-            raise HTTPException(409, "LLM 正在推理，稍后再重新加载")
-        ttl = cfg.llm_session_ttl_s if actions.planner.mode == "on_demand" else None
-
-        def job() -> None:
-            if rm.llm.loaded():
-                rm.llm.unload()
-            rm.llm.load(ttl)
-
-        threading.Thread(target=_llm_bg, args=(job,), daemon=True).start()
-        return {"state": "working"}
+    def llm_load(
+        reload: bool = Body(False, embed=True), wait: bool = Body(False, embed=True)
+    ) -> dict:
+        """Load with the current settings (reload: unload first, then load with the new options). Refused during inference / an exclusive render / without enough memory."""
+        out = llm_guard(lambda: ctl.load(reload))
+        if wait and out["state"] == "working":
+            out["job"] = ctl.wait()
+        return out
 
     @app.post("/api/llm/unload")
     def llm_unload() -> dict:
-        rm = studio.orch.resources
-        if not rm.llm.loaded():
-            return {"state": "unloaded"}
-        if not rm.llm.wait_idle(0):
-            raise HTTPException(409, "LLM 正在推理，稍后再卸载")
-        guard(rm.llm.unload)
-        return {"state": "unloaded"}
+        return llm_guard(ctl.unload)
 
     # ---- W2: export to ComfyUI for editing, import back as a candidate variant, trial, promote
     # ----

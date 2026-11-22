@@ -151,6 +151,9 @@ class Actions:
     def __init__(self, studio: Studio, planner: Planner, worker: Worker | None = None):
         self.studio, self.planner, self.worker = studio, planner, worker
         self.store = studio.store
+        from .llm_control import LLMControl
+
+        self.llm_control = LLMControl(studio.orch.cfg, studio.orch.resources, planner)
         # injected by Daemon (push to Telegram)
         self.push_round: Callable[[dict], None] | None = None
         self.jobs: queue.Queue[tuple] = queue.Queue()
@@ -168,6 +171,7 @@ class Actions:
             max_steps=getattr(studio.orch.cfg, "agent_max_steps", 16),
         )
         studio.decision_listeners.append(self.runtime.on_round_decided)
+        self.runtime.llm_control = self.llm_control
 
     # ---- planner queue (single thread, wakes the LLM on demand) ----
     def planner_loop(self, stop: threading.Event) -> None:
@@ -233,6 +237,50 @@ class Actions:
     def _ctx(self) -> tuple[str, str]:
         pid = self.studio.current_project()["id"]
         return pid, self.studio.current_session(pid)["id"]
+
+    def _llm_command(self, args: list[str], say: Reply) -> None:
+        """/llm · /llm use NAME|N · /llm load · /llm unload — executed directly, no LLM involved."""
+        from .llm_control import LLMControlError
+
+        ctl = self.llm_control
+        sub = args[0] if args else ""
+        try:
+            if sub == "use" and len(args) > 1:
+                out = ctl.use(" ".join(args[1:]))
+            elif sub in ("load", "reload"):
+                out = ctl.load(reload=sub == "reload")
+            elif sub == "unload":
+                out = ctl.unload()
+                say(tr("llm_unloaded", m=out["model"]))
+                return
+            else:
+                st = ctl.status()
+                loaded = {m["id"] for m in st["loaded"]}
+                rows = "\n".join(
+                    f"{i}. {m['key']} · {round((m.get('size') or 0) / 2**30, 1)} GiB"
+                    + (" · 👁" if m.get("vision") else "")
+                    + (" ✅" if m["key"] in loaded else "")
+                    + (tr("current_mark") if m["key"] == st["model"] else "")
+                    for i, m in enumerate(st["models"], 1)
+                )
+                say(tr("llm_list", rows=rows or "-"))
+                return
+        except LLMControlError as e:
+            say(tr("not_done", e=e))
+            return
+        if out["state"] != "working":
+            say(tr("llm_already", m=out["model"]))
+            return
+        say(tr("llm_switching", m=out["model"], g=out.get("need_gib", "?")))
+
+        def report() -> None:
+            job = ctl.wait()
+            if job["state"] == "error":
+                say(tr("not_done", e=job["error"]))
+            else:
+                say(tr("llm_ready", m=out["model"], s=job.get("seconds", "?")))
+
+        threading.Thread(target=report, daemon=True).start()
 
     def _offer_memories(self, texts: list[str], source: dict, say: Reply) -> None:
         for m in self.studio.propose_memories(texts, source):
@@ -544,6 +592,8 @@ class Actions:
             else:
                 store.set_kv("agent_brain", args[0])
                 say(tr("model_set", m=args[0]))
+        elif cmd == "/llm":
+            self._llm_command(args, say)
         elif cmd in ("/permissions", "/perm"):
             rt = self.runtime
             if args and args[0] in ("default", "bypass"):
