@@ -610,3 +610,122 @@ def test_zero_max_steps_means_no_limit(env):
     run_all(a)
     run = last_run(studio)
     assert run["status"] == "done" and run["steps"] > 40 and said[-1][0] == "all done"
+
+def test_run_stage_suspends_the_agent_until_the_stage_stops_running(env, tmp_path):
+    """The agent queued a running stage again and again while an adaptation took 12 minutes;
+    now it is suspended on the stage and resumed with its result."""
+    from tests.test_production import FakeLLM, run_skills
+
+    from video_agent.config import ROOT
+    from video_agent.production import Production, load_workflows
+    from video_agent.skills import SkillLibrary
+
+    studio, make, said = env
+    stage_llm = FakeLLM()
+    stage_llm.park = True  # the LLM is busy: adaptation stays queued for now
+    prod = Production(
+        studio,
+        SkillLibrary((ROOT / "skills", "builtin")),
+        load_workflows(ROOT / "workflows"),
+        stage_llm,
+        log=lambda m: None,
+        work_dir=tmp_path / "productions",
+    )
+    pr = prod.create("novel-to-film", "x", {"source": "Mei lost her cat"})
+    stage_llm.park = False
+    run_skills(prod)  # brief + adaptation → review
+    prod.review(pr["id"], "adaptation", "redo", note="again")  # adaptation running again
+
+    args = {"production_id": pr["id"], "stage": "adaptation"}
+    a, script = make(
+        {"tool_calls": [call("run_stage", args, cid="1")]},
+        {"tool_calls": [call("run_stage", args, cid="2")]},
+        {"text": "adaptation ready for your review"},
+    )
+    a.runtime.production = prod
+    prod.listeners.append(a.runtime.on_stage_event)
+    n_before = len(prod.store.artifacts(pr["id"], "adaptation"))
+    a.inbound("web", "go on", lambda t, b=None: None)
+    run_all(a)
+    run = last_run(studio)
+    assert run["status"] == "waiting_event"  # suspended, not polling
+    assert len(prod.store.artifacts(pr["id"], "adaptation")) == n_before  # nothing re-queued
+
+    run_skills(prod)  # the adaptation finishes → the agent resumes with the result
+    run_all(a)
+    first = json.loads(next(m for m in script.seen[1] if m.get("tool_call_id") == "1")["content"])
+    assert first["stage"] == "adaptation" and first["state"] == "review"
+    assert first["next_action"]["type"] == "review"
+    # the second call found it no longer running and returned at once
+    run_all(a)
+    assert (
+        last_run(studio)["status"] == "done" and said[-1][0] == "adaptation ready for your review"
+    )
+
+
+def test_create_and_review_suspend_until_the_production_needs_the_user(env, tmp_path):
+    from tests.test_production import FakeLLM, run_skills
+
+    from video_agent.config import ROOT
+    from video_agent.production import Production, load_workflows
+    from video_agent.skills import SkillLibrary
+
+    studio, make, said = env
+    prod = Production(
+        studio,
+        SkillLibrary((ROOT / "skills", "builtin")),
+        load_workflows(ROOT / "workflows"),
+        FakeLLM(),
+        log=lambda m: None,
+        work_dir=tmp_path / "productions",
+    )
+
+    def after_create(messages):
+        res = json.loads(messages[-1]["content"])
+        return {
+            "tool_calls": [
+                call(
+                    "review_stage",
+                    {
+                        "production_id": res["production_id"],
+                        "stage": "adaptation",
+                        "action": "approve",
+                    },
+                    cid="2",
+                )
+            ]
+        }
+
+    a, script = make(
+        {
+            "tool_calls": [
+                call(
+                    "create_production",
+                    {"workflow": "novel-to-film", "title": "x", "source": "Mei lost her cat"},
+                    cid="1",
+                )
+            ]
+        },
+        after_create,
+        {"text": "bible ready"},
+    )
+    a.runtime.production = prod
+    prod.listeners.append(a.runtime.on_stage_event)
+    a.inbound("web", "make a film", lambda t, b=None: None)
+    run_all(a)
+    assert last_run(studio)["status"] == "waiting_event"  # brief + adaptation still to run
+
+    run_skills(prod)  # adaptation → review: the agent resumes and approves
+    run_all(a)
+    created = json.loads(next(m for m in script.seen[1] if m.get("tool_call_id") == "1")["content"])
+    assert created["next_action"] == {"type": "review", "stage": "adaptation"}
+    assert last_run(studio)["status"] == "waiting_event"  # the bible is running now
+
+    run_skills(prod)  # bible → review: resumed again
+    run_all(a)
+    reviewed = json.loads(
+        next(m for m in script.seen[2] if m.get("tool_call_id") == "2")["content"]
+    )
+    assert reviewed["artifact"]["status"] == "current"
+    assert reviewed["next_action"] == {"type": "review", "stage": "bible"}
+    assert last_run(studio)["status"] == "done" and said[-1][0] == "bible ready"

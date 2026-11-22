@@ -256,6 +256,7 @@ llm_fallback = ["anthropic", "claude_code", "codex"]  # 依次尝试
 | `mcp_list` / `mcp_call` | `config.toml` 的 `[mcp_servers.*]`（格式同 Claude Code；当前 Exa） | 只读工具不用，其余要 |
 | `delegate_agent` | 把子任务交给 Claude Code / Codex，等它汇报 | 要；需 `allow_online` |
 | `delegate_freevideo`（`/fv`） | 整个视频任务交给 FreeVideo agent | 要；需 `freevideo_agent_online` |
+- **agent 不轮询。** 所有耗时的工具都会让 agent 挂起，做完后带着结果把它唤醒：渲染（`wait_for_round`）、制片阶段（`run_stage`、`wait_for_stage`）、整个制片（`create_production`、`review_stage` 会一直等到制片需要你处理或已完成；`wait_for_production`）、命令、网页读取、MCP 调用、委派的 agent。挂起期间本地 LLM 空出来专心做事；长篇小说的一个 LLM 阶段可能要 10–20 分钟，显示「运行中」但还没有输出是正常的。
 
 **硬拒绝（任何模式都拒绝）**：直连 ComfyUI `:8188`、读 FreeVideo token、`kill` / `pkill` 结束进程。加载 / 切换 LLM（`va llm use`、`lms load`）是普通的需审批命令。命令可带 `memory_gib` / `exclusive` 资源预估：批准后编排器等内存够了才执行（会等视频渲染结束；独占时先卸载 LLM），审批消息里显示预估。执行策略在 `policies.yaml`（每个工具的开关、参数上限、MCP 审批规则）。
 

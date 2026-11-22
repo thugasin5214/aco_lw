@@ -869,6 +869,8 @@ class Daemon:
             # shooting holds the memory: unload / block the LLM
             self.production.film.resources = self.orch.resources
         self.production.listeners.append(self.notify_stage)
+        # agent runs waiting on a stage (run_stage / wait_for_stage) continue when it stops running
+        self.production.listeners.append(self.actions.runtime.on_stage_event)
         # render finished → queued skills try again
         self.orch.resources.listeners.append(self.production.wake)
         self.actions.production = self.production
