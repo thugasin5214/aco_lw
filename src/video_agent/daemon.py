@@ -935,7 +935,9 @@ class Daemon:
                     prompt,
                     f"http://127.0.0.1:{cfg.web_port}",
                 )
-            res = make_named_backend(cfg, self.orch.store, name).chat(messages, schema, 8192)
+            res = make_named_backend(cfg, self.orch.store, name).chat(
+                messages, schema, cfg.llm_max_tokens or None
+            )
             return res.text, res.stats()
 
         if stage.llm:  # the stage names a backend
@@ -945,12 +947,12 @@ class Daemon:
                 return run(stage.llm)
         primary = self.planner.backend
         if not getattr(primary, "local", False):
-            res = primary.chat(messages, schema, 8192)
+            res = primary.chat(messages, schema, cfg.llm_max_tokens or None)
             return res.text, res.stats()
         ok, why = rm.llm_admit()
         if ok:
             with rm.llm.inference():
-                res = primary.chat(messages, schema, 8192)
+                res = primary.chat(messages, schema, cfg.llm_max_tokens or None)
             return res.text, res.stats()
         if cfg.allow_online:
             for name in cfg.llm_fallback or []:

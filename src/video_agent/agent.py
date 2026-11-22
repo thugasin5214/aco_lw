@@ -1608,7 +1608,7 @@ class AgentRuntime:
             return backend.chat(
                 self.messages_for(run),
                 None,
-                max_tokens=self.cfg.agent_max_tokens,
+                max_tokens=self.cfg.llm_max_tokens or None,
                 tools=self.spec,
             )
 
@@ -1751,7 +1751,8 @@ class AgentRuntime:
             pass
         if truncated:
             err = (
-                f"output hit max_tokens ({self.cfg.agent_max_tokens}) and the tool call was cut off "
+                f"output hit the output cap ({self.cfg.llm_max_tokens or 'model maximum'} tokens) "
+                "and the tool call was cut off "
                 f"after {len(raw)} characters of arguments; nothing was run. Split large content "
                 "into several smaller calls (e.g. several smaller files)."
             )

@@ -705,3 +705,26 @@ def test_ingest_reads_text_files_in_full_and_stays_inside_data(tmp_path):
     assert ing(bad, {})["sources"][1]["status"] == "failed"
     with pytest.raises(ValueError, match="faithful adaptation needs the whole source"):
         ing(bad, {"fidelity": "faithful"})
+
+
+def test_rerunning_a_running_skill_stage_is_refused_whatever_the_key(prod):
+    """The agent passed keys=["adaptation"] 17 times while the job ran: each queued another one."""
+    p = prod
+    p.fake_llm.park = True  # the LLM is busy: the job stays queued
+    pr = p.create("novel-to-film", "x", {"source": "..."})
+    for _ in range(3):
+        try:
+            p.run_skill_job(p.pending_skill_jobs()[0])
+        except Park:
+            pass
+    p.fake_llm.park = False
+    run_skills(p)  # brief done; adaptation runs
+    p.fake_llm.park = True
+    p.review(pr["id"], "adaptation", "redo", note="again")
+    for keys in (["adaptation"], ["main"], None):
+        before = len(p.store.artifacts(pr["id"], "adaptation"))
+        try:
+            p.run_stage(pr["id"], "adaptation", keys, "force")
+        except ProductionError as e:
+            assert "正在生成" in str(e) and "不是卡死" in str(e)
+        assert len(p.store.artifacts(pr["id"], "adaptation")) == before

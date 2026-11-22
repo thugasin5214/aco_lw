@@ -21,3 +21,17 @@ def test_split_without_headings_and_long_chapters_by_length():
     cs = split_chapters(long_ch, limit=2000)
     assert [c["title"] for c in cs][:3] == ["第一章 长 (1/3)", "第一章 长 (2/3)", "第一章 长 (3/3)"]
     assert cs[-1]["title"] == "第二章 短" and split_chapters("  ") == []
+
+
+def test_no_output_cap_by_default():
+    """llm_max_tokens = 0: LM Studio gets -1 (until the context is full), other servers no cap."""
+    from video_agent.backends import OpenAICompatBackend
+
+    lm = OpenAICompatBackend.__new__(OpenAICompatBackend)
+    lm.name, lm.model = "lmstudio", "m"
+    assert lm._body([], None, None)["max_tokens"] == -1
+    other = OpenAICompatBackend.__new__(OpenAICompatBackend)
+    other.name, other.model = "openai", "m"
+    body = other._body([], None, None)
+    assert "max_tokens" not in body and "max_completion_tokens" not in body
+    assert other._body([], None, 500)["max_completion_tokens"] == 500

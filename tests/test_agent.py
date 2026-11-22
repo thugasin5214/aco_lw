@@ -128,10 +128,11 @@ def test_truncated_tool_call_is_not_run_and_replays_as_valid_json(env):
     )
     a.inbound("web", "write a long script", lambda t, b=None: None)
     run_all(a)
-    assert a.planner.backend.max_tokens == studio.orch.cfg.agent_max_tokens == 16384
+    # llm_max_tokens = 0 (default): no cap sent, the model's maximum applies
+    assert a.planner.backend.max_tokens is None
     sent = script.seen[2]
     tool_msgs = [m for m in sent if m["role"] == "tool"]
-    assert all("max_tokens" in m["content"] for m in tool_msgs)
+    assert all("cut off" in m["content"] for m in tool_msgs)
     replayed = [c for m in sent if m["role"] == "assistant" for c in m.get("tool_calls") or []]
     assert [c["function"]["arguments"] for c in replayed] == ["{}", "{}"]
     assert last_run(studio)["status"] == "done"
