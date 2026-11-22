@@ -778,6 +778,7 @@ class Daemon:
         self.production.listeners.append(self.notify_stage)
         # agent runs waiting on a stage (run_stage / wait_for_stage) continue when it stops running
         self.production.listeners.append(self.actions.runtime.on_stage_event)
+        self.production.deleted_listeners.append(self.actions.runtime.on_production_deleted)
         # render finished → queued skills try again
         self.orch.resources.listeners.append(self.production.wake)
         self.actions.production = self.production

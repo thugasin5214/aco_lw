@@ -359,6 +359,11 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
     def use_project(project_id: str) -> dict:
         return guard(lambda: studio.use_project(project_id))
 
+    @app.post("/api/projects/{project_id}/delete")
+    def delete_project(project_id: str) -> dict:
+        prod = getattr(actions, "production", None)
+        return guard(lambda: studio.delete_project(project_id, prod.delete if prod else None))
+
     @app.post("/api/projects/{project_id}/done")
     def finish_project(project_id: str) -> dict:
         return guard(lambda: studio.finish_project(project_id))
@@ -745,6 +750,10 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
     @app.post("/api/productions/{pid}/pause")
     def production_pause(pid: str, stop_running: bool = Body(False, embed=True)) -> dict:
         return guard(lambda: _production().pause(pid, stop_running))
+
+    @app.post("/api/productions/{pid}/delete")
+    def production_delete(pid: str) -> dict:
+        return guard(lambda: _production().delete(pid))
 
     @app.post("/api/productions/{pid}/resume")
     def production_resume(pid: str) -> dict:

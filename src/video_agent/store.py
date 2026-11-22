@@ -797,6 +797,10 @@ class Store:
         return self.get_run(run_id)
 
     @_locked
+    def runs_of_project(self, project_id: str) -> list[dict]:
+        return self._rows("SELECT * FROM agent_runs WHERE project_id=?", (project_id,))
+
+    @_locked
     def runs(self, session_id: str | None = None, *statuses: str) -> list[dict]:
         q, args = "SELECT * FROM agent_runs WHERE 1=1", []
         if session_id:
@@ -945,6 +949,50 @@ class Store:
                 (*fields.values(), time.time(), production_id),
             )
         return self.get_production(production_id)
+
+    @_locked
+    def production_rounds(self, production_id: str) -> list[dict]:
+        """Render rounds the production itself created (not outputs you picked into it)."""
+        return self._rows(
+            "SELECT * FROM rounds WHERE request LIKE ?", (f"production:{production_id}:%",)
+        )
+
+    @_locked
+    def delete_production_rows(self, production_id: str) -> int:
+        """Delete a production and its artifacts (the engine removes rounds and files first)."""
+        with self.db:
+            n = self.db.execute(
+                "DELETE FROM artifacts WHERE production_id=?", (production_id,)
+            ).rowcount
+            self.db.execute("DELETE FROM productions WHERE id=?", (production_id,))
+        return n
+
+    @_locked
+    def delete_project_rows(self, project_id: str) -> dict:
+        """Delete a project's own rows: sessions with messages and agent runs, memories, packs,
+        upload records, its kv keys and the project. Tasks, rounds and productions go first
+        (with their files), through Studio and the production engine."""
+        sessions = [
+            r["id"] for r in self._rows("SELECT id FROM sessions WHERE project_id=?", (project_id,))
+        ]
+        runs = [
+            r["id"]
+            for r in self._rows("SELECT id FROM agent_runs WHERE project_id=?", (project_id,))
+        ]
+        with self.db:
+            n = self.db.execute("DELETE FROM messages WHERE project_id=?", (project_id,)).rowcount
+            for rid in runs:
+                self.db.execute("DELETE FROM agent_msgs WHERE run_id=?", (rid,))
+            self.db.execute("DELETE FROM agent_runs WHERE project_id=?", (project_id,))
+            for sid in sessions:
+                self.db.execute("DELETE FROM kv WHERE key=?", (f"agent_upto:{sid}",))
+            self.db.execute("DELETE FROM sessions WHERE project_id=?", (project_id,))
+            self.db.execute("DELETE FROM memories WHERE project_id=?", (project_id,))
+            self.db.execute("DELETE FROM packs WHERE project_id=?", (project_id,))
+            self.db.execute("DELETE FROM uploads WHERE project_id=?", (project_id,))
+            self.db.execute("DELETE FROM kv WHERE key=?", (f"session:{project_id}",))
+            self.db.execute("DELETE FROM projects WHERE id=?", (project_id,))
+        return {"messages": n, "sessions": len(sessions), "runs": len(runs)}
 
     @_locked
     def add_artifact(self, production_id: str, stage: str, key: str, status: str, **fields) -> dict:

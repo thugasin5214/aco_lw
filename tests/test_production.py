@@ -728,3 +728,61 @@ def test_rerunning_a_running_skill_stage_is_refused_whatever_the_key(prod):
         except ProductionError as e:
             assert "正在生成" in str(e) and "不是卡死" in str(e)
         assert len(p.store.artifacts(pr["id"], "adaptation")) == before
+
+
+def test_delete_production_removes_its_rounds_files_and_artifacts(prod):
+    p = prod
+    mine = p.studio.start_round("flux2-t2i", {"prompt": "my own picture"})  # not the production's
+    pr = p.create("novel-to-film", "x", {"source": "..."})
+    run_skills(p)
+    p.review(pr["id"], "adaptation", "approve")
+    run_skills(p)
+    p.review(pr["id"], "bible", "approve")  # casting rounds are queued as drafts
+    own = p.store.production_rounds(pr["id"])
+    assert own and p.store.artifacts(pr["id"])
+    (p.work_dir / pr["id"]).mkdir(parents=True, exist_ok=True)
+    woken = []
+    p.deleted_listeners.append(woken.append)
+    # something ComfyUI already works on blocks the delete
+    t = p.store.round_tasks(own[0]["id"])[0]
+    p.store.db.execute("UPDATE tasks SET state='running' WHERE id=?", (t["id"],))
+    with pytest.raises(ProductionError, match="pause|暂停"):
+        p.delete(pr["id"])
+    p.store.db.execute("UPDATE tasks SET state='draft' WHERE id=?", (t["id"],))
+    out = p.delete(pr["id"])
+    assert out["productions"] == 1 and out["rounds"] == len(own) and woken == [pr["id"]]
+    assert p.store.get_production(pr["id"]) is None
+    assert p.store.artifacts(pr["id"]) == [] and p.store.production_rounds(pr["id"]) == []
+    assert all(p.store.get(x["id"]) is None for r in own for x in p.store.round_tasks(r["id"]))
+    assert not (p.work_dir / pr["id"]).exists()
+    assert p.store.get_round(mine["id"]) is not None  # your own outputs stay
+    assert p.pending_skill_jobs() == [] and p.pending_reviews() == []
+
+
+def test_llm_result_of_a_deleted_production_is_dropped(prod):
+    p = prod
+    pr = p.create("novel-to-film", "x", {"source": "..."})
+    run_skills(p)  # brief → adaptation in review
+    p.review(pr["id"], "adaptation", "redo", note="again")
+    job = p.pending_skill_jobs()[0]
+    real = p.llm
+
+    def deleting(stage, messages, schema):  # the user deletes while the LLM writes
+        p.delete(pr["id"])
+        return real(stage, messages, schema)
+
+    p.llm = deleting
+    p.run_skill_job(job)
+    assert p.store.get_production(pr["id"]) is None and p.store.artifacts(pr["id"]) == []
+
+
+def test_stage_approval_is_logged_into_the_current_session(prod):
+    p = prod
+    pr = p.create("novel-to-film", "x", {"source": "..."})
+    run_skills(p)
+    p.review(pr["id"], "adaptation", "approve")
+    rows = p.store.db.execute(
+        "SELECT session_id FROM messages WHERE text LIKE 'approved %'"
+    ).fetchall()
+    # a message without a session comes back as a "history session" after you delete sessions
+    assert rows and all(r["session_id"] for r in rows)

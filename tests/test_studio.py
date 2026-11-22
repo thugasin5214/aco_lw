@@ -340,3 +340,31 @@ def test_note_on_video_template_ignores_steps(studio):
     )
     delta, _, _ = planner.translate_note("h3-i2v", {"prompt": "she walks"}, "more smile", None)
     assert delta == {"prompt": "she smiles and turns"}
+
+
+def test_delete_project_removes_everything_of_it(studio):
+    p1 = studio.current_project()
+    rnd = studio.start_round("flux2-t2i", {"seed": 5})
+    drain(studio)
+    studio.add_memory("camera stays at 35mm")
+    studio.log("web", "in", "hello", p1["id"])
+    other = studio.new_project("other")
+    keep = studio.start_round("flux2-t2i", {"seed": 6}, project_id=other["id"])
+    files = [o for t in studio.store.round_tasks(rnd["id"]) for o in t["outputs"]]
+    out = studio.delete_project(p1["id"])
+    assert out["tasks"] == 3 and out["sessions"] >= 1
+    assert studio.store.get_project(p1["id"]) is None
+    assert studio.store.get_round(rnd["id"]) is None
+    assert studio.store.messages(p1["id"]) == [] and studio.store.sessions(p1["id"]) == []
+    assert studio.store.memories(p1["id"]) == []
+    assert all(not (studio.store.jobs_dir / f).exists() for f in files if isinstance(f, str))
+    assert studio.store.get_round(keep["id"]) is not None
+
+
+def test_purge_clears_review_outputs_outside_any_project(studio):
+    t = studio.orch.create("flux2-t2i", {"seed": 77})
+    studio.orch.execute(t["id"])
+    studio.store.db.execute("UPDATE tasks SET project_id=NULL WHERE id=?", (t["id"],))
+    assert studio.store.get(t["id"])["state"] == "review"
+    out = studio.purge_project("none", "review")
+    assert out["tasks"] == 1 and studio.store.get(t["id"]) is None

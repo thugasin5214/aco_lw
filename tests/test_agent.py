@@ -409,7 +409,6 @@ def test_run_stage_suspends_the_agent_until_the_stage_stops_running(env, tmp_pat
     """The agent queued a running stage again and again while an adaptation took 12 minutes;
     now it is suspended on the stage and resumed with its result."""
     from tests.test_production import FakeLLM, run_skills
-
     from video_agent.config import ROOT
     from video_agent.production import Production, load_workflows
     from video_agent.skills import SkillLibrary
@@ -459,7 +458,6 @@ def test_run_stage_suspends_the_agent_until_the_stage_stops_running(env, tmp_pat
 
 def test_create_and_review_suspend_until_the_production_needs_the_user(env, tmp_path):
     from tests.test_production import FakeLLM, run_skills
-
     from video_agent.config import ROOT
     from video_agent.production import Production, load_workflows
     from video_agent.skills import SkillLibrary
@@ -523,3 +521,39 @@ def test_create_and_review_suspend_until_the_production_needs_the_user(env, tmp_
     assert reviewed["artifact"]["status"] == "current"
     assert reviewed["next_action"] == {"type": "review", "stage": "bible"}
     assert last_run(studio)["status"] == "done" and said[-1][0] == "bible ready"
+
+
+def test_deleting_a_production_wakes_the_agent_waiting_on_it(env, tmp_path):
+    from tests.test_production import FakeLLM, run_skills
+    from video_agent.config import ROOT
+    from video_agent.production import Production, load_workflows
+    from video_agent.skills import SkillLibrary
+
+    studio, make, said = env
+    prod = Production(
+        studio,
+        SkillLibrary((ROOT / "skills", "builtin")),
+        load_workflows(ROOT / "workflows"),
+        FakeLLM(),
+        log=lambda m: None,
+        work_dir=tmp_path / "productions",
+    )
+    pr = prod.create("novel-to-film", "x", {"source": "Mei lost her cat"})
+    run_skills(prod)
+    prod.review(pr["id"], "adaptation", "redo", note="again")  # running again
+    args = {"production_id": pr["id"], "stage": "adaptation"}
+    a, script = make(
+        {"tool_calls": [call("run_stage", args, cid="1")]},
+        {"text": "it was deleted"},
+    )
+    a.runtime.production = prod
+    prod.listeners.append(a.runtime.on_stage_event)
+    prod.deleted_listeners.append(a.runtime.on_production_deleted)
+    a.inbound("web", "go on", lambda t, b=None: None)
+    run_all(a)
+    assert last_run(studio)["status"] == "waiting_event"
+    prod.delete(pr["id"])
+    run_all(a)
+    res = json.loads(next(m for m in script.seen[1] if m.get("tool_call_id") == "1")["content"])
+    assert res["deleted"] is True
+    assert last_run(studio)["status"] == "done" and said[-1][0] == "it was deleted"

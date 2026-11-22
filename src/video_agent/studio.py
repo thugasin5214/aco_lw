@@ -20,6 +20,9 @@ VIDEO_EXT = {".mp4", ".mov", ".webm"}
 RUNNING_STATES = {"draft", "validated", "waiting_memory", "submitted", "running"}
 
 
+NO_PROJECT = "none"  # purge target for outputs submitted outside any project
+
+
 class StudioError(ValueError):
     pass
 
@@ -103,10 +106,17 @@ class Studio:
         if scope not in ("review", "unselected"):
             raise StudioError("scope must be review or unselected")
         states = {"review"} if scope == "review" else {"review", "rejected", "failed", "timeout"}
-        all_tasks = self.store.list(1_000_000, project_id)
-        # the review page shows "rounds in review": their candidates may all have failed, delete
-        # those too
-        review_rounds = {r["id"] for r in self.store.rounds(project_id, "review")}
+        if project_id == NO_PROJECT:  # outputs submitted outside any project (CLI / tests)
+            all_tasks = [t for t in self.store.list(1_000_000) if not t["project_id"]]
+            review_rounds = {
+                r["id"] for r in self.store.rounds(None, "review") if not r["project_id"]
+            }
+            project_id = None
+        else:
+            all_tasks = self.store.list(1_000_000, project_id)
+            # the review page shows "rounds in review": their candidates may all have failed,
+            # delete those too
+            review_rounds = {r["id"] for r in self.store.rounds(project_id, "review")}
         tasks = [
             t
             for t in all_tasks
@@ -137,8 +147,54 @@ class Studio:
             text += tr(
                 "log_kept", n=out["kept_for_productions"], p="、".join(out["kept_productions"])
             )
-        self.log("system", "out", text, project_id)
+        if project_id:
+            self.log("system", "out", text, project_id)
         return out
+
+    def delete_project(self, project_id: str, delete_production=None) -> dict:
+        """Delete a project for real: its productions (through `delete_production`), every task
+        and round with their files, baseline packs, sessions, messages, agent runs and memories.
+        Refused while the agent works in it or ComfyUI / FreeVideo runs one of its tasks."""
+        p = self.store.get_project(project_id)
+        if p is None:
+            raise StudioError(f"no project {project_id}")
+        live = [
+            r for r in self.store.runs_of_project(project_id) if r["status"] not in self.RUN_DONE
+        ]
+        if live:
+            raise StudioError(tr("session_busy", n=len(live)))
+        tasks = self.store.list(1_000_000, project_id)
+        # drafts are cancelled; only what ComfyUI / FreeVideo is already working on blocks
+        busy = [t for t in tasks if t["state"] in ("submitted", "running")]
+        if busy:
+            raise StudioError(tr("delete_busy", n=len(busy)))
+        prods = self.store.productions(project_id)
+        for prod in prods:  # nothing of it starts any more while we delete
+            self.store.update_production(prod["id"], state="paused")
+        self.cancel_queued(project_id, "project deleted")
+        for prod in prods:
+            if delete_production is None:
+                raise StudioError("production engine not running")
+            if self.store.get_production(prod["id"]):  # episodes go with their series
+                delete_production(prod["id"])
+        tasks = self.store.list(1_000_000, project_id)
+        freed = sum(self._remove_files(t) for t in tasks)
+        self.store.delete_tasks([t["id"] for t in tasks])
+        rounds = self.store.rounds(project_id)
+        for r in rounds:
+            self.store.delete_round_row(r["id"])
+        shutil.rmtree(self.store.packs_dir / project_id, ignore_errors=True)
+        rows = self.store.delete_project_rows(project_id)
+        if self.store.get_kv("current_project") == project_id:
+            self.store.set_kv("current_project", None)
+        return {
+            **rows,
+            "name": p["name"],
+            "productions": len(prods),
+            "tasks": len(tasks),
+            "rounds": len(rounds),
+            "freed_mb": round(freed / 2**20, 1),
+        }
 
     # ---- projects ----
     def current_project(self) -> dict:

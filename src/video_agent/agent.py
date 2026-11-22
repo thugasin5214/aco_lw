@@ -2002,6 +2002,21 @@ class AgentRuntime:
         # checked on the queue, not here: the engine emits before it starts the next stages
         self.enqueue(lambda: self._check_waits(pid, ev["stage"]))
 
+    def on_production_deleted(self, pid: str) -> None:
+        """A production was deleted: runs waiting on it or on one of its stages continue."""
+        prefix = f"stage:{pid}:"
+        for m in self.store.pending_tool_msgs():
+            k = m["meta"].get("key") or ""
+            if k == production_key(pid) or k.startswith(prefix):
+                self.resolve_msg(
+                    m,
+                    {
+                        "production_id": pid,
+                        "deleted": True,
+                        "error": "the user deleted this production",
+                    },
+                )
+
     def _check_waits(self, pid: str, stage: str) -> None:
         key, pkey = stage_key(pid, stage), production_key(pid)
         waiting = {m["meta"].get("key") for m in self.store.pending_tool_msgs()}
