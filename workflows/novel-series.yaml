@@ -12,6 +12,7 @@ settings:
   auto_shoot: false         # true: each episode starts shooting without waiting for you (hours per episode)
   max_clip_seconds: 10      # one generation renders at most this long; longer moments become consecutive shots
   chapter_chars: 6000       # longer chapters are read in parts
+  max_source_chars: 0       # no cap: the whole book is read (it is split into chapters in code)
   style: ""                 # camera style; empty: the direction stage proposes options
   fidelity: faithful
   interiority: visual

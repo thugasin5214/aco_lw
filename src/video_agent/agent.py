@@ -529,7 +529,19 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
         )
 
     def create_production(ctx, a):
-        source = {"text": a.get("source") or "", "sources": a.get("sources") or []}
+        work = rt.cfg.data_dir / "agent-work" / ctx["run_id"]
+        sources = []
+        for src in a.get("sources") or []:
+            path = src.get("path") if isinstance(src, dict) else None
+            if src.get("kind") == "file" and path and not Path(path).expanduser().is_absolute():
+                src = {**src, "path": str(work / path)}  # relative to this run's work dir
+            sources.append(src)
+        text = (a.get("source") or "").strip()
+        if text and "\n" not in text and (work / text).is_file():
+            # a path to a file of this run passed as the story: hand over the file, not the path
+            sources.insert(0, {"kind": "file", "path": str(work / text)})
+            text = ""
+        source = {"text": text, "sources": sources}
         prod = _prod().create(
             a["workflow"],
             a["title"],
@@ -802,17 +814,24 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
                 {
                     "workflow": S,
                     "title": S,
-                    "source": S,
+                    "source": {
+                        "type": "string",
+                        "description": "the story text itself, verbatim — never a summary or your "
+                        "rewrite; for long text use a {kind: file} source instead",
+                    },
                     "sources": {
                         "type": "array",
                         "items": {"type": "object"},
-                        "description": "{url} for a web page or YouTube link; {kind: image, upload: "
-                        "<upload id>, label, role: character|location|style|prop, use: "
-                        "stylize|as_is, note} for the user's pictures",
+                        "description": "{kind: file, path} for a text file (e.g. a novel saved in "
+                        "your work dir; read in full); {url} for a web page or YouTube link; "
+                        "{kind: text, title, text} for the user's own notes / instructions; "
+                        "{kind: image, upload: <upload id>, label, role: "
+                        "character|location|style|prop, use: stylize|as_is, note} for pictures",
                     },
                     "settings": {
                         "type": "object",
-                        "description": "e.g. video_tier, image_candidates, subtitles, language",
+                        "description": "e.g. fidelity (faithful = keep every scene and line), "
+                        "episode_minutes, style, video_tier, image_candidates, subtitles, language",
                     },
                 },
                 ["workflow", "title"],

@@ -681,3 +681,27 @@ def test_chunked_storyboard_runs_scene_by_scene_and_renumbers(prod):
     assert [u["item"]["id"] for u in users] == ["s1", "s2"]
     assert [u["chunk"]["target_seconds"] for u in users] == [225, 75]  # 5 min split 3:1 by beats
     assert "previous_element" not in users[0] and users[1]["previous_element"]["scene"] == "s1"
+
+
+def test_ingest_reads_text_files_in_full_and_stays_inside_data(tmp_path):
+    from video_agent.ingest import Ingest
+
+    data = tmp_path / "data"
+    (data / "agent-work" / "r1").mkdir(parents=True)
+    novel = data / "agent-work" / "r1" / "novel.txt"
+    novel.write_bytes(("第一章 雨夜\n" + "她走进修表铺。" * 9000).encode("gb18030"))
+    outside = tmp_path / "secret.txt"
+    outside.write_text("no")
+    ing = Ingest(tmp_path / "w", file_roots=[data])
+    # a path passed as the story text is read as a file, in full (no silent cap when 0)
+    out = ing({"text": str(novel), "sources": []}, {"max_source_chars": 0})
+    assert out["text"].count("修表铺") == 9000 and "truncated" not in out
+    assert out["sources"][0]["kind"] == "file" and out["sources"][0]["chars"] > 60000
+    # the default cap says so when it cuts
+    out = ing({"text": "", "sources": [{"kind": "file", "path": str(novel)}]}, {})
+    assert out["truncated"]["kept"] == 40000
+    # outside data/: refused; faithful mode stops instead of adapting half a source
+    bad = {"text": "a note", "sources": [{"kind": "file", "path": str(outside)}]}
+    assert ing(bad, {})["sources"][1]["status"] == "failed"
+    with pytest.raises(ValueError, match="faithful adaptation needs the whole source"):
+        ing(bad, {"fidelity": "faithful"})
