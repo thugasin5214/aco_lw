@@ -486,3 +486,19 @@ def test_comfy_args_sent_as_a_json_string_are_decoded(env, monkeypatch):
     a.inbound("web", "models", lambda t, b=None: None)
     run_all(a)
     assert seen["args"] == {"action": "list"}
+
+
+
+def test_zero_max_steps_means_no_limit(env):
+    """agent_max_steps = 0: the step budget never ends a run (the repeat guard still stops loops)."""
+    studio, make, said = env
+    steps = [
+        {"tool_calls": [call("get_status" if i % 2 else "get_project", cid=str(i))]}
+        for i in range(50)
+    ]
+    a, _ = make(*steps, {"text": "all done"})
+    a.runtime.max_steps = 0
+    a.inbound("web", "long task", lambda t, b=None: None)
+    run_all(a)
+    run = last_run(studio)
+    assert run["status"] == "done" and run["steps"] > 40 and said[-1][0] == "all done"
