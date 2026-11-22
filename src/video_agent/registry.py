@@ -25,6 +25,8 @@ class Slot(BaseModel):
     max: float | None = None
     multiple_of: int | None = None
     required: bool = False
+    # optional inputs: nodes removed (with every link into them) when the slot is not given
+    drop_if_unset: list[str] = []
 
 
 class Tier(BaseModel):

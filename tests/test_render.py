@@ -20,7 +20,8 @@ def test_all_templates_load_and_pass_object_info():
         for k, s in t.slots.items():  # other required slots (e.g. lora): an option ComfyUI lists
             if s.required and k not in imgs:
                 spec = OBJECT_INFO[t.graph[s.node]["class_type"]]["input"]["required"][s.field]
-                imgs[k] = spec[0][0] if isinstance(spec[0], list) else "x"
+                opts = spec[0] if isinstance(spec[0], list) else spec[1].get("options", ["x"])
+                imgs[k] = opts[-1]  # the last option: the first is often "None"
         _, p = resolve(t, imgs, allow_unverified=True)
         assert check_graph(render(t, p), OBJECT_INFO) == [], t.name
 
