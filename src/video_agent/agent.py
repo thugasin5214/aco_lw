@@ -1563,6 +1563,10 @@ class AgentRuntime:
                 log.exception("agent LLM call failed")
                 self._finish(run, tr("planner_error", e=e), "failed")
                 return
+        if self._cancelled(run_id):
+            # cancelled while the LLM was thinking: drop the answer, run none of its tool calls
+            log.info("agent run %s cancelled during the LLM call; result dropped", run_id)
+            return
         if backend is not self.planner.backend:
             self._log_policy(
                 run, f"local LLM unavailable → this step used {res.backend or backend.name}"
@@ -1595,6 +1599,8 @@ class AgentRuntime:
             self._finish(run, None, "done", say_text=res.text)
             return
         for c in calls:
+            if self._cancelled(run_id):
+                break
             self._execute(run, c, say)
         self._advance(run_id)
 
@@ -1653,6 +1659,8 @@ class AgentRuntime:
         self.studio.log(
             "llm", "out", text, run["project_id"], name, run_id=run_id, purpose="agent", **stats
         )
+        if self._cancelled(run_id):
+            return
         self.store.update_run(run_id, status="running")  # leave delegated before finishing
         self._finish(self.store.get_run(run_id), None, status, say_text=text)
         self.resolve(f"run:{run_id}", {"status": status, "reply": text})  # wake runs waiting for it
@@ -1836,9 +1844,15 @@ class AgentRuntime:
             if m["role"] == "tool" and m["status"] != "done"
         ]
 
+    def _cancelled(self, run_id: str) -> bool:
+        run = self.store.get_run(run_id)
+        return run is None or run["status"] == "cancelled"
+
     def _advance(self, run_id: str) -> None:
         run = self.store.get_run(run_id)
-        if run and run["status"] == "delegated":
+        if run is None or run["status"] in TERMINAL_RUN:
+            return  # cancelled / finished: a late result must not bring it back to life
+        if run["status"] == "delegated":
             # the CLI agent is waiting for this result itself (external_tool polling); do not queue
             # a local step
             return
@@ -1854,6 +1868,8 @@ class AgentRuntime:
         )
 
     def _finish(self, run: dict, note: str | None, status: str, say_text: str | None = None):
+        if self._cancelled(run["id"]):
+            return  # you cancelled it: stay cancelled and say nothing more
         self.store.update_run(run["id"], status=status)
         text = say_text if say_text is not None else note
         if text:
@@ -2176,7 +2192,27 @@ class AgentRuntime:
             if not self._unresolved(run["id"]):
                 self.enqueue(lambda rid=run["id"]: self.step(rid))
 
-    def cancel(self, run_id: str) -> None:
+    def cancel(self, run_id: str) -> dict:
+        """Stop a run for good: it stays cancelled even when an LLM call or a tool it started
+        returns later, and the renders it was waiting for that have not started yet are dropped
+        from the queue. Productions it started keep their state (pause or delete them there)."""
         self.store.update_run(run_id, status="cancelled")
+        dropped = 0
         for m in self._unresolved(run_id):
+            key = m["meta"].get("key") or ""
+            if key.startswith("round:"):
+                dropped += self._drop_queued(key.split(":", 1)[1])
             self.store.update_agent_msg(m["id"], content='{"cancelled": true}', status="done")
+        return {"run_id": run_id, "dropped_tasks": dropped}
+
+    def _drop_queued(self, round_id: str) -> int:
+        n = 0
+        for t in self.store.round_tasks(round_id):
+            if t["state"] == "draft":
+                self.store.transition(
+                    t["id"], "failed", tr("task_cancelled_agent"), error="cancelled"
+                )
+                n += 1
+        if n:
+            self.studio.refresh_round(round_id)
+        return n

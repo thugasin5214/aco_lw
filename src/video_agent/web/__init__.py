@@ -634,8 +634,12 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
 
     @app.post("/api/runs/{run_id}/cancel")
     def cancel_run(run_id: str) -> dict:
-        actions.runtime.cancel(run_id)
-        return {"ok": True}
+        return {"ok": True, **actions.runtime.cancel(run_id)}
+
+    @app.post("/api/queue/clear")
+    def clear_queue(stop_running: bool = Body(False, embed=True)) -> dict:
+        """Stop all agent runs, drop queued renders and production LLM jobs."""
+        return actions.clear_queue(stop_running)
 
     # ---- production pipeline (stage 3) ----
     def _stage_reviews() -> list[dict]:

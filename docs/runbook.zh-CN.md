@@ -81,6 +81,7 @@ uv run va daemon 2>&1 | tee -a data/daemon.log
 | `/reopen [轮ID]` | 更改最近一轮（或指定轮）的审阅结果 |
 | `/pause` `/resume` | 暂停 / 恢复出图（正在跑的会跑完） |
 | `/cancel` | 取消当前项目的排队任务，并中断本系统正在跑的任务 |
+| `/cancel all [now]` | 清空整个队列（控制台：⏹ 清空队列）：停止所有 agent 任务（LLM 调用晚回来也不会复活）、丢弃所有排队渲染和制片的 LLM 作业、暂停各制片；加 `now` 同时中断正在生成的渲染 |
 | `/mode [on_demand\|session\|always\|command_only]` | LLM 驻留模式（默认按需） |
 | `/project` · `/projects` · `/project new 名称` · `/project use 名称` · `/project done` | 项目管理 |
 | `/session` · `/session new [标题]` · `/session use 序号` | 会话（序号 1 = 最近活跃） |

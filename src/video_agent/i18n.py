@@ -95,6 +95,12 @@ M: dict[str, tuple[str, str]] = {
         "Used by the active production “{p}”; finish or delete that production first.",
         "进行中的制片「{p}」还在用它；先结束或删除那个制片。",
     ),
+    "task_cancelled_agent": ("Cancelled: the agent was stopped", "已取消：agent 已停止"),
+    "queue_cleared": (
+        "Queue cleared: {runs} agent run(s) stopped, {tasks} queued render(s) and {jobs} LLM job(s) dropped{x}.",
+        "已清空队列：停止 {runs} 个 agent 任务，丢弃 {tasks} 个排队渲染、{jobs} 个 LLM 作业{x}。",
+    ),
+    "queue_cleared_running": (", the running render interrupted", "，并中断了正在生成的渲染"),
     "prod_delete_busy": (
         "{n} of this production's render(s) are still queued or running; pause it with “stop now” first.",
         "这个制片还有 {n} 个渲染在排队或生成中；先「暂停 → 立即停止」再删。",
@@ -384,6 +390,7 @@ HELP = (
 /reopen [ROUND_ID] change the decision of the latest (or given) decided round
 /pause /resume pause / resume rendering
 /cancel cancel queued tasks (and interrupt our running one)
+/cancel all [now] clear the whole queue: stop all agent runs, drop queued renders and LLM jobs
 /mode [on_demand|session|always|command_only] LLM residency
 /project · /projects · /project new NAME · /project use NAME · /project done
 /session · /session new [TITLE] · /session use N · /session delete N
@@ -403,6 +410,7 @@ Anything else: a request or note — wakes the LLM.""",
 /reopen [轮ID] 更改最近一轮（或指定轮）的审阅结果
 /pause /resume 暂停 / 恢复出图
 /cancel 取消排队中的任务（含正在跑的本系统任务）
+/cancel all [now] 清空整个队列：停止所有 agent 任务，丢弃排队渲染和 LLM 作业
 /mode [on_demand|session|always|command_only] LLM 驻留模式
 /project · /projects · /project new 名称 · /project use 名称 · /project done
 /session · /session new [标题] · /session use 序号 · /session delete 序号
