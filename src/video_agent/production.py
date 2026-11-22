@@ -904,7 +904,10 @@ class Production:
             return up["path"]
 
         work = self.work_dir / prod["id"] / f"{st.id}_{int(time.time())}"
-        return Ingest(work, upload_path)(inputs[st.needs[0]], prod["settings"])
+        data_dir = self.store.jobs_dir.parent
+        return Ingest(work, upload_path, file_roots=[data_dir])(
+            inputs[st.needs[0]], prod["settings"]
+        )
 
     def pending_skill_jobs(self) -> list[dict]:
         jobs = []

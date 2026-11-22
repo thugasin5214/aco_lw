@@ -37,6 +37,9 @@ novel's name.
   - keep **all** spoken dialogue, verbatim (translated only when `settings.language` differs);
     long speeches may be split into several lines, not shortened.
   - the synopsis may be longer (up to ~300 words); the logline stays one sentence.
+  - **do not change the story**: never merge, rename, add or drop characters, never move,
+    soften or invent events, never change who does what. Only turn the unfilmable (thoughts,
+    narration) into something visible, per `settings.interiority`.
   - interior monologue and narration follow `settings.interiority`: `visual` (default) turns them
     into what a camera can see — a look, a gesture, a held object, a pause, a reaction shot —
     never a voice-over; `narration` keeps them as narrator lines.
