@@ -17,6 +17,10 @@ def test_all_templates_load_and_pass_object_info():
             # non-ComfyUI executors / workflows submitted as-is: api.json only carries parameters
             continue
         imgs = {k: "up.png" for k, s in t.slots.items() if s.type == "image"}
+        for k, s in t.slots.items():  # other required slots (e.g. lora): an option ComfyUI lists
+            if s.required and k not in imgs:
+                spec = OBJECT_INFO[t.graph[s.node]["class_type"]]["input"]["required"][s.field]
+                imgs[k] = spec[0][0] if isinstance(spec[0], list) else "x"
         _, p = resolve(t, imgs, allow_unverified=True)
         assert check_graph(render(t, p), OBJECT_INFO) == [], t.name
 

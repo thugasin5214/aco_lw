@@ -233,7 +233,7 @@ llm_fallback = ["anthropic", "claude_code", "codex"]  # 依次尝试
 
 | 工具 | 作用 | 审批 |
 |---|---|---|
-| 生成工具（`queue_round`、`wait_for_round`、制片、ComfyUI 探索…） | 出图出视频、审阅、制片 | 未实测的视频档位要批准 |
+| 生成工具（`queue_round`、`wait_for_round`、制片、ComfyUI 探索…） | 出图出视频、审阅、制片 | 未实测的视频档位：估算耗时超过 20 分钟（`policies.yaml` 的 `budget_min`）或估不出来时才要批准；你在消息里点名了档位就不问 |
 | `web_fetch` | 读网页正文（无登录、无 JS） | 不用 |
 | `run_command` | 在本次运行的工作目录 `data/agent-work/<运行ID>/` 里跑 zsh 命令（如 agent-reach、ffmpeg） | **要**（见下面的权限） |
 | `read_file` / `write_file` | 读 `data/` 与 skill 目录；只写工作目录 | 不用 |
@@ -266,6 +266,25 @@ llm_fallback = ["anthropic", "claude_code", "codex"]  # 依次尝试
 | `claude_code` | 整个请求交给 Claude Code | 本机 Claude Code 登录 |
 
 ChatGPT 订阅本身不是 API：用订阅走 `codex`；`openai` 走按量计费的 API key。Codex / Claude Code 只拿到 aco_lw 的工具（经 MCP），命令照样受权限模式约束。
+
+### 3.11 人物 LoRA：锁住同一个人
+- **装到哪**：LoRA 文件放进 `FreeVideo-local/ComfyUI/models/loras/`。aco 自动读取文件里记录的底模，列进 agent 的提示词，并写明哪些模板能用它。
+- **写说明（建议）**：在 `data/loras.yaml`（不进 git）给每个 LoRA 写上人物、风格、推荐强度和触发词，例如：
+  ```yaml
+  my-face.safetensors:
+    person: 女主
+    style: photo
+    strength: 0.5
+    trigger: null
+  ```
+  改完不用重启，下一次对话就生效。
+- **模板**：`flux2-lora-t2i`（文生图）和 `flux2-lora-edit`（参考图 + LoRA）。参数 `lora` 必填，`lora_strength` 一般 0.45–0.6。
+- **视频怎么锁人**：
+  - LoRA 是 Klein 4B 的图片 LoRA，不能直接加载到 H3 视频模型里，要先用它出人物图，再交给视频。
+  - agent 会先加载 `character-consistency` skill：用 LoRA 出正脸和每个镜头的首帧，再用 `freevideo-ref` 出视频（不带参考视频，只给两张参考图，脸会贯穿整段）。
+  - 长视频拆成 5–10 秒的镜头，每个镜头用自己的首帧，最后拼接。
+  - `h3n-r2v` 在 Mac 上跑不了（MPS 缺 int8 矩阵乘法）。
+- **跟你确认**：agent 会用 `propose_memory` 提议「某人物 → 某 LoRA、强度」，你确认后，这个项目以后都会自动用上。
 
 ## 4. 资源与内存策略（自动执行）
 
