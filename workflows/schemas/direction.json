@@ -1,0 +1,77 @@
+{
+  "type": "object",
+  "required": ["chosen", "book", "scenes"],
+  "properties": {
+    "style_options": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "why"],
+        "properties": {
+          "id": {"type": "string"},
+          "name": {"type": "string"},
+          "why": {"type": "string"},
+          "look": {"type": "string"}
+        }
+      }
+    },
+    "chosen": {
+      "type": "object",
+      "required": ["id", "source"],
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "reason": {"type": "string"},
+        "source": {"enum": ["user", "proposal"]}
+      }
+    },
+    "book": {
+      "type": "object",
+      "required": ["visual_thesis", "camera_grammar", "shot_size_bias", "editing"],
+      "properties": {
+        "visual_thesis": {"type": "string"},
+        "camera_grammar": {
+          "type": "object",
+          "properties": {
+            "prefer": {"type": "array", "items": {"type": "string"}},
+            "avoid": {"type": "array", "items": {"type": "string"}},
+            "motion_budget": {"type": "string"},
+            "height": {"type": "string"}
+          }
+        },
+        "shot_size_bias": {"type": "array", "items": {"type": "string"}},
+        "lens_policy": {"type": "string"},
+        "composition": {"type": "array", "items": {"type": "string"}},
+        "light_and_color": {"type": "string"},
+        "editing": {
+          "type": "object",
+          "properties": {
+            "avg_shot_seconds": {"type": ["number", "string"]},
+            "transitions": {"type": "array", "items": {"type": "string"}}
+          }
+        },
+        "continuity": {"type": "string"},
+        "motifs": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "scenes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 40,
+      "items": {
+        "type": "object",
+        "required": ["id", "camera_strategy"],
+        "properties": {
+          "id": {"type": "string"},
+          "visual_thesis": {"type": "string"},
+          "emotional_arc": {"type": "string"},
+          "camera_strategy": {"type": "string"},
+          "shot_families": {"type": "array", "items": {"type": "string"}},
+          "key_moment": {"type": "string"},
+          "transition_out": {"type": "string"}
+        }
+      }
+    }
+  }
+}

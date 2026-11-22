@@ -7,7 +7,7 @@
     "synopsis": {"type": "string"},
     "tone": {"type": "string"},
     "scenes": {
-      "type": "array", "minItems": 1, "maxItems": 12,
+      "type": "array", "minItems": 1, "maxItems": 40,
       "items": {
         "type": "object",
         "required": ["id", "summary", "location", "characters", "beats"],

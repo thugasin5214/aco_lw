@@ -42,6 +42,22 @@ class FanOut(BaseModel):
     key: str = "id"
 
 
+class ChunkBy(BaseModel):
+    """A skill stage whose output is too long for one LLM reply (e.g. a 5-minute storyboard): call
+    the skill once per upstream item and concatenate one list field of the replies."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    items: str  # list path, e.g. "adaptation.scenes"
+    merge: str  # the list field joined across replies, e.g. "shots"
+    # merged elements are renumbered with this format (1-based), e.g. "sh{n:02d}"
+    id_format: str | None = None
+    # a setting in minutes (e.g. "episode_minutes"): each item gets a share of it as target_seconds,
+    # weighted by the length of `weight` in the item (e.g. its beats)
+    budget_minutes: str | None = None
+    weight: str | None = None
+
+
 class RenderSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -89,6 +105,7 @@ class Stage(BaseModel):
     instructions: str = ""
     output_schema: dict | str | None = Field(None, alias="schema")
     fan_out: FanOut | None = None
+    chunk_by: ChunkBy | None = None  # skill: one LLM call per item, replies merged
     render: RenderSpec | None = None
     alternatives: list[Alternative] = []
     timeline: str | None = None  # assemble: which stage the timeline comes from
@@ -647,7 +664,9 @@ class Production:
             meta=meta,
         )
 
-    def skill_messages(self, prod: dict, st: Stage, art: dict) -> list[dict]:
+    def skill_messages(
+        self, prod: dict, st: Stage, art: dict, extra: dict | None = None
+    ) -> list[dict]:
         wf = self._wf(prod)
         idx = self._index(prod["id"])
         ctx = self._ctx(prod, wf, idx)
@@ -678,6 +697,8 @@ class Production:
             user["previous_output"] = prev and prev["data"]
         if art["note"]:
             user["revision_request"] = art["note"]
+        if extra:
+            user.update(extra)
         return [
             {"role": "system", "content": system},
             {"role": "user", "content": json.dumps(user, ensure_ascii=False, indent=1)},
@@ -691,40 +712,23 @@ class Production:
             return self._run_tool(prod, st, art)
         if self.llm is None:
             raise Park("no LLM configured")
-        messages = self.skill_messages(prod, st, art)
         self.store.update_artifact(art["id"], status="running")
         stats: dict = {}
         try:
-            text, stats = self.llm(st, messages, st.output_schema)
-            try:
-                data = extract_json(text)
-                jsonschema.validate(data, st.output_schema)
-            except (json.JSONDecodeError, jsonschema.ValidationError) as e:
-                # one explicit repair chance: tell the model exactly what was violated (policy:
-                # repair once, do not change what the task means)
-                msg = e.message if isinstance(e, jsonschema.ValidationError) else str(e)
-                messages += [
-                    {"role": "assistant", "content": text},
-                    {
-                        "role": "user",
-                        "content": f"That output is invalid: {msg}. Reply with the corrected JSON only.",
-                    },
-                ]
-                text, stats2 = self.llm(st, messages, st.output_schema)
-                stats = {**stats, "repair": stats2}
-                try:
-                    data = extract_json(text)
-                    jsonschema.validate(data, st.output_schema)
-                except (json.JSONDecodeError, jsonschema.ValidationError) as e2:
-                    msg = e2.message if isinstance(e2, jsonschema.ValidationError) else str(e2)
-                    art = self.store.update_artifact(
-                        art["id"],
-                        status="invalid",
-                        data={"raw": text, "violation": msg},
-                        meta={**art["meta"], "llm": stats},
-                    )
-                    self._emit(prod, st, art, "invalid")
-                    return art
+            if st.chunk_by:
+                data, stats, raw, violation = self._run_chunks(prod, st, art)
+            else:
+                messages = self.skill_messages(prod, st, art)
+                data, stats, raw, violation = self._llm_json(st, messages)
+            if violation is not None:
+                art = self.store.update_artifact(
+                    art["id"],
+                    status="invalid",
+                    data={"raw": raw, "violation": violation},
+                    meta={**art["meta"], "llm": stats},
+                )
+                self._emit(prod, st, art, "invalid")
+                return art
         except Park:
             self.store.update_artifact(art["id"], status="queued")
             raise
@@ -741,6 +745,72 @@ class Production:
             self._supersede(art)
             self.advance(prod["id"])
         return art
+
+    def _llm_json(self, st: Stage, messages: list[dict]) -> tuple[Any, dict, str, str | None]:
+        """One reply validated against the stage schema, with one explicit repair chance (policy:
+        repair once, do not change what the task means). Returns (data, stats, raw, violation)."""
+        text, stats = self.llm(st, messages, st.output_schema)
+        try:
+            data = extract_json(text)
+            jsonschema.validate(data, st.output_schema)
+            return data, stats, text, None
+        except (json.JSONDecodeError, jsonschema.ValidationError) as e:
+            msg = e.message if isinstance(e, jsonschema.ValidationError) else str(e)
+        messages = [
+            *messages,
+            {"role": "assistant", "content": text},
+            {
+                "role": "user",
+                "content": f"That output is invalid: {msg}. Reply with the corrected JSON only.",
+            },
+        ]
+        text, stats2 = self.llm(st, messages, st.output_schema)
+        stats = {**stats, "repair": stats2}
+        try:
+            data = extract_json(text)
+            jsonschema.validate(data, st.output_schema)
+            return data, stats, text, None
+        except (json.JSONDecodeError, jsonschema.ValidationError) as e2:
+            msg = e2.message if isinstance(e2, jsonschema.ValidationError) else str(e2)
+            return None, stats, text, msg
+
+    def _run_chunks(self, prod: dict, st: Stage, art: dict) -> tuple[Any, dict, str, str | None]:
+        """chunk_by: one call per upstream item; the `merge` lists are joined in item order."""
+        cb = st.chunk_by
+        ctx = self._ctx(prod, self._wf(prod), self._index(prod["id"]))
+        items = [it for it in lookup(ctx, cb.items) or [] if isinstance(it, dict)]
+        minutes = prod["settings"].get(cb.budget_minutes) if cb.budget_minutes else 0
+        budget = float(minutes or 0) * 60
+        weights = [max(1, len(it.get(cb.weight) or [])) if cb.weight else 1 for it in items]
+        merged: list = []
+        rest: dict = {}
+        all_stats: list = []
+        for i, item in enumerate(items):
+            chunk = {"index": i + 1, "of": len(items), "elements_so_far": len(merged)}
+            if budget:
+                chunk["target_seconds"] = round(budget * weights[i] / sum(weights))
+            extra = {"item": item, "chunk": chunk}
+            if merged:
+                extra["previous_element"] = merged[-1]  # continuity across the seam
+            data, stats, raw, violation = self._llm_json(
+                st, self.skill_messages(prod, st, art, extra)
+            )
+            all_stats.append(stats)
+            if violation is not None:
+                return None, {"chunks": all_stats}, raw, f"item {i + 1}/{len(items)}: {violation}"
+            merged += data.get(cb.merge) or []
+            rest = {**data, **rest}  # other fields: the first reply wins
+            self.log(f"{st.id}: item {i + 1}/{len(items)} → {len(merged)} {cb.merge}")
+        if cb.id_format:
+            for n, el in enumerate(merged, 1):
+                if isinstance(el, dict):
+                    el["id"] = cb.id_format.format(n=n)
+        data = {**rest, cb.merge: merged}
+        try:
+            jsonschema.validate(data, st.output_schema)
+        except jsonschema.ValidationError as e:
+            return None, {"chunks": all_stats}, json.dumps(data, ensure_ascii=False), e.message
+        return data, {"chunks": all_stats}, "", None
 
     def _run_tool(self, prod: dict, st: Stage, art: dict) -> dict:
         self.store.update_artifact(art["id"], status="running")

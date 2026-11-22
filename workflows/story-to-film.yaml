@@ -4,6 +4,7 @@ name: story-to-film
 title: Story → film (FreeVideo cast cards)
 description: Characters stay consistent through FreeVideo cast cards; shots are filmed as one FreeVideo film with takes you choose and real continuations.
 settings:
+  style: ""                 # camera style, e.g. a director (王家卫, Hou Hsiao-hsien) or a description; empty: the direction stage proposes 2–3 options
   image_tier: standard
   image_candidates: 4
   video_candidates: 2       # how many takes per shot for you to choose from
@@ -72,12 +73,19 @@ stages:
     needs: [bible, characters]
     gate: auto
 
+  - id: direction
+    title: Direction (style · camera design)
+    kind: skill
+    skill: film-direction
+    needs: [adaptation, bible]
+    schema: direction
+
   - id: storyboard
     title: Storyboard (shots · cast · lines · continuity)
     kind: skill
     skill: storyboard-film
     extra_skills: [h3-prompt-writing]
-    needs: [adaptation, bible, cards]
+    needs: [adaptation, bible, cards, direction]
     schema: storyboard-film
 
   - id: clips
