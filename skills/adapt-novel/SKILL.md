@@ -17,6 +17,14 @@ already has pictures of; keep those names.
 The output feeds a pipeline that renders each shot as a few seconds of AI video, so favour
 visual storytelling over interior monologue.
 
+## A series episode (`inputs.series`, `inputs.bible`)
+The source is one episode's chapters of a longer novel. `inputs.series` has this episode's
+`title` / `synopsis`, `previously` (synopses of earlier episodes) and `next`. Adapt **only this
+episode's text**; use `previously` just to understand references, never re-stage earlier events.
+Name characters and locations exactly as `inputs.bible` does (its `name`s; scene `characters` use
+the bible ids) so the series' cast cards match. A character missing from the bible keeps the
+novel's name.
+
 ## Fidelity (`settings.fidelity`)
 - `condensed` (default): a short film — follow "How to adapt" below as written.
 - `faithful`: the user wants **every detail** of the source on screen, as an episode of about

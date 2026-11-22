@@ -598,6 +598,9 @@ class FilmDriver:
             f"film {film['id']}: imported {len(takes)} take(s) of {shot['id']} for review"
         )
         self.notify_round(rnd)
+        st = self.engine._wf(prod).stage(art["stage"])
+        if self.engine._gate(prod, st) == "auto":  # e.g. a series episode: take the first good take
+            self.engine.on_round_ready(rnd)
         return 1
 
 
