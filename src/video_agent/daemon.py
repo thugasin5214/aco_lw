@@ -69,6 +69,7 @@ class Worker(threading.Thread):
                         rnd, ready = self.studio.refresh_round(t["round_id"])
                         if ready:
                             self.notify(rnd)
+            self.studio.finish_pending_deletes()
             drafts = [t for t in self.store.by_state("draft") if not self.hold(t)]
             task = self.orch.resources.choose_next(drafts)
             if task is None:
@@ -88,6 +89,8 @@ class Worker(threading.Thread):
                     self.store.transition(task["id"], "failed", "执行异常", error="worker error")
             finally:
                 self.current, self.busy_kind = None, None
+            if self.studio.finish_pending_deletes() and self.store.get(task["id"]) is None:
+                continue  # its round was stopped and deleted
             self._after(task)
 
     def stop_current(self, only: Callable[[dict], bool] = lambda task: True) -> dict | None:
@@ -783,6 +786,7 @@ class Daemon:
         self.planner.resources = self.orch.resources
         self.bot: TelegramBot | None = None
         self.worker = Worker(self.orch, self.studio, self.notify_round, self.stop)
+        self.studio.stop_task = lambda tid: bool(self.worker.stop_current(lambda t: t["id"] == tid))
         self.actions = Actions(self.studio, self.planner, self.worker)
         self.orch.on_llm_restored = self.actions.prewarm_current
         fv = None

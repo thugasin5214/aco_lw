@@ -368,3 +368,40 @@ def test_purge_clears_review_outputs_outside_any_project(studio):
     assert studio.store.get(t["id"])["state"] == "review"
     out = studio.purge_project("none", "review")
     assert out["tasks"] == 1 and studio.store.get(t["id"]) is None
+
+
+def test_stop_a_round_halfway_keeps_the_finished_candidates(studio):
+    rnd = studio.start_round("flux2-t2i", {"seed": 1})  # 3 candidates
+    first = studio.store.next_draft()
+    studio.orch.execute(first["id"])  # the first one is done (and wrong)
+    out = studio.stop_round(rnd["id"])
+    assert out["dropped"] == 2
+    states = sorted(t["state"] for t in studio.store.round_tasks(rnd["id"]))
+    assert states == ["failed", "failed", "review"]
+    assert studio.store.get_round(rnd["id"])["state"] == "review"
+
+
+def test_stop_and_delete_a_round_waits_for_the_running_render(studio):
+    rnd = studio.start_round("flux2-t2i", {"seed": 1})
+    tasks = studio.store.round_tasks(rnd["id"])
+    studio.orch.execute(tasks[0]["id"])
+    # the second one is in ComfyUI right now
+    studio.store.db.execute("UPDATE tasks SET state='running' WHERE id=?", (tasks[1]["id"],))
+    stopped = []
+    studio.stop_task = lambda tid: stopped.append(tid) or True
+    decided = []
+    studio.decision_listeners.append(decided.append)
+    out = studio.stop_round(rnd["id"], delete=True)
+    assert out["deleting"] and stopped == [tasks[1]["id"]] and out["dropped"] == 1
+    assert decided and decided[0]["decision"]["action"] == "cancel"  # a waiting agent continues
+    assert studio.finish_pending_deletes() == 0  # still running: kept for now
+    studio.store.db.execute("UPDATE tasks SET state='failed' WHERE id=?", (tasks[1]["id"],))
+    assert studio.finish_pending_deletes() == 1  # interrupted render ended → deleted
+    assert studio.store.get_round(rnd["id"]) is None
+    assert all(studio.store.get(t["id"]) is None for t in tasks)
+
+
+def test_stop_and_delete_with_nothing_running_deletes_at_once(studio):
+    rnd = studio.start_round("flux2-t2i", {"seed": 1})
+    out = studio.stop_round(rnd["id"], delete=True)
+    assert out["deleted"] and studio.store.get_round(rnd["id"]) is None

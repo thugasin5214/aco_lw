@@ -95,6 +95,7 @@ M: dict[str, tuple[str, str]] = {
         "Used by the active production “{p}”; finish or delete that production first.",
         "进行中的制片「{p}」还在用它；先结束或删除那个制片。",
     ),
+    "task_stopped": ("Stopped by you", "已手动停止"),
     "task_cancelled_agent": ("Cancelled: the agent was stopped", "已取消：agent 已停止"),
     "queue_cleared": (
         "Queue cleared: {runs} agent run(s) stopped, {tasks} queued render(s) and {jobs} LLM job(s) dropped{x}.",

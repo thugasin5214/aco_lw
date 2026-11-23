@@ -403,6 +403,12 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
     def delete_round(round_id: str) -> dict:
         return guard(lambda: studio.delete_round(round_id))
 
+    @app.post("/api/rounds/{round_id}/stop")
+    def stop_round(round_id: str, delete: bool = Body(False, embed=True)) -> dict:
+        """Stop a round halfway (drop what has not started, interrupt the running candidate);
+        with delete the whole round goes."""
+        return guard(lambda: studio.stop_round(round_id, delete))
+
     @app.post("/api/tasks/{task_id}/delete")
     def delete_task(task_id: str) -> dict:
         return guard(lambda: studio.delete_task(task_id))
