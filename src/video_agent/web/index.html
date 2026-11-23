@@ -428,6 +428,11 @@ const I18N = {
     "pause.all": "Pause all", "resume.all": "Resume", "pause.prod": "Pause", "resume.prod": "Resume",
     "pause.ask": "Pause — queued work is kept and nothing new starts.", "pause.soft": "Pause (let the running task finish)",
     "pause.hard": "Pause and stop the running task now",
+    "stop.round": "⏹ Stop", "stop.del": "⏹🗑 Stop & delete",
+    "stop.round.q": "Stop this round? Candidates not started are dropped and the running one is interrupted; finished ones stay for review.",
+    "stop.del.q": "Stop this round and delete it with all its candidates and files? This cannot be undone.",
+    "stop.done": "Stopped: {dropped} dropped, {interrupted} interrupted", "stop.deleted": "Stopped and deleted",
+    "stop.deleting": "Stopped; it is deleted as soon as the running render has stopped",
     "q.clear": "⏹ Clear queue", "q.ask": "Clear the waiting queue — stop every agent run, drop all queued renders and LLM jobs, pause the productions. Results already made are kept.",
     "q.soft": "Clear (let the running render finish)", "q.hard": "Clear and stop the running render now",
     "q.done": "Stopped {runs} agent run(s), dropped {tasks} queued render(s) and {jobs} LLM job(s)",
@@ -543,6 +548,11 @@ const I18N = {
     "pause.all": "全部暂停", "resume.all": "继续", "pause.prod": "暂停", "resume.prod": "继续",
     "pause.ask": "暂停——排队的任务保留，不再开始新的。", "pause.soft": "暂停（让正在跑的跑完）",
     "pause.hard": "暂停，并立即停止正在跑的任务",
+    "stop.round": "⏹ 停止", "stop.del": "⏹🗑 停止并删除",
+    "stop.round.q": "停止这一轮？没开始的候选丢弃、正在生成的中断；已生成的保留待审阅。",
+    "stop.del.q": "停止这一轮，并连同所有候选和文件一起删除？删除后无法恢复。",
+    "stop.done": "已停止：丢弃 {dropped} 个，中断 {interrupted} 个", "stop.deleted": "已停止并删除",
+    "stop.deleting": "已停止；正在生成的那张一停下就删除",
     "q.clear": "⏹ 清空队列", "q.ask": "清空等待队列——停止所有 agent 任务，丢弃所有排队的渲染和 LLM 作业，并暂停各制片。已生成的结果保留。",
     "q.soft": "清空（让正在生成的渲染跑完）", "q.hard": "清空，并立即停止正在生成的渲染",
     "q.done": "已停止 {runs} 个 agent 任务，丢弃 {tasks} 个排队渲染、{jobs} 个 LLM 作业",
@@ -892,6 +902,7 @@ async function renderDetail(){
         <div class="media">${media(c, (c.outputs || [])[0], "", false)}</div>
         <div class="row"><span class="idx">#${c.idx}</span>${badge(c.state)}</div></div>`).join("")}</div>
       ${n.state === "review" ? `<div class="actions" style="margin-top:10px"><button class="btn" onclick="show('review')">${t("goto.review")}</button></div>` : ""}
+      ${n.state === "generating" ? stopButtons(n.id) : ""}
       ${n.production_id && n.state === "closed" ? `<div class="actions" style="margin-top:10px"><button class="btn primary" onclick="prodRerun('${esc(n.production_id)}','${esc(n.stage)}','${esc(n.key)}')">${t("prod.rerun")} · ${esc(n.key)}</button>
         <button class="btn" onclick="selProd='${esc(n.production_id)}';show('productions')">${t("tab.productions")}</button></div>` : ""}
       ${n.state === "closed" && d.action && d.action !== "cancel" ? `<div class="actions" style="margin-top:10px"><button class="btn" onclick="reopenRound('${esc(n.id)}')">${t("reopen")}</button></div>` : ""}
@@ -1043,6 +1054,18 @@ function renderStageReviews(){
 async function delDone(u, q){
   if (!confirm(q)) return;
   try { const r = await api(u, {}); toast(t("deleted", r)); refreshAll(true); } catch(e){ toast(t("not.done") + e.message, true); }
+}
+function stopButtons(rid, small){
+  const sm = small ? " sm" : "";
+  return `<span class="actions" style="margin-top:${small ? 0 : 10}px;display:inline-flex;gap:6px">
+    <button class="btn${sm}" onclick="stopRound('${esc(rid)}', false)">${t("stop.round")}</button>
+    <button class="btn${sm} danger" onclick="stopRound('${esc(rid)}', true)">${t("stop.del")}</button></span>`;
+}
+async function stopRound(rid, del){
+  if (!confirm(t(del ? "stop.del.q" : "stop.round.q"))) return;
+  try { const r = await api(`/api/rounds/${encodeURIComponent(rid)}/stop`, {delete: del});
+    toast(t(r.deleted ? "stop.deleted" : r.deleting ? "stop.deleting" : "stop.done", r)); detailKey = ""; refreshAll(true); }
+  catch(e){ toast(t("not.done") + e.message, true); }
 }
 const delRound = (id, n) => delDone(`/api/rounds/${encodeURIComponent(id)}/delete`, t("del.round.q", {n}));
 const delTask = id => delDone(`/api/tasks/${encodeURIComponent(id)}/delete`, t("del.task.q"));
@@ -1328,7 +1351,7 @@ function roundsHtml(p){
   return `<div class="timeline">${p.rounds.map(r => `<div class="r">${badge(r.state)} <a href="#" onclick="selNode='${esc(r.id)}';$('#flow-project').value='${esc(p.id)}';show('flow');return false">${esc(r.title || r.template)}</a>
       <span class="hint">× ${r.n} · ${fmtT(r.created)}${r.decision?.action ? " · " + esc(decName(r.decision)) : ""}${r.request ? " · “" + esc(r.request.slice(0, 50)) + "”" : ""}</span>
       ${r.state === "closed" && r.decision?.action && r.decision.action !== "cancel" && p.state === "active" ? `<button class="btn sm" onclick="reopenRound('${esc(r.id)}')">${t("reopen")}</button>` : ""}
-      ${r.state !== "generating" ? `<button class="btn sm danger" onclick="delRound('${esc(r.id)}', ${r.n})">${t("del")}</button>` : ""}</div>`).join("") || `<div class="hint">${t("rounds.empty")}</div>`}</div>`;
+      ${r.state !== "generating" ? `<button class="btn sm danger" onclick="delRound('${esc(r.id)}', ${r.n})">${t("del")}</button>` : stopButtons(r.id, true)}</div>`).join("") || `<div class="hint">${t("rounds.empty")}</div>`}</div>`;
 }
 function packHtml(p){
   return `<div class="packs">${p.packs.map(v => `<div class="packv"><span class="v">v${v.version}</span>

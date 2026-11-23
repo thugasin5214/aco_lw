@@ -37,6 +37,9 @@ class Studio:
         # a new round started (including redo / refine children) → notify (e.g. production artifacts
         # follow it)
         self.round_listeners: list = []
+        # interrupt one running task (injected by the daemon: the Worker's job in ComfyUI /
+        # FreeVideo); returns whether it was the one running
+        self.stop_task = lambda task_id: False
 
     # ---- delete outputs (with local files) ----
     BUSY = frozenset({"draft", "validated", "waiting_memory", "submitted", "running"})
@@ -496,6 +499,62 @@ class Studio:
         )
         for cb in self.decision_listeners:  # agent runs waiting for this round get the result too
             cb(closed)
+
+    PENDING_DELETE = "delete_rounds"  # kv: rounds to delete once their running render stops
+
+    def stop_round(self, round_id: str, delete: bool = False) -> dict:
+        """Stop a round halfway: candidates not started are dropped, the running one is
+        interrupted. Finished candidates stay for review — or, with delete, the whole round goes
+        (right away, or as soon as the interrupted render has stopped)."""
+        rnd = self.store.get_round(round_id)
+        if rnd is None:
+            raise StudioError(tr("no_round", r=round_id))
+        tasks = self.store.round_tasks(round_id)
+        if delete:
+            refs = self.store.active_production_refs([round_id], [t["id"] for t in tasks])
+            if refs:
+                raise StudioError(tr("delete_in_production", p=refs[0]["production_title"]))
+        dropped = 0
+        for t in tasks:
+            if t["state"] == "draft":
+                self.store.transition(t["id"], "failed", tr("task_stopped"), error="cancelled")
+                dropped += 1
+        live = [t for t in self.store.round_tasks(round_id) if t["state"] in self.BUSY]
+        interrupted = [t["id"] for t in live if self.stop_task(t["id"])]
+        out = {"round_id": round_id, "dropped": dropped, "interrupted": len(interrupted)}
+        if delete:
+            closed = self.store.update_round(
+                round_id, state="closed", decision={"action": "cancel", "note": tr("task_stopped")}
+            )
+            for cb in self.decision_listeners:  # agent runs waiting for this round continue
+                cb(closed)
+            if live:  # the Worker deletes it once the interrupted render has stopped
+                rows = self.store.get_kv(self.PENDING_DELETE) or []
+                self.store.set_kv(self.PENDING_DELETE, [*rows, round_id])
+                return {**out, "deleted": False, "deleting": True}
+            return {**out, **self.delete_round(round_id), "deleted": True}
+        self.refresh_round(round_id)
+        return out
+
+    def finish_pending_deletes(self) -> int:
+        """Delete stopped rounds whose renders have all ended (called by the Worker)."""
+        rows = self.store.get_kv(self.PENDING_DELETE) or []
+        if not rows:
+            return 0
+        keep, n = [], 0
+        for rid in rows:
+            if self.store.get_round(rid) is None:
+                continue
+            if any(t["state"] in self.BUSY for t in self.store.round_tasks(rid)):
+                keep.append(rid)
+                continue
+            try:
+                self.delete_round(rid)
+                n += 1
+            except StudioError:
+                pass  # e.g. a production picked it up meanwhile: leave it
+        self.store.set_kv(self.PENDING_DELETE, keep)
+        return n
 
     def cancel_queued(self, project_id: str | None = None, reason: str = "用户取消") -> int:
         n = 0
