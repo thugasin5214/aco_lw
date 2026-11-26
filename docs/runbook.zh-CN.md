@@ -87,6 +87,13 @@ FV=~/Documents/ChatGPT/jev/FreeVideo-local
 (cd ~/workplace/video-agent && nohup uv run va daemon --port 8790 >> data/daemon.log 2>&1 &)
 ```
 
+### 控制台「服务」页（集中管理）
+控制台 →「服务」：列出 aco 用到的本地程序（ComfyUI、LM Studio 服务和你自己加的），显示是否在运行，可以启动、停止、重启、看日志，也可以「重启 aco」（有 agent 在干活或有渲染在跑时会拒绝）。
+- 服务列表在 `data/services.yaml`（本机专用，不进仓库），格式见仓库根目录的 `services.example.yaml`；也可以在页面里「添加服务」或直接编辑这个文件。
+- aco 只会停它自己启动的进程，或者运行你配置的 `stop` 命令；别处启动的进程它不会去杀。
+- `protect: renders`：aco 有渲染在跑时不允许停（ComfyUI 建议加上）。
+- 这一页只能在本机浏览器里用：请求必须来自 localhost，网页跨站请求会被拒绝。agent 没有这个工具。
+
 ### 看哪些在运行
 
 ```sh

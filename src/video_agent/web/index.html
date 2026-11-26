@@ -246,6 +246,7 @@ kbd{font:11.5px ui-monospace,monospace;border:1px solid var(--line);border-radiu
     <button class="tab" data-view="productions" data-t="tab.productions">Productions</button>
     <button class="tab" data-view="queue" data-t="tab.queue">Queue</button>
     <button class="tab" data-view="gallery" data-t="tab.gallery">Outputs</button>
+    <button class="tab" data-view="services" data-t="tab.services">Services</button>
     <button class="tab" data-view="progress" data-t="tab.progress">Progress</button>
     <button class="tab" data-view="runbook" data-t="tab.runbook">Runbook</button>
     <button class="tab" data-view="architecture" data-t="tab.architecture">Architecture</button>
@@ -317,6 +318,16 @@ kbd{font:11.5px ui-monospace,monospace;border:1px solid var(--line);border-radiu
     <div class="gallery" id="gallery"></div>
   </section>
 
+  <section class="view" id="v-services">
+    <div class="card"><h2><span data-t="svc.title">Local services</span><span class="sp"></span>
+      <button class="btn sm" id="svc-add" data-t="svc.add">+ Add service</button>
+      <button class="btn sm" id="svc-yaml" data-t="svc.yaml">Edit services.yaml</button></h2>
+      <div class="hint" data-t="svc.hint">Start / stop the local programs aco works with. aco stops only what it started itself, or runs the stop command you configured.</div>
+      <div id="svc-list" style="margin-top:12px"></div></div>
+    <div class="card" style="margin-top:18px"><h2><span data-t="svc.log">Log</span> <span class="hint" id="svc-logname"></span><span class="sp"></span>
+      <button class="btn sm" id="svc-logref" data-t="svc.refresh">Refresh</button></h2>
+      <pre class="json" id="svc-logtext" style="max-height:420px;overflow:auto;white-space:pre-wrap"></pre></div>
+  </section>
   <section class="view" id="v-progress"><iframe title="Progress" data-src="/progress"></iframe></section>
   <section class="view" id="v-runbook"><iframe title="Runbook" data-src="/runbook"></iframe></section>
   <section class="view" id="v-architecture"><iframe title="Architecture" data-src="/architecture"></iframe></section>
@@ -427,6 +438,17 @@ const I18N = {
     "pause.all": "Pause all", "resume.all": "Resume", "pause.prod": "Pause", "resume.prod": "Resume",
     "pause.ask": "Pause — queued work is kept and nothing new starts.", "pause.soft": "Pause (let the running task finish)",
     "pause.hard": "Pause and stop the running task now",
+    "tab.services": "Services", "svc.title": "Local services", "svc.add": "+ Add service", "svc.yaml": "Edit services.yaml",
+    "svc.hint": "Start / stop the local programs aco works with. aco stops only what it started itself, or runs the stop command you configured.",
+    "svc.log": "Log", "svc.refresh": "Refresh", "svc.up": "Running", "svc.down": "Stopped", "svc.ours": "started by aco",
+    "svc.notours": "started elsewhere — stop it there, or add a stop command",
+    "svc.start": "▶ Start", "svc.stop": "■ Stop", "svc.restart": "↻ Restart", "svc.empty": "No services yet — add one.", "svc.nolog": "(no log yet)",
+    "svc.stop.q": "Stop {n}?", "svc.restart.q": "Restart {n}?", "svc.start.ok": "Starting {n}…", "svc.stop.ok": "{n} stopped", "svc.restart.ok": "Restarting {n}…",
+    "svc.edit": "Edit service", "svc.del.q": "Remove {n} from the list? (It is not stopped.)",
+    "svc.yaml.hint": "A list of services: id, name, start, stop, cwd, env, health, port, log, note, protect: renders.",
+    "svc.f.id": "ID (a-z, 0-9, - _)", "svc.f.name": "Name", "svc.f.start": "Start command", "svc.f.cwd": "Working directory",
+    "svc.f.health": "Health URL", "svc.f.port": "Or a port to check", "svc.f.stop": "Stop command (optional; else aco stops what it started)",
+    "svc.f.log": "Log file (glob, optional)", "svc.f.note": "Note", "svc.f.protect": "Do not stop while aco renders are running",
     "tab.queue": "Queue", "q.now": "Now", "q.mem": "Memory (last 30 min)", "q.runs": "Agent runs", "q.plan": "Queue & ETA",
     "q.idle": "No render running.", "q.rendering": "Rendering {k}: {t}", "q.family": "Resident model family: {f}",
     "q.llm": "LLM: {l}{f}", "q.inflight": " · answering now", "q.empty": "Nothing queued.", "q.noruns": "No agent run is waiting.",
@@ -539,6 +561,17 @@ const I18N = {
     "pause.all": "全部暂停", "resume.all": "继续", "pause.prod": "暂停", "resume.prod": "继续",
     "pause.ask": "暂停——排队的任务保留，不再开始新的。", "pause.soft": "暂停（让正在跑的跑完）",
     "pause.hard": "暂停，并立即停止正在跑的任务",
+    "tab.services": "服务", "svc.title": "本地服务", "svc.add": "+ 添加服务", "svc.yaml": "编辑 services.yaml",
+    "svc.hint": "启动 / 停止 aco 用到的本地程序。aco 只会停它自己启动的进程，或者运行你配置的停止命令。",
+    "svc.log": "日志", "svc.refresh": "刷新", "svc.up": "运行中", "svc.down": "已停止", "svc.ours": "aco 启动的",
+    "svc.notours": "在别处启动的——到那边停，或者配一个停止命令",
+    "svc.start": "▶ 启动", "svc.stop": "■ 停止", "svc.restart": "↻ 重启", "svc.empty": "还没有服务，添加一个。", "svc.nolog": "（还没有日志）",
+    "svc.stop.q": "停止 {n}？", "svc.restart.q": "重启 {n}？", "svc.start.ok": "正在启动 {n}…", "svc.stop.ok": "{n} 已停止", "svc.restart.ok": "正在重启 {n}…",
+    "svc.edit": "编辑服务", "svc.del.q": "把 {n} 从列表里删掉？（不会停止它）",
+    "svc.yaml.hint": "服务列表，字段：id、name、start、stop、cwd、env、health、port、log、note、protect: renders。",
+    "svc.f.id": "ID（小写字母、数字、- _）", "svc.f.name": "名称", "svc.f.start": "启动命令", "svc.f.cwd": "工作目录",
+    "svc.f.health": "健康检查 URL", "svc.f.port": "或者检查端口", "svc.f.stop": "停止命令（可选；不填则 aco 只停它自己启动的）",
+    "svc.f.log": "日志文件（可用通配符，可选）", "svc.f.note": "备注", "svc.f.protect": "aco 有渲染在跑时不允许停止",
     "tab.queue": "队列", "q.now": "当前", "q.mem": "内存（最近 30 分钟）", "q.runs": "Agent 运行", "q.plan": "排队与预计时间",
     "q.idle": "没有渲染在跑。", "q.rendering": "正在渲染{k}：{t}", "q.family": "常驻模型族：{f}",
     "q.llm": "LLM：{l}{f}", "q.inflight": " · 正在回答", "q.empty": "没有排队的任务。", "q.noruns": "没有在等待的 agent 运行。",
@@ -594,7 +627,7 @@ const media = (tk, o, cls = "", controls = true) => !o ? `<div class="${cls}"></
   : `<img class="${cls}" src="${fileUrl(tk.id, o.file)}" alt="" loading="lazy">`;
 const roleSelect = cls => `<select class="sm ${cls || "role"}" aria-label="role"><option value="">${t("no.lock")}</option>${t("roles").map(r => `<option>${esc(r)}</option>`).join("")}</select>`;
 async function api(u, body){
-  const r = await fetch(u, body === undefined ? {} : {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+  const r = await fetch(u, body === undefined ? {headers:{"X-ACO":"1"}} : {method:"POST", headers:{"Content-Type":"application/json", "X-ACO":"1"}, body:JSON.stringify(body)});
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.detail || r.status);
   return j;
@@ -1582,6 +1615,76 @@ $("#pause-all").onclick = () => {
   if ($("#pause-all").dataset.paused) return act("/api/resume", {});
   askPause(hard => act("/api/pause", {stop_running: hard}));
 };
+/* ================= local services ================= */
+let SVC = {services: [], raw: ""}, svcLog = null;
+async function loadServices(force){
+  try { SVC = await api("/api/services"); } catch(e){ $("#svc-list").innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+  const k = LANG + JSON.stringify(SVC.services.map(s => [s.id, s.up, s.pid]));
+  if (force || k !== keys.svc){ keys.svc = k; renderServices(); }
+}
+function renderServices(){
+  const rows = SVC.services.map(s => {
+    const state = s.up ? `<span class="badge ok">${t("svc.up")}</span>` : `<span class="badge idle">${t("svc.down")}</span>`;
+    const ops = s.builtin
+      ? (s.can_restart ? `<button class="btn sm" onclick="svcAct('aco','restart')">${t("svc.restart")}</button>` : "")
+      : `${!s.up && s.start ? `<button class="btn sm primary" onclick="svcAct('${esc(s.id)}','start')">${t("svc.start")}</button>` : ""}
+         ${s.up && s.can_stop ? `${s.start ? `<button class="btn sm" onclick="svcAct('${esc(s.id)}','restart')">${t("svc.restart")}</button>` : ""}
+           <button class="btn sm danger" onclick="svcAct('${esc(s.id)}','stop')">${t("svc.stop")}</button>` : ""}
+         ${s.up && !s.can_stop ? `<span class="hint">${t("svc.notours")}</span>` : ""}
+         <button class="btn sm" onclick="svcEdit('${esc(s.id)}')">${t("edit")}</button>`;
+    return `<div class="row" style="padding:8px 0;border-bottom:1px solid var(--line);gap:8px;flex-wrap:wrap">
+      <b>${esc(s.name || s.id)}</b> ${state}
+      <span class="hint">${s.pid ? "pid " + s.pid + (s.ours && !s.builtin ? " · " + t("svc.ours") : "") : ""}${s.health ? " · " + esc(s.health) : s.port ? " · :" + s.port : ""}</span>
+      ${s.note ? `<span class="hint">${esc(s.note)}</span>` : ""}<span class="sp"></span>
+      <button class="btn sm" onclick="loadSvcLog('${esc(s.id)}')">${t("svc.log")}</button>${ops}</div>`;
+  }).join("");
+  $("#svc-list").innerHTML = rows || `<div class="hint">${t("svc.empty")}</div>`;
+}
+async function svcAct(id, action){
+  const s = SVC.services.find(x => x.id === id) || {};
+  if (action !== "start" && !confirm(t("svc." + action + ".q", {n: s.name || id}))) return;
+  try { await api(`/api/services/${encodeURIComponent(id)}/${action}`, {}); toast(t("svc." + action + ".ok", {n: s.name || id}));
+    setTimeout(() => loadServices(true), id === "aco" ? 8000 : 2000); }
+  catch(e){ toast(t("not.done") + e.message, true); }
+}
+async function loadSvcLog(id){
+  svcLog = id;
+  try { const r = await api(`/api/services/${encodeURIComponent(id)}/log`);
+    $("#svc-logname").textContent = `${id}${r.path ? " · " + r.path : ""}`;
+    const pre = $("#svc-logtext"); pre.textContent = r.text || t("svc.nolog"); pre.scrollTop = pre.scrollHeight; }
+  catch(e){ toast(t("not.done") + e.message, true); }
+}
+function svcEdit(id){
+  const s = SVC.services.find(x => x.id === id) || {};
+  const f = (k, ph) => `<label class="hint">${t("svc.f." + k)}</label><input id="sf-${k}" value="${esc(s[k] ?? "")}" placeholder="${esc(ph || "")}" style="width:100%">`;
+  modal(`<h3>${t(id ? "svc.edit" : "svc.add")}</h3>
+    <div style="display:flex;flex-direction:column;gap:6px">
+      ${f("id", "comfyui")}${f("name", "ComfyUI")}${f("start", "python main.py --port 8188")}${f("cwd", "~/ComfyUI")}
+      ${f("health", "http://127.0.0.1:8188/system_stats")}${f("port", "8188")}${f("stop", "")}${f("log", "~/logs/*.log")}${f("note", "")}
+      <label class="hint"><input type="checkbox" id="sf-protect" ${s.protect ? "checked" : ""}> ${t("svc.f.protect")}</label></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+      ${id ? `<button class="btn danger" id="sf-del">${t("del")}</button><span class="sp"></span>` : ""}
+      <button class="btn" onclick="closeModal()">${t("cancel")}</button><button class="btn primary" id="sf-save">${t("save")}</button></div>`);
+  $("#sf-save").onclick = async () => {
+    const row = {}; ["id","name","start","cwd","health","port","stop","log","note"].forEach(k => { const v = $("#sf-" + k).value.trim(); if (v) row[k] = k === "port" ? Number(v) : v; });
+    if ($("#sf-protect").checked) row.protect = "renders";
+    if (s.env) row.env = s.env;
+    const old = id && id !== row.id ? id : null;
+    try { await api("/api/services", {service: row}); if (old) await api("/api/services", {remove: old}); closeModal(); loadServices(true); }
+    catch(e){ toast(t("not.done") + e.message, true); }
+  };
+  if (id) $("#sf-del").onclick = async () => { if (!confirm(t("svc.del.q", {n: s.name || id}))) return;
+    try { await api("/api/services", {remove: id}); closeModal(); loadServices(true); } catch(e){ toast(t("not.done") + e.message, true); } };
+}
+$("#svc-add").onclick = () => svcEdit("");
+$("#svc-logref").onclick = () => svcLog && loadSvcLog(svcLog);
+$("#svc-yaml").onclick = () => {
+  modal(`<h3>services.yaml</h3><div class="hint">${t("svc.yaml.hint")}</div>
+    <textarea class="json" id="sy-text" style="min-height:360px">${esc(SVC.raw)}</textarea>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px"><button class="btn" onclick="closeModal()">${t("cancel")}</button>
+    <button class="btn primary" id="sy-save">${t("save")}</button></div>`);
+  $("#sy-save").onclick = async () => { try { await api("/api/services", {raw: $("#sy-text").value}); closeModal(); loadServices(true); } catch(e){ toast(t("not.done") + e.message, true); } };
+};
 async function refreshAll(force){
   await pollSystem();
   try { PROJECTS = await api("/api/projects"); } catch {}
@@ -1618,6 +1721,8 @@ async function refreshAll(force){
   } else if (view === "queue"){
     let q; try { q = await api("/api/queue"); } catch { return; }
     renderQueue(q);
+  } else if (view === "services"){
+    loadServices(force);
   } else if (view === "gallery"){
     try { TASKS = await api("/api/tasks"); } catch { return; }
     const k = LANG + TASKS.map(x => x.id + x.updated).join("|") + galleryKind;

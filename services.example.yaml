@@ -1,0 +1,15 @@
+# Local services for the console's Services tab. Copy to data/services.yaml (machine-specific,
+# not in the repo) or add them in the console. aco stops only what it started itself, or runs
+# the stop command you give. Fields: id, name, start, stop, cwd, env, health, port, log, note,
+# protect (renders: refuse to stop while aco has a render running).
+- id: comfyui
+  name: ComfyUI
+  cwd: ~/ComfyUI
+  start: python main.py --listen 127.0.0.1 --port 8188
+  health: http://127.0.0.1:8188/system_stats
+  protect: renders
+- id: lmstudio
+  name: LM Studio server
+  start: lms server start
+  stop: lms server stop
+  health: http://127.0.0.1:1234/v1/models
