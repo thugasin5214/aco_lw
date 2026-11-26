@@ -2,7 +2,7 @@
 
 Updated 2026-11-07 · applies to `va daemon` + console + Telegram + the general agent (tools, vision, MCP, online brains, permission modes) · 中文版：[runbook.zh-CN.md](runbook.zh-CN.md)
 
-This runbook answers three questions: **how to start / stop**, **how to use it day to day**, and **what to check when something goes wrong**. Progress is in `docs/progress.html`, architecture diagrams and flow charts in `docs/architecture.html` (console → Architecture).
+This runbook answers three questions: **how to start / stop**, **how to use it day to day**, and **what to check when something goes wrong**.
 
 ---
 

@@ -398,3 +398,18 @@ def test_purge_clears_review_outputs_outside_any_project(studio):
     assert studio.store.get(t["id"])["state"] == "review"
     out = studio.purge_project("none", "review")
     assert out["tasks"] == 1 and studio.store.get(t["id"]) is None
+
+
+def test_progress_and_architecture_pages_are_local_only(studio):
+    """They are not in the public repository; without the local copy the tab says so."""
+    from video_agent.config import ROOT
+    from video_agent.web import create_app
+
+    actions = Actions(studio, Planner(studio.orch.cfg, studio.store, studio.orch.registry))
+    c = TestClient(create_app(studio.orch.cfg, actions))
+    assert not (ROOT / "docs" / "progress.html").exists()
+    for url in ("/progress", "/architecture", "/architecture.zh-CN.html"):
+        r = c.get(url)
+        assert r.status_code == 200
+        local = (ROOT / "internal" / "docs" / "architecture.html").exists()
+        assert local or "developer's machine" in r.text

@@ -106,28 +106,48 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
     def index() -> str:
         return STATIC.read_text()
 
-    def _doc(name: str, ext: str, lang: str | None) -> Path:
+    def _doc(name: str, ext: str, lang: str | None, where: str = "docs") -> Path:
         """English is the main file; with lang=zh prefer *.zh-CN.<ext>."""
-        zh = ROOT / "docs" / f"{name}.zh-CN.{ext}"
+        zh = ROOT / where / f"{name}.zh-CN.{ext}"
         if (lang or cfg.language).startswith("zh") and zh.exists():
             return zh
-        return ROOT / "docs" / f"{name}.{ext}"
+        return ROOT / where / f"{name}.{ext}"
+
+    def _local_doc(name: str, lang: str | None) -> str:
+        """Progress and architecture pages are kept out of the public repo: they live in the
+        gitignored internal/docs/ of this machine; elsewhere the tab says so."""
+        p = _doc(name, "html", lang, "internal/docs")
+        if p.exists():
+            return p.read_text()
+        return (
+            "<!doctype html><meta charset=utf-8><body style='font:15px system-ui;padding:24px;"
+            "color:#888'>This page is kept on the developer's machine only "
+            f"(internal/docs/{name}.html, not in the repository).</body>"
+        )
 
     @app.get("/progress", response_class=HTMLResponse)
     def progress(lang: str | None = None) -> str:
-        return _doc("progress", "html", lang).read_text()
+        return _local_doc("progress", lang)
 
     @app.get("/architecture", response_class=HTMLResponse)
     def architecture(lang: str | None = None) -> str:
-        return _doc("architecture", "html", lang).read_text()
+        return _local_doc("architecture", lang)
 
     @app.get("/architecture.html", response_class=HTMLResponse)
     def architecture_en() -> str:
-        return _doc("architecture", "html", "en").read_text()
+        return _local_doc("architecture", "en")
 
     @app.get("/architecture.zh-CN.html", response_class=HTMLResponse)
     def architecture_zh() -> str:
-        return _doc("architecture", "html", "zh").read_text()
+        return _local_doc("architecture", "zh")
+
+    @app.get("/progress.html", response_class=HTMLResponse)
+    def progress_en() -> str:
+        return _local_doc("progress", "en")
+
+    @app.get("/progress.zh-CN.html", response_class=HTMLResponse)
+    def progress_zh() -> str:
+        return _local_doc("progress", "zh")
 
     @app.get("/runbook", response_class=HTMLResponse)
     def runbook(lang: str | None = None) -> str:

@@ -4,7 +4,7 @@
 
 A deterministic orchestrator drives a local ComfyUI (FLUX.2 for images, FreeVideo / MiniMax H3 for video). A local LLM (LM Studio) is an optional planner that wakes on demand. You review candidates in a web console or on Telegram; everything is organised into projects with sessions, a shared project memory and a versioned baseline pack.
 
-- Operations: [`docs/runbook.md`](docs/runbook.md) · Progress: [`docs/progress.html`](docs/progress.html) · Architecture: [`docs/architecture.html`](docs/architecture.html)
+- Operations: [`docs/runbook.md`](docs/runbook.md)
 
 ## Quick start
 
