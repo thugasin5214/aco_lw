@@ -87,6 +87,13 @@ FV=~/Documents/ChatGPT/jev/FreeVideo-local
 (cd ~/workplace/video-agent && nohup uv run va daemon --port 8790 >> data/daemon.log 2>&1 &)
 ```
 
+### Console "Services" tab (one place for local programs)
+Console → Services lists the local programs aco works with (ComfyUI, the LM Studio server, anything you add): whether each is running, start / stop / restart, its log, and "Restart aco" (refused while an agent run works or a render is running).
+- The list lives in `data/services.yaml` (machine-specific, not in the repo); see `services.example.yaml` at the repo root, or use "Add service" / edit the file in the page.
+- aco stops only processes it started itself, or runs the `stop` command you configured; it never kills a process started elsewhere.
+- `protect: renders` refuses to stop while aco has a render running (recommended for ComfyUI).
+- The tab works only from a browser on this machine (requests must come from localhost; cross-site requests are refused). The agent has no tool for it.
+
 ### What is running
 
 ```sh

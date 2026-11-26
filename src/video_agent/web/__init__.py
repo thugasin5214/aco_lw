@@ -6,6 +6,7 @@ Started by `va daemon` it shares the process with the Worker; started alone by `
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from pathlib import Path
@@ -22,6 +23,7 @@ from ..memory import snapshot
 from ..planner import MODES
 from ..production import ProductionError
 from ..render import TIER_KEYS
+from ..services import ServiceError, Services
 from ..store import PROJECT_ZH, ROUND_ZH, STATE_ZH, TransitionError
 from ..studio import StudioError
 from ..variants import Workshop
@@ -785,6 +787,120 @@ def create_app(cfg: Settings, actions=None) -> FastAPI:
         key: str = Body("main"),
     ) -> dict:
         return guard(lambda: _production().review(pid, stage, action, note, data, key, "web"))
+
+    # ---- local services: a manual control panel (ComfyUI, LM Studio, other servers) ----
+    services = Services(
+        cfg.data_dir,
+        renders_busy=lambda: len(store.by_state("submitted", "running")),
+    )
+    LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
+
+    def local_only(request: Request) -> None:
+        """These endpoints run your own commands: only from a page served by this machine (Host
+        and Origin are localhost, and the console's own header is present — a cross-site form
+        or a DNS-rebinding page cannot send it)."""
+        host = (request.headers.get("host") or "").rsplit(":", 1)[0]
+        origin = request.headers.get("origin")
+        if host not in LOCAL_HOSTS or request.headers.get("x-aco") != "1":
+            raise HTTPException(403, "service control works only from the console on this machine")
+        if origin and httpx.URL(origin).host not in {h.strip("[]") for h in LOCAL_HOSTS}:
+            raise HTTPException(403, "cross-site request refused")
+
+    def svc(fn):
+        try:
+            return fn()
+        except ServiceError as e:
+            raise HTTPException(409, str(e)) from e
+
+    def aco_row() -> dict:
+        worker = getattr(actions, "worker", None)
+        return {
+            "id": "aco",
+            "name": "aco (va daemon)",
+            "up": True,
+            "pid": os.getpid(),
+            "ours": True,
+            "builtin": True,
+            "can_restart": worker is not None,
+            "health": f"http://127.0.0.1:{cfg.web_port}/api/system",
+        }
+
+    @app.get("/api/services")
+    def services_list(request: Request) -> dict:
+        local_only(request)
+        return {"services": [aco_row(), *svc(services.list)], "raw": services.raw()}
+
+    @app.post("/api/services/{sid}/{action}")
+    def services_action(sid: str, action: str, request: Request) -> dict:
+        local_only(request)
+        if sid == "aco":
+            if action != "restart":
+                raise HTTPException(400, "aco can only be restarted from here")
+            return restart_aco()
+        fn = {"start": services.start, "stop": services.stop, "restart": services.restart}
+        if action not in fn:
+            raise HTTPException(404)
+        return svc(lambda: fn[action](sid))
+
+    @app.get("/api/services/{sid}/log")
+    def services_log(sid: str, request: Request, lines: int = 200) -> dict:
+        local_only(request)
+        if sid == "aco":
+            p = cfg.data_dir / "daemon.log"
+            text = p.read_text(errors="replace").splitlines()[-lines:] if p.exists() else []
+            return {"id": "aco", "path": str(p), "text": "\n".join(text)}
+        return svc(lambda: services.log(sid, lines))
+
+    @app.post("/api/services")
+    def services_save(
+        request: Request,
+        raw: str | None = Body(None, embed=True),
+        service: dict | None = Body(None, embed=True),  # noqa: B008
+        remove: str | None = Body(None, embed=True),
+    ) -> dict:
+        """Edit services.yaml: the whole file (raw), add / replace one service, or remove one."""
+        local_only(request)
+        if raw is not None:
+            return {"services": svc(lambda: services.save_raw(raw))}
+        if service is not None:
+            return {"services": svc(lambda: services.upsert(service))}
+        if remove:
+            return {"services": svc(lambda: services.remove(remove))}
+        raise HTTPException(400, "nothing to save")
+
+    def restart_aco() -> dict:
+        """Restart this daemon with the same command line. Refused while an agent run is live or
+        a render is in ComfyUI / FreeVideo (they would be interrupted)."""
+        import shlex
+        import signal
+        import subprocess
+        import sys
+
+        if getattr(actions, "worker", None) is None:
+            raise HTTPException(409, "only `va daemon` can restart itself")
+        live = store.runs(None, "running", "waiting_resources")
+        busy = store.by_state("submitted", "running")
+        if live or busy:
+            raise HTTPException(
+                409,
+                f"busy: {len(live)} agent run(s) working, {len(busy)} render(s) running — "
+                "wait, or stop them first",
+            )
+        log = cfg.data_dir / "daemon.log"
+        cmd = (
+            f"while kill -0 {os.getpid()} 2>/dev/null; do sleep 0.5; done; "
+            f"cd {shlex.quote(str(Path.cwd()))} && exec {shlex.join(sys.argv)} "
+            f">> {shlex.quote(str(log))} 2>&1"
+        )
+        subprocess.Popen(
+            ["/bin/sh", "-c", cmd],
+            start_new_session=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        threading.Timer(0.5, lambda: os.kill(os.getpid(), signal.SIGTERM)).start()
+        return {"id": "aco", "restarting": True}
 
     @app.get("/api/settings")
     def settings() -> dict:
