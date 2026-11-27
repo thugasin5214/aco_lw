@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import itertools
 import logging
 import os
 import queue
@@ -15,7 +16,7 @@ import time
 from collections.abc import Callable
 
 from . import config, i18n, memory
-from .agent import AgentRuntime
+from .agent import NEW_REQUEST, AgentRuntime
 from .comfy import ComfyBusy
 from .i18n import tr
 from .planner import MODES, Planner, PlannerUnavailable
@@ -67,7 +68,9 @@ class Worker(threading.Thread):
                     t = self.store.get(tid)
                     if t["round_id"]:
                         rnd, ready = self.studio.refresh_round(t["round_id"])
-                        if ready:
+                        # also when the round had already gone to review on the timeout: agents
+                        # still waiting for it get the late result
+                        if ready or rnd["state"] == "review":
                             self.notify(rnd)
             self.studio.finish_pending_deletes()
             drafts = [t for t in self.store.by_state("draft") if not self.hold(t)]
@@ -148,6 +151,29 @@ def explicit_tier(text: str, tier: str) -> bool:
     return parts[0] == "hd" and any(k in t for k in EXPLICIT_HD)
 
 
+class JobQueue:
+    """The planner queue, by priority: 0 = your messages (and steering), 1 = agent continuations,
+    2 = background (prewarm). Same priority: first in, first out."""
+
+    USER, AGENT, BACKGROUND = 0, 1, 2
+
+    def __init__(self):
+        self._q: queue.PriorityQueue = queue.PriorityQueue()
+        self._n = itertools.count()
+
+    def put(self, item: tuple, priority: int = 0) -> None:
+        self._q.put((priority, next(self._n), item))
+
+    def get(self, timeout: float | None = None) -> tuple:
+        return self._q.get(timeout=timeout)[2]
+
+    def qsize(self) -> int:
+        return self._q.qsize()
+
+    def empty(self) -> bool:
+        return self._q.empty()
+
+
 class Actions:
     """Channel-independent interaction entry. reply(text, buttons=None) sends the answer back to the source channel."""
 
@@ -156,7 +182,7 @@ class Actions:
         self.store = studio.store
         # injected by Daemon (push to Telegram)
         self.push_round: Callable[[dict], None] | None = None
-        self.jobs: queue.Queue[tuple] = queue.Queue()
+        self.jobs = JobQueue()
         # proactive sends per channel (used when the agent continues in the background; the console
         # polls chat history, no push needed)
         self.channel_send: dict[str, Reply] = {
@@ -166,11 +192,14 @@ class Actions:
         self.runtime = AgentRuntime(
             studio,
             planner,
-            enqueue=lambda fn: self.jobs.put((fn, lambda *a, **k: None, False)),
+            enqueue=lambda fn: self.jobs.put((fn, lambda *a, **k: None, False), JobQueue.AGENT),
             say_for=lambda ch: self._say(ch, self.channel_send.get(ch, self.channel_send["web"])),
             max_steps=getattr(studio.orch.cfg, "agent_max_steps", 16),
         )
         studio.decision_listeners.append(self.runtime.on_round_decided)
+        self.runtime.enqueue_first = lambda fn: self.jobs.put(
+            (fn, lambda *a, **k: None, False), JobQueue.USER
+        )
 
     # ---- planner queue (single thread, wakes the LLM on demand) ----
     def planner_loop(self, stop: threading.Event) -> None:
@@ -260,11 +289,23 @@ class Actions:
         if not self.planner.available():
             say(tr("command_only"))
             return
-        say(tr("ack"))
         pid, sid = self._ctx()
         if self.store.get_kv("planner_style", "agent") == "agent":
+            live = self.runtime.live_run(sid, channel)
+            fresh = text.strip().lower().startswith(NEW_REQUEST)
+            if live is not None and not fresh:
+                # the agent is already working on something: your words steer that run first
+                out = self.runtime.steer(live, text, attachments)
+                say(
+                    tr("agent_steered")
+                    + (tr("agent_steer_parked") if live["status"] == "waiting_resources" else "")
+                )
+                log.info("steered run %s: %s", out["run_id"], out["interrupted"])
+                return
+            say(tr("ack"))
             self.runtime.start(text, channel, pid, sid, attachments)
             return
+        say(tr("ack"))
 
         def job() -> None:
             plan = self.planner.plan_request(text, pid, sid, msg_id, attachments)
@@ -400,9 +441,14 @@ class Actions:
         """The LLM is reloaded after a video unloaded it: prewarm the current session's prefix cache in the background."""
         _, sid = self._ctx()
         if self.store.get_kv("planner_style", "agent") == "agent":
-            self.jobs.put((lambda: self.runtime.prewarm(sid), lambda *a, **k: None, False))
+            self.jobs.put(
+                (lambda: self.runtime.prewarm(sid), lambda *a, **k: None, False),
+                JobQueue.BACKGROUND,
+            )
         else:
-            self.jobs.put((lambda: self.planner.prewarm(sid), lambda *a, **k: None))
+            self.jobs.put(
+                (lambda: self.planner.prewarm(sid), lambda *a, **k: None), JobQueue.BACKGROUND
+            )
 
     # ---- buttons (same format for Telegram callback_data and the web) ----
     def button(self, channel: str, data: str, reply: Reply) -> bool:
@@ -787,6 +833,7 @@ class Daemon:
         self.bot: TelegramBot | None = None
         self.worker = Worker(self.orch, self.studio, self.notify_round, self.stop)
         self.studio.stop_task = lambda tid: bool(self.worker.stop_current(lambda t: t["id"] == tid))
+        self.studio.cancel_job = self._cancel_job
         self.actions = Actions(self.studio, self.planner, self.worker)
         self.orch.on_llm_restored = self.actions.prewarm_current
         fv = None
@@ -842,6 +889,16 @@ class Daemon:
                 self.studio.log("telegram", "out", "\n".join(f"📎 {cap}: {p}" for p, cap in items))
 
             self.actions.runtime.send_files = send_files
+
+    def _cancel_job(self, task: dict) -> bool:
+        """Cancel one of our own jobs in its executor (a render whose watch timed out)."""
+        try:
+            tpl = self.orch.registry.template(task["template"])
+            self.orch.executor_for(tpl).cancel(task["prompt_id"])
+            return True
+        except Exception as e:  # noqa: BLE001
+            log.warning("Cancelling %s failed: %s", task["id"], e)
+            return False
 
     def notify_round(self, rnd: dict) -> None:
         tasks = self.orch.store.round_tasks(rnd["id"])

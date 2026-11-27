@@ -216,6 +216,22 @@ llm_fallback = ["anthropic", "claude_code", "codex"]  # 依次尝试
 
 ChatGPT 订阅本身不是 API：用订阅走 `codex`；`openai` 走按量计费的 API key。Codex / Claude Code 只拿到 aco_lw 的工具（经 MCP），命令照样受权限模式约束。
 
+### 3.11 agent 自己规划；你的 ComfyUI 工作流；给正在工作的 agent 插话
+agent 模式（自由文本）下，agent 自己规划整件事：拆分、优化剧本，决定镜头时长，选工作流、模型和 LoRA，自己试、自己验证、自己迭代。aco 只按内存调度（加载 / 卸载 LLM、排渲染），并维护它的 tool call。另一种方式是制片（§3.8）：由工作流的规则执行各阶段，你来审。
+
+**你的 ComfyUI 工作流。** ComfyUI `user/default/workflows`（`comfy_output_dir` 旁边）里的画布工作流都会列给 agent，带你写的 Note / MarkdownNote、用到的模型和 LoRA、主要参数。`list_comfy_workflows` 查看；`run_comfy_workflow {name, set: {"136.length": 124}, images: {"137": "@upload:ID"}}` 改几个值就能跑。转成 API 格式由 aco 按 ComfyUI 实时的节点列表完成（Note、Reroute、Primitive 节点会解析，静音节点去掉，旁路节点直通）。其他目录、你的备注、隐藏某个文件，写在 `data/comfy_workflows.yaml`：
+
+```yaml
+dirs: [~/Documents/ChatGPT/jev/FreeVideo-local/ComfyUI/user/default/workflows]
+workflows:
+  H3-Native-Ref2VA-20step: {note: "768x1344，124 帧，约 5 秒", verified: true}
+  Old-Experiment: {hidden: true}
+```
+
+**agent 工作时插话。** agent 忙的时候你发的消息会进入同一个任务，并且先被处理：它正在等的渲染、阶段或审批会返回"interrupted"，agent 读完你的话再决定（继续等、`stop_round`、改计划）。渲染本身不会停，除非有人停掉它。要另起一个任务，用"新需求" / "new request"开头。LLM 队列里你的消息排在 agent 续跑前面。如果本地 LLM 正因为视频占着内存而等待，视频一结束它就会看你的消息；想让它马上看，先停掉渲染（控制台 ⏹、`/cancel all now`）。
+
+**长时间渲染。** aco 对一个渲染的观察超时后，agent 收到的是"仍在运行"（不是失败），可以继续等，结果出来时会被唤醒。在这样的轮次上按 ⏹ 停止，会取消我们在 ComfyUI 里的这个任务。
+
 ## 4. 资源与内存策略（自动执行）
 
 | 情况 | 系统行为 |

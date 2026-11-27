@@ -60,6 +60,12 @@ class ComfyExecutor:
     def _prepare_raw(self, task: dict) -> Prepared:
         """Any workflow the agent built: validated and submitted as-is, only the save nodes' prefix is changed to this task (easier collection and tracking)."""
         graph = json.loads(task["params"]["graph"])
+        uploads = {}
+        for nid, path in json.loads(task["params"].get("images") or "{}").items():
+            p = Path(path).expanduser()
+            if not p.is_file():
+                raise FileNotFoundError(f"node {nid}: no image {p}")
+            graph[nid]["inputs"]["image"] = uploads[nid] = self.comfy.upload_image(p)
         for node in graph.values():
             if node.get("class_type", "").startswith("Save") and "filename_prefix" in node.get(
                 "inputs", {}
@@ -70,6 +76,7 @@ class ComfyExecutor:
             raise ValueError("；".join(problems))
         return Prepared(
             payload=graph,
+            uploads=uploads,
             artifacts={"prompt.json": json.dumps(graph, ensure_ascii=False, indent=2)},
             note=f"agent workflow · {len(graph)} nodes · 节点校验通过",
         )

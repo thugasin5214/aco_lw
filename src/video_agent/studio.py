@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import random
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 
 from .i18n import tr
@@ -40,6 +41,8 @@ class Studio:
         # interrupt one running task (injected by the daemon: the Worker's job in ComfyUI /
         # FreeVideo); returns whether it was the one running
         self.stop_task = lambda task_id: False
+        # cancel one of our jobs in its executor (injected by the daemon)
+        self.cancel_job: Callable[[dict], bool] = lambda task: False
 
     # ---- delete outputs (with local files) ----
     BUSY = frozenset({"draft", "validated", "waiting_memory", "submitted", "running"})
@@ -521,6 +524,12 @@ class Studio:
                 dropped += 1
         live = [t for t in self.store.round_tasks(round_id) if t["state"] in self.BUSY]
         interrupted = [t["id"] for t in live if self.stop_task(t["id"])]
+        # renders our watch gave up on (timeout) that ComfyUI is still working on: no Worker
+        # holds them any more, so cancel our job in the executor directly
+        for t in self.store.round_tasks(round_id):
+            if t["state"] == "timeout" and t["prompt_id"] and self.cancel_job(t):
+                self.store.transition(t["id"], "failed", tr("task_stopped"), error="cancelled")
+                interrupted.append(t["id"])
         out = {"round_id": round_id, "dropped": dropped, "interrupted": len(interrupted)}
         if delete:
             closed = self.store.update_round(

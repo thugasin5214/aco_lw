@@ -33,6 +33,7 @@ execution:
     redo_round: {allow: true}
     refine_candidate: {allow: true}
     reject_round: {allow: true}
+    stop_round: {allow: true}
     propose_selection: {allow: true, approval: unless_named}
     propose_memory: {allow: true}
     ask_user: {allow: true}
@@ -45,6 +46,8 @@ execution:
     comfy_catalog: {allow: true}
     comfy_describe: {allow: true}
     comfy: {allow: true}               # comfy_bridge.py then classifies by tool + action: reads allowed, installs need approval, dangerous ones refused
+    list_comfy_workflows: {allow: true}
+    get_comfy_workflow: {allow: true}
     run_comfy_workflow: {allow: true}  # queued via the orchestrator (trackable, subject to pause and the resource gate)
     # generic tools (toolbox.py): executed by the orchestrator, the agent only requests
     web_fetch: {allow: true}
