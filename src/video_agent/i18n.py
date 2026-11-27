@@ -23,6 +23,10 @@ M: dict[str, tuple[str, str]] = {
         " The local LLM is waiting for memory (a render holds it): it reads this as soon as that ends — stop the render if you want it now.",
         " 本地 LLM 正在等内存（渲染占着）：渲染一结束就看；想让它马上看，可以先停掉渲染。",
     ),
+    "prod_cascade": (
+        "Stopped everything after {s} ({n} item(s)) — the workflow's rules say so. It continues once {s} is approved again.",
+        "已停掉 {s} 之后的所有环节（{n} 项）——这是该工作流的规则。{s} 重新通过后会继续。",
+    ),
     "agent_resumed": (
         "Memory is free — working on your message now…",
         "内存空出来了，开始处理你的消息……",

@@ -135,6 +135,27 @@ class Stage(BaseModel):
     confirm: bool = False
 
 
+RULE_KEYS = ("cascade", "on_reject", "guidance")
+
+
+class Rules(BaseModel):
+    """How a workflow is run (workflow mode). Defaults here, then the workflow's YAML, then
+    data/workflow_rules.yaml (per workflow name), then the production's own settings["rules"];
+    each may also override single stages under `stages: {stage_id: {...}}`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # stopping or rejecting an item also stops everything after it (downstream stages: queued
+    # work dropped, running renders interrupted, skill jobs dropped); they wait until it is
+    # approved again
+    cascade: bool = True
+    # a rejected render item without a note: re-render it with new seeds, or wait for you
+    on_reject: Literal["rerender", "wait"] = "rerender"
+    # how this workflow wants to be worked on: shown to the agent with the plan
+    guidance: str = ""
+    stages: dict[str, dict[str, Any]] = {}
+
+
 class Workflow(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -142,6 +163,7 @@ class Workflow(BaseModel):
     title: str
     description: str = ""
     settings: dict[str, Any] = {}
+    rules: Rules = Rules()
     stages: list[Stage]
 
     @model_validator(mode="after")
@@ -302,6 +324,8 @@ class Production:
         self._wake = threading.Event()
         studio.round_listeners.append(self._on_round_created)
         studio.decision_listeners.append(self._on_round_decided)
+        studio.stop_listeners.append(self._on_round_stopped)
+        self.rules_path: Path | None = None  # data/workflow_rules.yaml (set by the daemon)
 
     # ---- create ----
     def create(
@@ -425,6 +449,108 @@ class Production:
 
     def _gone(self, production_id: str) -> bool:
         return self.store.get_production(production_id) is None
+
+    # ---- rules (workflow mode) ----
+    def user_rules(self) -> dict:
+        path = getattr(self, "rules_path", None)
+        if path is None or not Path(path).exists():
+            return {}
+        data = yaml.safe_load(Path(path).read_text()) or {}
+        return data if isinstance(data, dict) else {}
+
+    def rules(self, prod: dict, stage_id: str | None = None) -> dict:
+        wf = self._wf(prod)
+        layers = [
+            wf.rules.model_dump(),
+            self.user_rules().get(wf.name) or {},
+            prod["settings"].get("rules") or {},
+        ]
+        out: dict[str, Any] = {k: v for k, v in Rules().model_dump().items() if k in RULE_KEYS}
+        for layer in layers:
+            out.update({k: v for k, v in layer.items() if k in RULE_KEYS})
+        if stage_id:
+            for layer in layers:
+                out.update(
+                    {
+                        k: v
+                        for k, v in ((layer.get("stages") or {}).get(stage_id) or {}).items()
+                        if k in RULE_KEYS
+                    }
+                )
+        return Rules(**out).model_dump(exclude={"stages"})
+
+    @staticmethod
+    def downstream(wf: Workflow, stage_id: str) -> list[str]:
+        """Stages that (directly or through others) need this one, in workflow order."""
+        after, out = {stage_id}, []
+        for st in wf.stages:
+            if st.id != stage_id and set(st.needs) & after:
+                after.add(st.id)
+                out.append(st.id)
+        return out
+
+    def stop_downstream(self, production_id: str, stage_id: str, reason: str) -> dict:
+        """Stop everything after this stage: queued and running renders of downstream stages are
+        stopped, their queued / running skill jobs dropped, a downstream FreeVideo film cancelled.
+        They stay stopped until the upstream item is approved again (then they are stale and
+        start as usual)."""
+        prod = self._prod(production_id)
+        wf = self._wf(prod)
+        stages = self.downstream(wf, stage_id)
+        out = {"stages": stages, "rounds": 0, "jobs": 0}
+        if not stages:
+            return out
+        note = f"stopped: {reason}"
+        for r in self.store.production_rounds(production_id):
+            sid = r["request"].split(":")[2] if r["request"].count(":") >= 3 else None
+            if sid in stages and r["state"] == "generating":
+                try:
+                    self.studio.stop_round(r["id"], cascading=True)
+                    a = self.store.artifact_by_round(r["id"])
+                    if a is not None:  # waits for you; no auto-pick of what had finished
+                        self.store.update_artifact(
+                            a["id"], meta={**(a["meta"] or {}), "stopped": True}, note=note
+                        )
+                    out["rounds"] += 1
+                except Exception as e:  # noqa: BLE001 — keep stopping the rest
+                    self.log(f"production {production_id}: stopping round {r['id']} failed: {e}")
+        for sid in stages:
+            st = wf.stage(sid)
+            for a in self.store.artifacts(production_id, sid):
+                if a["round_id"] or a["status"] not in ("queued", "running"):
+                    continue
+                if st.kind == "film":
+                    continue  # handled by the film below
+                self.store.update_artifact(a["id"], status="rejected", note=note)
+                out["jobs"] += 1
+            if st.kind == "film" and self.film is not None:
+                self.film.cancel(production_id)
+        if out["rounds"] or out["jobs"]:
+            self.log(f"production {production_id}: {note} → {out}")
+        return out
+
+    def _cascade(self, art: dict, reason: str) -> None:
+        prod = self._prod(art["production_id"])
+        if self.rules(prod, art["stage"])["cascade"]:
+            res = self.stop_downstream(prod["id"], art["stage"], reason)
+            if res["rounds"] or res["jobs"]:
+                from .i18n import tr
+
+                self.studio.log(
+                    "production",
+                    "out",
+                    tr("prod_cascade", s=art["stage"], n=res["rounds"] + res["jobs"]),
+                    prod["project_id"],
+                )
+
+    def _on_round_stopped(self, rnd: dict) -> None:
+        """You stopped a production round (⏹): this item waits for you (no auto-pick of what
+        finished), and by the rules everything after it stops too."""
+        art = self.store.artifact_by_round(rnd["id"])
+        if art is None:
+            return
+        self.store.update_artifact(art["id"], meta={**(art["meta"] or {}), "stopped": True})
+        self._cascade(art, f"{art['stage']}/{art['key']} was stopped")
 
     @staticmethod
     def _gate(prod: dict, st: Stage) -> str:
@@ -649,6 +775,7 @@ class Production:
             result = {
                 "production": prod,
                 "workflow": {"name": wf.name, "title": wf.title},
+                "rules": self.rules(prod),
                 "stages": stages,
                 "next_action": nxt,
                 "done": done,
@@ -848,6 +975,10 @@ class Production:
         if self._gone(prod["id"]):
             self.log(f"production {prod['id']}: deleted during {st.id}, result dropped")
             return art
+        now = self.store.get_artifact(art["id"])
+        if now is None or now["status"] != "running":
+            self.log(f"production {prod['id']}: {st.id}/{art['key']} was stopped, result dropped")
+            return now or art
         status = "current" if self._gate(prod, st) == "auto" else "review"
         art = self.store.update_artifact(
             art["id"], status=status, data=data, meta={**art["meta"], "llm": stats}
@@ -1313,7 +1444,14 @@ class Production:
             self.advance(prod["id"])
             return
         d = rnd.get("decision") or {}
-        if d.get("action") == "reject" and not d.get("note") and prod["state"] == "active":
+        if d.get("action") == "reject":
+            self._cascade(art, f"{art['stage']}/{art['key']} was rejected")
+        if (
+            d.get("action") == "reject"
+            and not d.get("note")
+            and prod["state"] == "active"
+            and self.rules(prod, art["stage"])["on_reject"] == "rerender"
+        ):
             # items in a production cannot stay empty: a reject without a note = rerun with new
             # seeds (with a note, the planner changes parameters and derives a new round)
             self.log(f"production {prod['id']}: {art['stage']}/{art['key']} rejected → re-render")
@@ -1330,7 +1468,11 @@ class Production:
         prod = self._prod(art["production_id"])
         st = self._wf(prod).stage(art["stage"])
         art = self._sync(art)
-        if self._gate(prod, st) == "auto" and art["status"] == "review":
+        if (
+            self._gate(prod, st) == "auto"
+            and art["status"] == "review"
+            and not (art["meta"] or {}).get("stopped")
+        ):
             ok = next((t for t in self.store.round_tasks(rnd["id"]) if t["outputs"]), None)
             if ok is None:  # nothing usable: leave it for you
                 self._emit(prod, st, art, art["status"])
@@ -1407,6 +1549,7 @@ class Production:
                     self.store.update_artifact(art["id"], status="rejected", note=note)
                 return self.run_stage(production_id, stage_id, [key], note or "redo", origin)[0]
             self.store.update_artifact(art["id"], status="rejected", note=note)
+            self._cascade(art, f"{stage_id}/{key} was rejected")
             return self.store.get_artifact(art["id"])
 
     def pending_reviews(self, project_id: str | None = None) -> list[dict]:
