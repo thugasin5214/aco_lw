@@ -855,6 +855,7 @@ class Daemon:
             self.production.film.notify_text = self.notify_film
             # shooting holds the memory: unload / block the LLM
             self.production.film.resources = self.orch.resources
+        self.production.rules_path = cfg.data_dir / "workflow_rules.yaml"
         self.production.listeners.append(self.notify_stage)
         # agent runs waiting on a stage (run_stage / wait_for_stage) continue when it stops running
         self.production.listeners.append(self.actions.runtime.on_stage_event)

@@ -18,6 +18,12 @@ settings:
   width: 1280
   height: 720
   fps: 24
+# How this workflow is run (workflow mode); data/workflow_rules.yaml (by workflow name) and a
+# production's settings.rules override it, per stage under `stages: {stage_id: {...}}` too.
+rules:
+  cascade: true             # stopping / rejecting an item stops everything after it until it is approved again
+  on_reject: rerender       # a rejected render without a note: rerender (new seeds) | wait (for you)
+  guidance: ""              # how to work on it, shown to the agent with the plan
 stages:
   - id: source
     title: Episode text

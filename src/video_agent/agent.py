@@ -501,6 +501,7 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
             "production_id": plan["production"]["id"],
             "title": plan["production"]["title"],
             "workflow": plan["workflow"]["name"],
+            "rules": plan.get("rules"),
             "next_action": plan["next_action"],
             "stages": [
                 {"id": s["id"], "state": s["state"], "counts": s["counts"], "confirm": s["confirm"]}

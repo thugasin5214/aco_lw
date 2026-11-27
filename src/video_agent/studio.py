@@ -41,6 +41,8 @@ class Studio:
         # interrupt one running task (injected by the daemon: the Worker's job in ComfyUI /
         # FreeVideo); returns whether it was the one running
         self.stop_task = lambda task_id: False
+        # a round was stopped by you (⏹ / stop_round): productions apply their rules
+        self.stop_listeners: list[Callable[[dict], None]] = []
         # cancel one of our jobs in its executor (injected by the daemon)
         self.cancel_job: Callable[[dict], bool] = lambda task: False
 
@@ -505,7 +507,7 @@ class Studio:
 
     PENDING_DELETE = "delete_rounds"  # kv: rounds to delete once their running render stops
 
-    def stop_round(self, round_id: str, delete: bool = False) -> dict:
+    def stop_round(self, round_id: str, delete: bool = False, cascading: bool = False) -> dict:
         """Stop a round halfway: candidates not started are dropped, the running one is
         interrupted. Finished candidates stay for review — or, with delete, the whole round goes
         (right away, or as soon as the interrupted render has stopped)."""
@@ -531,6 +533,12 @@ class Studio:
                 self.store.transition(t["id"], "failed", tr("task_stopped"), error="cancelled")
                 interrupted.append(t["id"])
         out = {"round_id": round_id, "dropped": dropped, "interrupted": len(interrupted)}
+        if not cascading:  # e.g. a production stops what comes after this item (its rules)
+            for cb in list(self.stop_listeners):
+                try:
+                    cb(rnd)
+                except Exception as e:  # noqa: BLE001 — stopping itself already happened
+                    self.orch.log(f"stop listener failed: {e}")
         if delete:
             closed = self.store.update_round(
                 round_id, state="closed", decision={"action": "cancel", "note": tr("task_stopped")}

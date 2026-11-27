@@ -232,6 +232,24 @@ workflows:
 
 **Long renders.** When aco's watch of a render times out, the agent is told the render is *still running* (not failed), can wait again, and is woken with the result when it lands. ⏹ Stop on such a round cancels our job in ComfyUI.
 
+### 3.12 Workflow mode: each workflow carries its rules
+A production follows its workflow (`workflows/*.yaml`; story → film is one of them, more are added as YAML + skills, no code). How it is run is in the workflow's `rules:` block:
+
+| Rule | Default | Meaning |
+|---|---|---|
+| `cascade` | `true` | Stopping (⏹) or rejecting an item stops everything after it: queued renders of the downstream stages are dropped, running ones interrupted, their skill jobs dropped, a downstream FreeVideo film cancelled. They continue once the item is approved again. The stopped item itself waits for you (no automatic pick). |
+| `on_reject` | `rerender` | A rejected render without a note: re-render with new seeds, or `wait` for you |
+| `guidance` | — | How to work on this workflow; shown to the agent with the plan |
+
+Override per workflow name in `data/workflow_rules.yaml`, or for one production in its settings (`rules`); any layer can set single stages:
+
+```yaml
+story-to-film:
+  guidance: "draft every shot at the turbo tier before HD"
+  stages:
+    characters: {on_reject: wait}
+```
+
 ## 4. Resources and memory policy (automatic)
 
 | Situation | What the system does |
