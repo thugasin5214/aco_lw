@@ -216,6 +216,22 @@ Free text goes to the agent. The LLM only **proposes** tool calls; the orchestra
 
 A ChatGPT subscription is not an API: use it through `codex`; `openai` bills an API key. Codex / Claude Code only get aco_lw's tools (over MCP), and commands still follow the permission mode.
 
+### 3.11 The agent plans; your ComfyUI workflows; steering a working agent
+In agent mode (free text) the agent plans the whole job itself: split and tighten a script, choose shot lengths, workflows, models and LoRAs, try, check and iterate. aco only schedules by memory (loading / unloading the LLM, queueing renders) and keeps its tool calls. The other way of working is a production (§3.8): there the workflow's rules run the stages and you review them.
+
+**Your ComfyUI workflows.** Every canvas workflow in ComfyUI's `user/default/workflows` (next to `comfy_output_dir`) is listed to the agent, with your Note / MarkdownNote text, the models and LoRAs it loads and its main settings. `list_comfy_workflows` shows them; `run_comfy_workflow {name, set: {"136.length": 124}, images: {"137": "@upload:ID"}}` runs one with a few values changed. The conversion to the API format is done in aco against ComfyUI's live node list (notes, reroutes and primitive nodes resolved, muted nodes dropped, bypassed nodes passed through). Other folders, a note of yours or hiding a file go into `data/comfy_workflows.yaml`:
+
+```yaml
+dirs: [~/Documents/ChatGPT/jev/FreeVideo-local/ComfyUI/user/default/workflows]
+workflows:
+  H3-Native-Ref2VA-20step: {note: "768x1344, 124 frames, ~5 s", verified: true}
+  Old-Experiment: {hidden: true}
+```
+
+**Writing while it works.** A message you send while the agent is busy goes to that same task and is read first: a wait for a render, a stage or an approval returns "interrupted", the agent reads your words and decides (keep waiting, `stop_round`, change plan). The render itself keeps going unless stopped. Start the message with "new request" / "新需求" for a separate task. Your messages are served before agent continuations in the LLM queue. If the local LLM is waiting for memory because a video holds it, it reads your message as soon as the video ends — stop the render (⏹ in the console, `/cancel all now`) to make it read now.
+
+**Long renders.** When aco's watch of a render times out, the agent is told the render is *still running* (not failed), can wait again, and is woken with the result when it lands. ⏹ Stop on such a round cancels our job in ComfyUI.
+
 ## 4. Resources and memory policy (automatic)
 
 | Situation | What the system does |

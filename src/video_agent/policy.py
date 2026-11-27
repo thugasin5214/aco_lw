@@ -69,10 +69,21 @@ class Policies:
         return c.get("pipeline_step_failed", "resume_llm") if in_pipeline else "resume_llm"
 
 
+def still_running(task: dict) -> bool:
+    """A task whose watch timed out while the executor kept working (collected later)."""
+    return (
+        task["state"] == "timeout"
+        and bool(task["prompt_id"])
+        and task["error"] == "monitor timeout"
+    )
+
+
 def classify_round(store, round_id: str) -> str:
     tasks = store.round_tasks(round_id)
     if any(t["outputs"] for t in tasks):
         return "succeeded"
+    if any(still_running(t) for t in tasks):
+        return "running"  # only our watch timed out; the executor is still working on it
     errors = " ".join((t["error"] or "") for t in tasks).lower()
     if any(m in errors for m in OOM_MARKERS):
         return "failed:oom"

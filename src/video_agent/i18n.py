@@ -15,6 +15,14 @@ M: dict[str, tuple[str, str]] = {
         "Queued: {why}. I'll pick this up automatically as soon as memory frees up; /status works meanwhile (no LLM needed).",
         "已排队：{why}。内存一空出来就自动接着处理；期间 /status 随时可查（不需要 LLM）。",
     ),
+    "agent_steered": (
+        'Got it — passed to the task the agent is already working on; it reads this first. (Start your message with "new request" for a separate task.)',
+        "收到，已插进 agent 正在做的任务，它下一步先看你这句话。（要另起一个任务，用“新需求”开头。）",
+    ),
+    "agent_steer_parked": (
+        " The local LLM is waiting for memory (a render holds it): it reads this as soon as that ends — stop the render if you want it now.",
+        " 本地 LLM 正在等内存（渲染占着）：渲染一结束就看；想让它马上看，可以先停掉渲染。",
+    ),
     "agent_resumed": (
         "Memory is free — working on your message now…",
         "内存空出来了，开始处理你的消息……",

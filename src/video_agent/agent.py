@@ -32,7 +32,7 @@ from .freevideo import FreeVideoError
 from .i18n import tr
 from .mcp_client import MCPError
 from .planner import AGENT_CLIS, ONLINE_APIS
-from .policy import Policies, classify_round
+from .policy import Policies, classify_round, still_running
 from .production import ProductionError
 from .render import ParamError
 from .studio import StudioError
@@ -90,6 +90,7 @@ def _obj(props: dict, required: list[str] | None = None) -> dict:
 
 S = {"type": "string"}
 I = {"type": "integer"}
+B = {"type": "boolean"}
 
 
 def _round_view(store, rnd: dict) -> dict:
@@ -114,6 +115,26 @@ def _round_view(store, rnd: dict) -> dict:
             }
             for t in tasks
         ],
+    }
+
+
+STEERABLE = ("running", "waiting_event", "waiting_resources", "waiting_user")
+NEW_REQUEST = ("新需求", "新任务", "new request", "new task")
+
+
+def steer_key(run_id: str) -> str:
+    return f"steer:{run_id}"
+
+
+def still_running_view(store, rnd: dict) -> dict:
+    tasks = store.round_tasks(rnd["id"])
+    elapsed = [round(time.time() - t["created"]) for t in tasks if still_running(t)]
+    return {
+        **_round_view(store, rnd),
+        "outcome": "still_running",
+        "elapsed_s": max(elapsed) if elapsed else None,
+        "hint": "Our watch timed out but ComfyUI is still rendering this. wait_for_round again to "
+        "keep waiting (you are woken when it lands), or stop_round to stop it and change plan.",
     }
 
 
@@ -319,8 +340,11 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
         rnd = store.get_round(a["round_id"])
         if rnd is None:
             return Done({"error": f"round {a['round_id']} not found"})
-        if rnd["state"] != "generating":
+        tasks = store.round_tasks(rnd["id"])
+        late = not any(t["outputs"] for t in tasks) and any(still_running(t) for t in tasks)
+        if rnd["state"] != "generating" and not late:
             return Done(_round_view(store, rnd))
+        # still rendering (also after our watch timed out): woken when the result lands
         return Pending("event", f"round:{rnd['id']}")
 
     def redo_round(ctx, a):
@@ -332,6 +356,9 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
             a["round_id"], a["idx"], {"prompt": a["prompt"]}, a.get("note"), origin=ctx["channel"]
         )
         return Done({"new_round_id": new["id"], "n": new["n"], "kept_seed_of": a["idx"]})
+
+    def stop_round(ctx, a):
+        return Done(studio.stop_round(a["round_id"], bool(a.get("delete"))))
 
     def reject_round(ctx, a):
         rnd = studio.reject(a["round_id"], a.get("note"), origin=ctx["channel"])
@@ -637,10 +664,13 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
     def comfy_describe(ctx, a):
         return Done(_bridge().describe(a["tool"]))
 
-    def _run_graph(ctx, graph: dict, title: str | None):
+    def _run_graph(ctx, graph: dict, title: str | None, images: dict | None = None):
+        params = {"graph": json.dumps(graph), "title": title or "agent workflow"}
+        if images:
+            params["images"] = json.dumps(images)  # node id → local file, uploaded at submit
         rnd = studio.start_round(
             "comfy-raw",
-            {"graph": json.dumps(graph), "title": title or "agent workflow"},
+            params,
             1,
             "trial",
             title or "agent workflow",
@@ -694,11 +724,49 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
     def comfy_approved(ctx, a):
         return Done(_bridge().call(a["tool"], a.get("args") or {}))
 
+    # ---- your saved ComfyUI workflows (comfy_workflows.py): visible, runnable with changes ----
+    def _object_info():
+        return studio.orch.executors["comfy"].object_info()
+
+    def list_comfy_workflows(ctx, a):
+        rows = rt.workflow_catalog.list(_object_info())
+        return Done(
+            {
+                "workflows": rows,
+                "hint": "run one with run_comfy_workflow {name, set: {node.input: value}, images: "
+                "{node: @upload:ID}}; get_comfy_workflow shows the full graph",
+            }
+        )
+
+    def get_comfy_workflow(ctx, a):
+        from .comfy_workflows import summary
+
+        graph = rt.workflow_catalog.api(a["name"], _object_info(), a.get("set"))
+        return Done(
+            {
+                **rt.workflow_catalog.entry(a["name"]),
+                **summary(graph),
+                "graph": graph,
+            }
+        )
+
     def run_comfy_workflow(ctx, a):
-        graph = a["workflow"]
-        if isinstance(graph, str):
-            graph = json.loads(graph)
-        return Done(_run_graph(ctx, graph, a.get("title")))
+        if a.get("name"):
+            graph = rt.workflow_catalog.api(a["name"], _object_info(), a.get("set"))
+            title = a.get("title") or a["name"]
+        else:
+            graph = a.get("workflow")
+            if isinstance(graph, str):
+                graph = json.loads(graph)
+            if not isinstance(graph, dict):
+                return Done({"error": "give name (a saved workflow) or workflow (an API graph)"})
+            title = a.get("title")
+        images = {}
+        for nid, ref in (a.get("images") or {}).items():
+            if str(nid) not in graph:
+                return Done({"error": f"images: no node {nid} in the workflow"})
+            images[str(nid)] = str(rt.toolbox.readable(ctx["run_id"], ref))
+        return Done(_run_graph(ctx, graph, title, images))
 
     def update_production_settings(ctx, a):
         prod = _prod().update_settings(a["production_id"], a["settings"])
@@ -969,10 +1037,45 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
             comfy,
         ),
         Tool(
+            "stop_round",
+            "Stop a round now: candidates not started are dropped, the running render is "
+            "interrupted (also one whose watch timed out). delete: also delete it.",
+            _obj({"round_id": S, "delete": B}, ["round_id"]),
+            "act",
+            stop_round,
+        ),
+        Tool(
+            "list_comfy_workflows",
+            "The user's own ComfyUI workflows (newest first): their notes, models, LoRAs and main "
+            "settings. Read the notes before running one — they say what was verified.",
+            _obj({}),
+            "read",
+            list_comfy_workflows,
+        ),
+        Tool(
+            "get_comfy_workflow",
+            "One saved ComfyUI workflow as an API graph (optionally with changes applied), with "
+            "its notes, models, LoRAs and settings.",
+            _obj({"name": S, "set": {"type": "object"}}, ["name"]),
+            "read",
+            get_comfy_workflow,
+        ),
+        Tool(
             "run_comfy_workflow",
-            "Queue an API-format ComfyUI workflow you built as a tracked trial render (our queue, "
-            "pause and memory gates apply). Keep trials small (lowest resolution / few steps).",
-            _obj({"workflow": {"type": "object"}, "title": S}, ["workflow"]),
+            "Queue a ComfyUI workflow as a tracked render (our queue, pause and memory gates "
+            'apply): either a saved one by name with changes (set: {"node.input": value}, '
+            "images: {node_id: @upload:ID / @task:ID}), or an API graph you built (workflow). "
+            "You decide how to verify: a short / low-resolution draft first is usually cheaper "
+            "than finding out after hours.",
+            _obj(
+                {
+                    "name": S,
+                    "set": {"type": "object"},
+                    "images": {"type": "object"},
+                    "workflow": {"type": "object"},
+                    "title": S,
+                }
+            ),
             "act",
             run_comfy_workflow,
         ),
@@ -1322,11 +1425,19 @@ class AgentRuntime:
         """enqueue: put a step into the planner queue (single thread); say_for(channel): a function that sends a message to that channel."""
         self.studio, self.planner, self.store = studio, planner, studio.store
         self.enqueue, self.say_for, self.max_steps = enqueue, say_for, max_steps
+        # put a step at the front of the queue (your messages steer before agent continuations);
+        # the daemon injects a priority queue, plain FIFO otherwise
+        self.enqueue_first: Callable[[Callable[[], None]], None] = enqueue
         self.cfg = studio.orch.cfg
         self.policies = Policies.load(studio.orch.cfg.data_dir)
         from .toolbox import Toolbox
 
         self.toolbox = Toolbox(self.cfg, self)
+        from .comfy_workflows import Catalog
+
+        self.workflow_catalog = Catalog(
+            self.cfg.data_dir, getattr(self.cfg, "comfy_output_dir", "")
+        )
         # sending you files (injected per channel by the daemon; by default just a message with the
         # paths)
         self.send_files: Callable[[str, list], None] = lambda ch, items: self.say_for(ch)(
@@ -1345,6 +1456,15 @@ class AgentRuntime:
         skills = self.toolbox.skills_index()
         if skills:
             rules += "\n\n## Skills (load_skill before a task one covers)\n" + skills
+        try:
+            flows = self.workflow_catalog.index()
+        except Exception as e:  # noqa: BLE001 — a broken file must not break the prompt
+            flows = f"(could not read: {e})"
+        if flows:
+            rules += (
+                "\n\n## The user's ComfyUI workflows (list_comfy_workflows / run_comfy_workflow)\n"
+                + flows
+            )
         mem = self.toolbox.memory_index()
         if mem:
             rules += "\n\n## Your memory index (memory_read for details)\n" + mem
@@ -1452,7 +1572,7 @@ class AgentRuntime:
         live = self.planner.live_state(project_id)
         content = f"## Live state\n{live}\n\n## User\n{text}{att}"
         self.store.add_agent_msg(run["id"], "user", content)
-        self.enqueue(lambda: self.step(run["id"]))
+        self.enqueue_first(lambda: self.step(run["id"]))  # your new request: ahead of continuations
         return run
 
     # ---- one step ----
@@ -1520,6 +1640,7 @@ class AgentRuntime:
                 return
             if self._unresolved(run_id):
                 return  # some tool results are still out; wait for the event / approval
+            self._flush_steer(run_id)
             if run["steps"] >= self.max_steps:
                 self._finish(run, tr("agent_step_budget", n=self.max_steps), "done")
                 return
@@ -1585,6 +1706,12 @@ class AgentRuntime:
             **res.stats(),
         )
         self.store.update_run(run_id, steps=run["steps"] + 1)
+        if not calls and self.store.get_kv(steer_key(run_id)):
+            # you wrote while it was answering: show this answer, then continue with your words
+            if res.text:
+                say(res.text)
+            self.enqueue_first(lambda: self.step(run_id))
+            return
         if not calls:
             self.studio.log(
                 "llm",
@@ -1837,6 +1964,73 @@ class AgentRuntime:
             tool=call["name"],
         )
 
+    # ---- steering: your message reaches the run that is already working ----
+    def live_run(self, session_id: str, channel: str) -> dict | None:
+        runs = [r for r in self.store.runs(session_id, *STEERABLE) if r["channel"] == channel]
+        return runs[-1] if runs else None
+
+    def steer(self, run: dict, text: str, attachments: list[dict] | None = None) -> dict:
+        """Hand your message to a run that is already working. It comes first: waits (renders,
+        stages, approvals) are answered with "interrupted" so the LLM reads your words at its next
+        step — the render itself keeps going unless the agent (or you) stops it. Background
+        commands still finish first."""
+        att = "".join(
+            f"\n[attached image @upload:{a['id']} {a.get('name', '')}]" for a in attachments or []
+        )
+        key = steer_key(run["id"])
+        queued = self.store.get_kv(key) or []
+        self.store.set_kv(key, [*queued, f"{text}{att}"])
+        interrupted = []
+        for m in self._unresolved(run["id"]):
+            kind, k = m["meta"].get("kind"), m["meta"].get("key") or ""
+            if kind == "event":
+                result = {
+                    "interrupted": True,
+                    "waiting_for": k,
+                    "reason": "the user sent a new message; read it first",
+                    "hint": "what you waited for keeps running: wait again to keep waiting, or "
+                    "stop it (stop_round) if the user's message changes the plan",
+                }
+                if k.startswith("round:"):
+                    rnd = self.store.get_round(k[len("round:") :])
+                    if rnd:
+                        result["round"] = _round_view(self.store, rnd)
+            elif kind in ("approval", "user"):
+                result = {
+                    "approved": False,
+                    "interrupted": True,
+                    "reason": "the user wrote a message instead of answering; read it",
+                }
+            else:
+                continue  # a background command: its result is still coming
+            self.store.update_agent_msg(
+                m["id"],
+                content=json.dumps(result, ensure_ascii=False),
+                status="done",
+                meta={"full": result},
+            )
+            interrupted.append(k)
+        if not self._unresolved(run["id"]):
+            if run["status"] != "running":
+                self.store.update_run(run["id"], status="running", waiting={})
+            self.enqueue_first(lambda: self.step(run["id"]))
+        return {"run_id": run["id"], "interrupted": interrupted, "status": run["status"]}
+
+    def _flush_steer(self, run_id: str) -> None:
+        key = steer_key(run_id)
+        texts = self.store.get_kv(key)
+        if not texts:
+            return
+        self.store.set_kv(key, None)
+        live = self.planner.live_state(self.store.get_run(run_id)["project_id"])
+        body = "\n\n".join(texts)
+        self.store.add_agent_msg(
+            run_id,
+            "user",
+            f"## Live state\n{live}\n\n## User (sent while you were working; this comes first)\n"
+            f"{body}",
+        )
+
     def _unresolved(self, run_id: str) -> list[dict]:
         return [
             m
@@ -1937,6 +2131,10 @@ class AgentRuntime:
             run = self.store.get_run(m["run_id"])
             pipe = (m["meta"].get("info") or {}).get("pipeline")
             outcome = classify_round(self.store, rnd["id"])
+            if outcome == "running":
+                # our watch timed out but ComfyUI is still rendering: say so instead of "failed"
+                self.resolve_msg(m, still_running_view(self.store, rnd))
+                continue
             retries = m["meta"].get("retries", 0)
             last = bool(pipe) and pipe["index"] >= len(pipe["steps"]) - 1
             action = self.policies.on_round(outcome, retries, bool(pipe), last)
