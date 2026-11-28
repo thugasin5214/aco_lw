@@ -1,0 +1,21 @@
+# Live-action fantasy: VFX-heavy action (lightning magic vs. sword), two leads.
+id: s10-fantasy-duel
+title: Lightning and steel
+brief: |
+  A 30-second live-action fantasy short (16:9), epic and cinematic. For the look, see
+  https://www.youtube.com/watch?v=P6y6bITmn08 (do not copy it).
+  Story: on a cliff road at dusk, Sera, a lightning mage (thirties, dark braid, silver armour), corners
+  Brann, a scarred sellsword (forties, red cloak). He draws; she answers with a whip of lightning that
+  he deflects with his blade, sparks flying. Their eyes meet — she lowers her hand.
+target: {episodes: 1, seconds_per_episode: 30, aspect_ratio: "16:9"}
+characters:
+  - {name: Sera}
+  - {name: Brann}
+expect:
+  must_keep:
+    - a cliff road at dusk
+    - Sera casts lightning at Brann
+    - he deflects it with his sword and sparks fly
+    - she lowers her hand at the end
+  judge: [appeal]
+limits: {hours: 5}

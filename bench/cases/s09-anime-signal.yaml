@@ -1,0 +1,21 @@
+# Anime sci-fi: style consistency across shots, atmosphere, a two-character search.
+id: s09-anime-signal
+title: Below the ice
+brief: |
+  A 30-second anime sci-fi short (16:9), cel-shaded, cinematic. Study this for tone and shot design
+  (do not copy it): https://www.youtube.com/watch?v=H-1x66MkQuU
+  Story: Kai, a pilot in an orange suit, lands on an ice moon; his co-pilot Rhea (short white hair,
+  blue suit) is missing. He follows her helmet light into an ice cave and finds her drawing glowing
+  symbols on the wall — she turns to him and smiles. Same anime style in every shot.
+target: {episodes: 1, seconds_per_episode: 30, aspect_ratio: "16:9"}
+characters:
+  - {name: Kai}
+  - {name: Rhea}
+expect:
+  must_keep:
+    - anime / cel-shaded style in every shot
+    - a pilot lands on an ice moon
+    - he follows a helmet light into an ice cave
+    - he finds Rhea drawing glowing symbols and she smiles
+  judge: [appeal]
+limits: {hours: 5}

@@ -53,6 +53,9 @@ class Expect(BaseModel):
     must_keep: list[str] = []
     loras: list[str] = []
     workflows: list[str] = []
+    # extra judge axes for this case (judge.EXTRA_AXES): hook (viral short-drama hook / reversal /
+    # cliffhanger), appeal (how attractive and fitting the leads look)
+    judge: list[str] = []
 
 
 class Steer(BaseModel):

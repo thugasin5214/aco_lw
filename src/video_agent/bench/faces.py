@@ -43,6 +43,24 @@ def embedding(image: Path):
     return np.asarray(v, dtype="float32")
 
 
+def face_quality(image: Path) -> dict | None:
+    """Objective look of the main face: detector confidence, face height in pixels, sharpness of
+    the face crop (variance of the Laplacian; higher is sharper)."""
+    import cv2
+
+    img = cv2.imread(str(image))
+    if img is None:
+        return None
+    faces = _analyzer().get(img)
+    if not faces:
+        return None
+    f = max(faces, key=lambda x: (x.bbox[2] - x.bbox[0]) * (x.bbox[3] - x.bbox[1]))
+    x0, y0, x1, y1 = (max(0, int(v)) for v in f.bbox)
+    crop = cv2.cvtColor(img[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
+    sharp = float(cv2.Laplacian(crop, cv2.CV_64F).var()) if crop.size else 0.0
+    return {"det": round(float(f.det_score), 3), "face_px": y1 - y0, "sharpness": round(sharp, 1)}
+
+
 def score(reference: Path | None, frames: list[Path]) -> dict:
     import numpy as np
 
@@ -51,6 +69,12 @@ def score(reference: Path | None, frames: list[Path]) -> dict:
     out: dict = {"frames": len(frames), "with_face": len(found)}
     if not found:
         return out
+    q = [x for x in (face_quality(f) for f, _ in found) if x]
+    if q:
+        out["face_quality"] = {
+            k: round(float(np.median([x[k] for x in q])), 3)
+            for k in ("det", "face_px", "sharpness")
+        }
     if reference is not None:
         ref = embedding(reference)
         if ref is None:

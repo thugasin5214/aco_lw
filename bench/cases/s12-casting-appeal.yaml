@@ -1,0 +1,24 @@
+# 颜值: casting quality alone — attractive, distinct, adult leads that stay attractive in motion.
+id: s12-casting-appeal
+title: Casting the leads
+brief: |
+  Cast the two leads of a new xianxia romance drama, then show each in a 5-second close-up video.
+  Female lead: a celestial princess, mid-twenties, idol look — slim V-shaped face, delicate features,
+  fair skin, long black hair with a jade hairpin. Male lead: a sword immortal, late twenties, sharp
+  jawline, long black hair tied up, white robes.
+  Make me a few casting candidates for each and let me pick, then make the close-ups from the picks.
+  Deliver the two close-ups as one 10-second file (female first), 9:16.
+target: {episodes: 1, seconds_per_episode: 10, aspect_ratio: "9:16"}
+characters:
+  - {name: princess}
+  - {name: immortal}
+expect:
+  must_keep:
+    - a female lead with a jade hairpin and long black hair
+    - a male lead in white robes with hair tied up
+    - both look clearly adult
+    - the faces in the videos match the picked casting images
+  judge: [appeal]
+user:
+  pick: 1
+limits: {hours: 3}

@@ -1,0 +1,29 @@
+# 玄幻 / 仙侠 漫剧: genre look (2D donghua), the classic humiliation → awakening → reversal hook.
+id: s08-xianxia-awakening
+title: Expelled from the sect
+brief: |
+  Make a 40-second vertical (9:16) xianxia short in 2D donghua / 漫剧 style, the kind that goes viral
+  as "AI漫剧". Look at this one for the formula (humiliation → awakening → reversal; do not copy it):
+  https://www.youtube.com/watch?v=NtPp115wp2g
+  Story: at the stone gate of a mountain sect, Chen Yu (a young man in his twenties, plain grey robe)
+  is expelled in front of the disciples; an elder breaks his jade token. As the pieces fall, his eyes
+  glow gold, a storm gathers, and the memories of a past-life immortal return. The elder steps back
+  in fear. End on Chen Yu's line: "Three years. Remember this day."
+target: {episodes: 1, seconds_per_episode: 40, aspect_ratio: "9:16"}
+characters:
+  - {name: Chen Yu}
+expect:
+  must_keep:
+    - 2D donghua / anime style throughout
+    - expelled at a mountain sect gate in front of disciples
+    - the jade token breaks
+    - his eyes glow gold and a storm gathers
+    - the elder steps back in fear
+    - the final line "Three years. Remember this day."
+  judge: [hook, appeal]
+user:
+  steer:
+    - after: first_image
+      say: Make the lightning and his eyes gold, not blue.
+      check: the lightning and his eyes are gold
+limits: {hours: 5}

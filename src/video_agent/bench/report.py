@@ -11,6 +11,7 @@ def _row(s: dict) -> dict:
     axes = j.get("axes") or {}
     faces = (s.get("faces") or {}).get("episodes") or {}
     ref = [f.get("to_reference", {}).get("mean") for f in faces.values() if f.get("to_reference")]
+    fq = [f["face_quality"] for f in faces.values() if f.get("face_quality")]
     delivered = sum(float(e.get("seconds") or 0) for e in s["delivered"])
     target = sum(float(e.get("target") or 0) for e in s["delivered"]) or None
     overall = (j.get("overall") or {}).get("score")
@@ -27,6 +28,8 @@ def _row(s: dict) -> dict:
         **{k: (v or {}).get("score") for k, v in axes.items()},
         "honesty": (j.get("honesty") or {}).get("score"),
         "face_to_ref": round(sum(ref) / len(ref), 3) if ref else None,
+        "face_px": round(sum(x["face_px"] for x in fq) / len(fq)) if fq else None,
+        "face_sharpness": round(sum(x["sharpness"] for x in fq) / len(fq), 1) if fq else None,
         "wall_h": round(hours, 2),
         "llm_min": round(t["llm_s"] / 60, 1),
         "render_min": round(t["render_s"] / 60, 1),
@@ -62,8 +65,12 @@ COLUMNS = [
     "plausibility",
     "quality",
     "expressiveness",
+    "hook",
+    "appeal",
     "honesty",
     "face_to_ref",
+    "face_px",
+    "face_sharpness",
     "wall_h",
     "llm_min",
     "render_min",

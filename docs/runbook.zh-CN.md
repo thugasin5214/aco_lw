@@ -336,7 +336,7 @@ story-to-film:
 ```
 
 ### 3.14 aco-bench：端到端衡量 agent
-`va bench` 让一个故事 brief 在运行中的 aco 上跑一遍，由脚本扮演用户，然后给交付结果和代价打分。用例在 `bench/cases/`（六个小故事：一致性、双人、运镜 / 舞蹈 LoRA、跨场景连贯、从一句话扩写；多数在中途会插一句话）。`va bench import-vahbench` 把 VAHBench 的五个短剧 brief 加到 `data/bench/cases/`。
+`va bench` 让一个故事 brief 在运行中的 aco 上跑一遍，由脚本扮演用户，然后给交付结果和代价打分。用例在 `bench/cases/`：六个小故事（一致性、双人、运镜 / 舞蹈 LoRA、跨场景连贯、从一句话扩写），以及六个参照 YouTube 上热门 AI 短片做的类型用例（功夫打戏、仙侠漫剧觉醒、动漫科幻、真人奇幻对决、爆款竖屏短剧第一集、主角选角颜值）。多数在中途会插一句话。类型用例会附一个参考视频给 agent 分析，要求人物和故事原创。`va bench import-vahbench` 把 VAHBench 的五个短剧 brief 加到 `data/bench/cases/`。
 
 ```sh
 uv sync --extra bench                       # 人脸一致性用的 insightface（首次使用下载约 280 MB 模型）
@@ -351,6 +351,7 @@ uv run va bench report                       # 汇总表：data/bench/report.md
 - **人脸一致性**：insightface（ArcFace）比较抽帧和人物参考图（用例给的，否则用第一张定妆图）的相似度，以及帧与帧之间。
 - **在线 judge**：Claude Code（`claude -p`，用你的登录）看小样表、brief、插话和最终汇报，按忠实、一致、合理、画质、表现力打分（1–5，3 = 可用），并检查必保清单、插话是否照做、汇报是否诚实。实测一次评分约 17 秒。
 - **VAHBench**（run / score 加 `--vahbench`）：把运行导出成 VAHBench 的目录格式（`data/bench/export/aco/<brain>/<case>/`），用它的评分器打分（克隆到 `data/bench/VAHBench`，独立虚拟环境；它的 LLM 抽取走 `claude -p`）。论文里的检测器没有公开，所以分数标为 partial，不能和论文直接比。
+- 用例可以加 judge 维度：`hook`（爆款短剧的开头钩子、反转、结尾悬念）和 `appeal`（主角的颜值和是否贴合类型，动起来也要好看）。另外测人脸画质：检测置信度、人脸像素大小、脸部清晰度。
 - 报告里的 `quality_per_hour` 把 judge 总分和总耗时放在一起：渲染更久不等于更好。
 
 ## 4. 资源与内存策略（自动执行）

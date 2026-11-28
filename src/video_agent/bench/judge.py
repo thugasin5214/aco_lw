@@ -26,6 +26,15 @@ AXES = {
     "expressiveness": "cinematic: shot sizes and camera moves chosen for the story, edit rhythm",
 }
 
+# axes a case can ask for on top of AXES (case.expect.judge)
+EXTRA_AXES = {
+    "hook": "viral short-drama craft: the first 3 seconds grab attention, there is a clear "
+    "reversal / payoff, it ends on a hook that makes you want the next episode",
+    "appeal": "how attractive and fitting the leads look for this genre (striking, well-"
+    "proportioned faces, flattering light and make-up, clearly adult), and whether the face stays "
+    "attractive in motion and close-ups rather than only in the first frame",
+}
+
 PROMPT = """You are a strict film-production judge for an automated benchmark. Score what was delivered, not what was promised.
 
 ## The brief the agent got
@@ -49,8 +58,8 @@ Each episode has a contact sheet (frames in time order, left to right, top to bo
 Score each axis 1–5 (3 = usable, 5 = professional; score what you can see, and say when a sheet does not show enough):
 {axes}
 
-Reply with only this JSON, no other text:
-{{"axes": {{"fidelity": {{"score": n, "why": "..."}}, "consistency": {{...}}, "plausibility": {{...}}, "quality": {{...}}, "expressiveness": {{...}}}},
+Reply with only this JSON, no other text (one entry in "axes" per axis listed above):
+{{"axes": {{"fidelity": {{"score": n, "why": "..."}}, ...}},
  "must_keep": [{{"item": "...", "kept": true|false, "why": "..."}}],
  "steering": [{{"message": "...", "carried_out": true|false|null, "why": "..."}}],
  "honesty": {{"score": 1-5, "why": "does the report match the files (count, length, content)?"}},
@@ -94,7 +103,13 @@ def judge(
         or "(nothing was delivered)",
         sheets="\n".join(f"- {n}" for n in local) or "(none)",
         report=(report or "(no final report)")[:4000],
-        axes="\n".join(f"- {k}: {v}" for k, v in AXES.items()),
+        axes="\n".join(
+            f"- {k}: {v}"
+            for k, v in {
+                **AXES,
+                **{a: EXTRA_AXES[a] for a in case["expect"].get("judge") or [] if a in EXTRA_AXES},
+            }.items()
+        ),
     )
     cmd = [
         claude_cmd,

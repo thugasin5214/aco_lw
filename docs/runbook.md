@@ -336,7 +336,7 @@ story-to-film:
 ```
 
 ### 3.14 aco-bench: measure the agent end to end
-`va bench` runs a story brief through the running aco with a scripted user, then scores what was delivered and what it cost. Cases are in `bench/cases/` (six short stories: consistency, two characters, camera / dance LoRAs, continuity across places, expanding a one-line idea; most send a steering message mid-run). `va bench import-vahbench` adds VAHBench's five short-drama briefs to `data/bench/cases/`.
+`va bench` runs a story brief through the running aco with a scripted user, then scores what was delivered and what it cost. Cases are in `bench/cases/`: six short stories (consistency, two characters, camera / dance LoRAs, continuity across places, expanding a one-line idea) and six genre cases modelled on popular AI shorts on YouTube (a kung-fu fight, a xianxia 漫剧 awakening, anime sci-fi, a live-action fantasy duel, a viral vertical drama episode, casting attractive leads). Most send a steering message mid-run. Genre cases link a reference video for the agent to study, and ask for original characters and story. `va bench import-vahbench` adds VAHBench's five short-drama briefs to `data/bench/cases/`.
 
 ```sh
 uv sync --extra bench                       # insightface for face consistency (model ~280 MB on first use)
@@ -351,6 +351,7 @@ uv run va bench report                       # one table: data/bench/report.md
 - **Face consistency**: insightface (ArcFace) similarity of sampled frames to the character reference (the case's, else the first casting image) and between frames.
 - **Online judge**: Claude Code (`claude -p`, your login) reads contact sheets with the brief, the steering messages and the final report, and scores fidelity, consistency, plausibility, quality, expressiveness (1–5, 3 = usable), the must-keep list, steering compliance and honesty. Measured on one clip: about 17 s per judgment.
 - **VAHBench** (`--vahbench` on run / score): the run is exported to VAHBench's layout (`data/bench/export/aco/<brain>/<case>/`) and scored by its evaluator (cloned into `data/bench/VAHBench`, its own virtualenv; its LLM extraction goes through `claude -p`). Its paper's detectors are not public, so scores are "partial" and not comparable with the paper.
+- Cases can add judge axes: `hook` (viral short-drama hook, reversal, cliffhanger) and `appeal` (how attractive and fitting the leads look, also in motion). Face quality is measured too: detector confidence, face size in pixels, sharpness of the face crop.
 - `quality_per_hour` in the report puts the judge's overall score next to the wall time: a longer render is not a better one.
 
 ## 4. Resources and memory policy (automatic)

@@ -1,0 +1,29 @@
+# 打戏: readable choreography, a reversal, and whether the agent finds the fight workflows / LoRAs.
+id: s07-street-fight
+title: The noodle-stall fight
+brief: |
+  Make a 30-second vertical (9:16) kung-fu fight short in the style of today's viral AI action shorts.
+  Study this one first for pacing and choreography (do not copy its characters):
+  https://www.youtube.com/watch?v=ZtaAACd6iug
+  Story: at a night market, three thugs knock over the noodle stall of Lan, a calm woman in her late
+  twenties (tied-back black hair, white apron). She disarms all three with a ladle and a wok lid in
+  one continuous, readable fight, then calmly serves the next customer.
+  Hook in the first 3 seconds; contact must look real (blocks land, people fall), no limbs merging.
+target: {episodes: 1, seconds_per_episode: 30, aspect_ratio: "9:16"}
+characters:
+  - {name: Lan}
+expect:
+  must_keep:
+    - thugs knock over a noodle stall at a night market
+    - Lan fights three men with a ladle and a wok lid
+    - blows visibly connect and the men fall
+    - she calmly serves the next customer at the end
+  loras: [fight]
+  workflows: [Fight]
+  judge: [hook]
+user:
+  steer:
+    - after: first_video
+      say: The fight is too slow — make it faster and add one slow-motion moment on the final blow.
+      check: the fight is fast with one slow-motion final blow
+limits: {hours: 5}

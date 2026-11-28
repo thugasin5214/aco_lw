@@ -1,0 +1,30 @@
+# 爆款竖屏短剧: hook, reversal, cliffhanger; attractive leads; dialogue.
+id: s11-viral-vertical-drama
+title: She left her own engagement party
+brief: |
+  Make episode 1 (about 45 seconds, vertical 9:16) of a viral-style AI short drama — the kind with
+  millions of views. Study this one for the hook, the reversal and the cliffhanger (do not copy it):
+  https://www.youtube.com/watch?v=oHKc_rXrxm8
+  Story: at her lavish engagement party, Lily (late twenties, elegant, long dark hair, white dress)
+  overhears her fiancé mocking her family. She takes off the ring, puts it in his champagne glass and
+  walks out. Outside, a black car stops; a stranger (thirties, sharp suit) opens the door:
+  "Miss Lily, your grandfather has been looking for you for twenty years."
+  Both leads should look like stars of a hit drama. Real dialogue, in English.
+target: {episodes: 1, seconds_per_episode: 45, aspect_ratio: "9:16"}
+characters:
+  - {name: Lily}
+  - {name: stranger}
+expect:
+  must_keep:
+    - a lavish engagement party
+    - she overhears the fiancé mocking her family
+    - she drops the ring into his champagne glass and walks out
+    - a black car and a stranger in a suit
+    - the final line about her grandfather looking for her for twenty years
+  judge: [hook, appeal]
+user:
+  steer:
+    - after: first_image
+      say: Lily needs to look more striking — a star, not a girl next door.
+      check: Lily looks like a striking lead in the final episode
+limits: {hours: 5}
