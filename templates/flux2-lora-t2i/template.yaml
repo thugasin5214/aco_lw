@@ -1,0 +1,20 @@
+title: 文生图 · FLUX.2 Klein + 人物 LoRA（锁脸出图）
+kind: image
+model: flux2-klein-4b-q8
+source: 标准实验室/05-图生图-LoRA-摄影风.json (graph of flux2-t2i + LoraLoaderModelOnly)
+release_after: keep
+output_prefix: {node: "16", field: filename_prefix}
+# lora: a Klein 4B LoRA file installed in ComfyUI (see "LoRAs" in the agent prompt);
+# strength 0.45–0.6 keeps the face without freezing pose and light (the user's 05 workflows use 0.5 / 0.45)
+slots:
+  prompt:        {node: "7", field: text, type: str}
+  lora:          {node: "50", field: lora_name, type: str, required: true}
+  lora_strength: {node: "50", field: strength_model, type: float, min: 0.0, max: 1.5}
+  seed:          {node: "10", field: noise_seed, type: int, min: 0}
+  steps:         {node: "12", field: steps, type: int, min: 1, max: 8}
+  width:         {node: "20", field: value, type: int, min: 256, max: 2048, multiple_of: 16}
+  height:        {node: "21", field: value, type: int, min: 256, max: 2048, multiple_of: 16}
+tiers:
+  standard: {width: 1280, height: 720, verified: false}   # same model and size as flux2-t2i standard; LoRA adds < 0.1 GiB (estimate)
+  portrait: {width: 896, height: 1152, verified: false}
+default_tier: portrait

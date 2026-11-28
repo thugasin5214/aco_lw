@@ -23,21 +23,84 @@ This runbook answers three questions: **how to start / stop**, **how to use it d
 
 ## 2. Start and stop
 
-### Start order
-1. **ComfyUI** — make sure http://127.0.0.1:8188 opens (FreeVideo-local environment).
-2. **LM Studio** — the app just needs to be running; aco_lw loads the model when needed.
-3. **aco_lw** — run:
+### Three services
+
+| Service | Address | Role |
+|---|---|---|
+| ComfyUI (with the FreeVideo plugin) | http://127.0.0.1:8188 | Renders images and video. FreeVideo is not a separate program: it is a ComfyUI plugin and is there whenever ComfyUI is up |
+| LM Studio | http://127.0.0.1:1234 | Local LLM (aco's brain) |
+| aco (`va daemon`) | http://127.0.0.1:8790 | Orchestrator + console + Telegram |
+
+Start them in any order: if aco comes up first it retries ComfyUI every 30 s, and queued tasks wait until it connects.
+
+### 1) Start ComfyUI + FreeVideo
+FreeVideo.app is not installed on this machine; ComfyUI is started directly with FreeVideo-local's own Python (same arguments as the FreeVideo launcher; don't change them).
+
+Foreground (keep a terminal window for it; `Ctrl-C` stops it):
+
+```sh
+cd ~/Documents/ChatGPT/jev/FreeVideo-local/ComfyUI
+../envs/comfyui-630aa60d8624e901/bin/python main.py --listen 127.0.0.1 --port 8188
+```
+
+Background (keeps running after the terminal closes):
+
+```sh
+cd ~/Documents/ChatGPT/jev/FreeVideo-local/ComfyUI
+nohup ../envs/comfyui-630aa60d8624e901/bin/python main.py --listen 127.0.0.1 --port 8188 >/dev/null 2>&1 &
+```
+
+- Ready in about 10–20 s (measured 18 s, together with aco). Check: `curl -s http://127.0.0.1:8188/system_stats` returns JSON, or open http://127.0.0.1:8188 in a browser.
+- FreeVideo panel: open http://127.0.0.1:8188 → **Workflow → Browse templates → FreeVideo → FreeVideo-All-in-One**; the FreeVideo agent chat is under **Extensions → FreeVideo**.
+- Log: the FreeVideo plugin writes ComfyUI's output to `~/Documents/ChatGPT/jev/FreeVideo-local/launcher/comfy-runs/connected-<time>-<pid>/comfy.log` (the newest folder is the current run).
+- Stop: `Ctrl-C` in the foreground; `pkill -f "ComfyUI/main.py"` in the background. Make sure no video is rendering first, or it is cut off.
+- The `envs/comfyui-<hash>` folder name may change after a FreeVideo upgrade; the `python` entry in `FreeVideo-local/launcher/comfy-host.json` is authoritative.
+
+### 2) Start LM Studio
+Open the LM Studio app (or `lms server start` in a terminal). No need to load a model: aco loads it when needed and unloads it when idle. Check: `curl -s http://127.0.0.1:1234/v1/models`.
+
+### 3) Start aco
+Foreground (`Ctrl-C` stops it; the log also goes to `data/daemon.log`):
 
 ```sh
 cd ~/workplace/video-agent
 uv run va daemon 2>&1 | tee -a data/daemon.log
 ```
 
-Ready when you see `Telegram listener started (whitelist [...])` and `Console: http://127.0.0.1:8790`. Startup reconciles unfinished tasks (`recover`): it only collects finished results and **never resubmits**.
+Background:
+
+```sh
+cd ~/workplace/video-agent
+nohup uv run va daemon --port 8790 >> data/daemon.log 2>&1 &
+```
+
+- Ready when the log shows `Telegram listener started (whitelist [...])` and `Console: http://127.0.0.1:8790`. Check: `curl -s http://127.0.0.1:8790/api/system` shows `comfy.online: true` and `daemon.alive: true`.
+- Console: open http://127.0.0.1:8790; on Telegram just message the bot.
+- Startup reconciles unfinished tasks (`recover`): it only collects finished results and **never resubmits**. With ComfyUI down the log shows `Startup reconcile failed (ComfyUI offline?)`; once ComfyUI is up it carries on by itself, no aco restart needed.
+- Follow the log: `tail -f data/daemon.log`.
+
+### Start everything (background)
+
+```sh
+FV=~/Documents/ChatGPT/jev/FreeVideo-local
+(cd $FV/ComfyUI && nohup ../envs/comfyui-630aa60d8624e901/bin/python main.py --listen 127.0.0.1 --port 8188 >/dev/null 2>&1 &)
+(cd ~/workplace/video-agent && nohup uv run va daemon --port 8790 >> data/daemon.log 2>&1 &)
+```
+
+### What is running
+
+```sh
+pgrep -fl "ComfyUI/main.py"; pgrep -fl "va daemon"
+curl -s -o /dev/null -w "ComfyUI %{http_code}\n" http://127.0.0.1:8188/system_stats
+curl -s -o /dev/null -w "aco %{http_code}\n" http://127.0.0.1:8790/api/system
+```
+
+Both `200` means all good.
 
 ### Stop
-- `Ctrl-C` in the daemon terminal, or `pkill -f "va daemon"`.
-- A job already running inside ComfyUI is **not cancelled**; the next daemon start reconciles it by prompt_id and collects its outputs.
+- aco: `Ctrl-C` in the foreground; `pkill -f "va daemon"` in the background.
+- A job already running inside ComfyUI is **not cancelled by stopping aco**; the next aco start reconciles it by prompt_id and collects its outputs.
+- Before restarting aco, check the console shows no running task and the agent isn't mid-answer.
 
 ### Console only
 `uv run va serve` opens the console (browse + review) without rendering; queued tasks run once the daemon is up.
@@ -46,6 +109,7 @@ Ready when you see `Telegram listener started (whitelist [...])` and `Console: h
 
 ### 3.1 A full creative loop
 1. **Ask** — in the console (*Projects & Chat*) or in Telegram, in English or Chinese. Example: “Same blonde academy girl, half-body, looking back at the camera, warm evening window light.” You can **attach a reference image** (📎 in the console, or send a photo in Telegram) and say “use this face”.
+   A photo sent in Telegram **without a caption** doesn't start anything: aco confirms it and your next message within 30 min carries it along (e.g. send the casting photo, then “make a video with this face”). When the agent asks for a picture, just send it — that is the answer.
    The planner acknowledges immediately, understands the request (typically 10–20 s; the first message after a cold start adds ~15 s for loading) and queues a round (4 images by default, 1 for video).
 2. **Wait** — images take ~12 s each; a 640×384×3 s video takes ~5–6 min. When done, the *Review* tab shows a badge and Telegram receives the original files with buttons.
 3. **Review** (console `#review` or Telegram buttons — equivalent):
@@ -88,6 +152,7 @@ Ready when you see `Telegram listener started (whitelist [...])` and `Console: h
 | `/memory` · `/memory add TEXT` · `/memory del ID` | Project memory |
 | `/pack` | Current baseline pack |
 | `/model [NAME]` | Show / switch the agent's brain (local or online, see §3.10) |
+| `/llm` · `/llm use NAME` · `/llm load` · `/llm unload` | List the downloaded local models; switch aco's local model (unloads the old one, checks memory, tells you when loaded). Same as `va llm …` on the command line |
 | `/permissions [default\|bypass\|forget RULE\|all]` | Approval mode and always-allow rules (see §3.10) |
 | `/fv TASK` | Hand a video task to the FreeVideo agent |
 | `/whoami` | Show your chat_id (works for anyone; used to set up the whitelist) |
@@ -181,7 +246,7 @@ Free text goes to the agent. The LLM only **proposes** tool calls; the orchestra
 
 | Tool | What it does | Approval |
 |---|---|---|
-| Generation tools (`queue_round`, `wait_for_round`, productions, ComfyUI exploration…) | Images, video, review, productions | Unmeasured video tiers |
+| Generation tools (`queue_round`, `wait_for_round`, productions, ComfyUI exploration…) | Images, video, review, productions | Unmeasured video tiers, only when the estimate is over 20 min (`budget_min` in `policies.yaml`) or unknown; never when your message named the tier |
 | `web_fetch` | Read a page as text (no login, no JS) | No |
 | `run_command` | zsh command in the run's working dir `data/agent-work/<run>/` (e.g. agent-reach, ffmpeg) | **Yes** (see permissions) |
 | `read_file` / `write_file` | Read `data/` and skill dirs; write the working dir only | No |
@@ -194,7 +259,7 @@ Free text goes to the agent. The LLM only **proposes** tool calls; the orchestra
 | `delegate_freevideo` (`/fv`) | Hand a whole video task to the FreeVideo agent | Yes; needs `freevideo_agent_online` |
 - **The agent never polls.** Every slow tool suspends the agent and resumes it with the result: renders (`wait_for_round`), production stages (`run_stage`, `wait_for_stage`), whole productions (`create_production` and `review_stage` wait until the production needs you or is done; `wait_for_production`), commands, web reads, MCP calls, delegated agents. While it is suspended the local LLM is free for the work itself — an LLM stage on a long novel can take 10–20 minutes, and "running" with no output yet is normal.
 
-**Hard refusals (in every mode)**: direct ComfyUI `:8188`, reading the FreeVideo token, `kill` / `pkill`, `lms load|unload`. The execution policy is `policies.yaml` (per-tool switches, limits, MCP approval rules).
+**Hard refusals (in every mode)**: direct ComfyUI `:8188`, reading the FreeVideo token, `kill` / `pkill`. Loading / switching the LLM (`va llm use`, `lms load`) is an ordinary approved command. Commands can carry `memory_gib` / `exclusive`; after approval the orchestrator starts them only when that much memory is free (waiting for a video, unloading the LLM for exclusive ones), and the approval message shows the estimate. The execution policy is `policies.yaml` (per-tool switches, limits, MCP approval rules).
 
 **Permission modes** (like Claude Code's permission modes):
 - `default`: actions that need approval come with buttons **✅ Approve / ✅ Always (rule) / ✕ No**. *Always* stores a rule so the same kind is not asked again: commands by program (`cmd:ffmpeg`, single commands only — no pipes, chaining or redirection), MCP by tool (`mcp:exa.web_search_exa`), hand-overs by target (`delegate:codex`), unmeasured video tiers by template (`round:h3-t2v`).
@@ -216,7 +281,27 @@ Free text goes to the agent. The LLM only **proposes** tool calls; the orchestra
 
 A ChatGPT subscription is not an API: use it through `codex`; `openai` bills an API key. Codex / Claude Code only get aco_lw's tools (over MCP), and commands still follow the permission mode.
 
-### 3.11 The agent plans; your ComfyUI workflows; steering a working agent
+### 3.11 Character LoRAs: keep one person
+- **Where**: put LoRA files in `FreeVideo-local/ComfyUI/models/loras/`. aco reads each file's base model, lists it in the agent prompt and says which templates take it.
+- **Notes (recommended)**: in `data/loras.yaml` (not in git), give each LoRA a person, style, strength and trigger word, e.g.:
+  ```yaml
+  my-face.safetensors:
+    person: heroine
+    style: photo
+    strength: 0.5
+    trigger: null
+  ```
+  No restart needed: the next conversation picks it up.
+- **Templates**: `flux2-lora-t2i` (text-to-image) and `flux2-lora-edit` (reference image + LoRA). `lora` is required; `lora_strength` is usually 0.45–0.6.
+- **Locking the person in video**:
+  - These are Klein 4B image LoRAs and cannot be loaded into the H3 video model. Make images of the person with the LoRA first, then hand those to the video.
+  - The agent loads the `character-consistency` skill: LoRA front portrait and per-shot first frames, then `freevideo-ref` with no reference video, just two reference pictures, so the face holds through the whole clip.
+  - Long videos are split into 5–10 s shots, each with its own first frame, then joined.
+  - `h3n-r2v` doesn't run on a Mac (int8 matmul missing on MPS).
+- **H3 video LoRAs** (camera moves, dance / motion, style, adult): template `h3-lora-ref`. The character picture is a reference for the whole clip; `lora` / `lora2` / `lora3` stack up to three LoRAs, and their trigger words go into the prompt. Many community LoRAs record no base model, so add `base: minimax-h3` in `data/loras.yaml` for the agent to match them to the template. Adult LoRAs are only for clearly adult fictional characters.
+- **Confirmed by you**: the agent proposes "character → LoRA, strength" with `propose_memory`; once you confirm, the project uses it from then on.
+
+### 3.12 The agent plans; your ComfyUI workflows; steering a working agent
 In agent mode (free text) the agent plans the whole job itself: split and tighten a script, choose shot lengths, workflows, models and LoRAs, try, check and iterate. aco only schedules by memory (loading / unloading the LLM, queueing renders) and keeps its tool calls. The other way of working is a production (§3.8): there the workflow's rules run the stages and you review them.
 
 **Your ComfyUI workflows.** Every canvas workflow in ComfyUI's `user/default/workflows` (next to `comfy_output_dir`) is listed to the agent, with your Note / MarkdownNote text, the models and LoRAs it loads and its main settings. `list_comfy_workflows` shows them; `run_comfy_workflow {name, set: {"136.length": 124}, images: {"137": "@upload:ID"}}` runs one with a few values changed. The conversion to the API format is done in aco against ComfyUI's live node list (notes, reroutes and primitive nodes resolved, muted nodes dropped, bypassed nodes passed through). Other folders, a note of yours or hiding a file go into `data/comfy_workflows.yaml`:
@@ -251,7 +336,7 @@ workflows:
 | Symptom | Check | Fix |
 |---|---|---|
 | Header shows “daemon not running” | `pgrep -fl "va daemon"` | Start it (§2); queued tasks continue |
-| “ComfyUI offline” | Open http://127.0.0.1:8188 | Start FreeVideo-local's ComfyUI; aco_lw won't start it |
+| “ComfyUI offline” | Open http://127.0.0.1:8188 | Start it as in §2 “Start ComfyUI + FreeVideo”; aco won't start it, and carries on once it is up |
 | Task stuck in “waiting memory” | Header memory / pressure; ComfyUI queue | Close memory-heavy apps or `/cancel`; after 10 min it times out without submitting |
 | Task “timed out” | `va status <ID>` for the prompt_id | It may still be running: `va recover` collects it; don't resubmit by hand |
 | Task “failed” | Error in the console details / ComfyUI terminal | Adjust and redo; failed tasks may be resubmitted with the same parameters |
