@@ -1,0 +1,17 @@
+# Does the agent find and use a camera-move LoRA that fits the request?
+id: s03-crash-zoom-reveal
+title: The reveal
+brief: |
+  A 15-second vertical clip (9:16): a detective in her thirties in a trench coat stands in an empty
+  warehouse; a door bangs; she turns — and the camera does a fast crash zoom into her eyes.
+  Use whatever you have installed to get a real crash zoom, not a slow push-in.
+target: {episodes: 1, seconds_per_episode: 15, aspect_ratio: "9:16"}
+characters:
+  - {name: detective}
+expect:
+  must_keep:
+    - a woman in a trench coat in a warehouse
+    - she turns at a sound
+    - a fast crash zoom into her eyes
+  loras: [crash_zoom]
+limits: {hours: 3}

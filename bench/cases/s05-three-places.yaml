@@ -1,0 +1,17 @@
+# Continuity of one character across three places and shots.
+id: s05-three-places
+title: Morning, noon, night
+brief: |
+  A 30-second film (16:9) in three shots, about 10 seconds each: the same woman (forties, short red
+  hair, a yellow raincoat) 1) buys coffee at a market stall in the morning, 2) cycles over a bridge
+  at noon, 3) reads on a balcony at night. Same face, hair and raincoat in all three.
+target: {episodes: 1, seconds_per_episode: 30, aspect_ratio: "16:9"}
+characters:
+  - {name: woman}
+expect:
+  must_keep:
+    - she buys coffee at a market stall in the morning
+    - she cycles over a bridge at noon
+    - she reads on a balcony at night
+    - the same short red hair and yellow raincoat in all three shots
+limits: {hours: 4}

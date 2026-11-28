@@ -1,0 +1,22 @@
+# From one line to a story: the agent expands, plans, and takes a late note.
+id: s06-one-line-idea
+title: The lighthouse keeper's last night
+brief: |
+  Idea: "A lighthouse keeper's last night before the light is automated."
+  Turn this into a short film of about 45 seconds (16:9): write the story and the shots yourself,
+  keep it to one character, and show me the plan before you shoot.
+target: {episodes: 1, seconds_per_episode: 45, aspect_ratio: "16:9"}
+characters:
+  - {name: keeper}
+expect:
+  must_keep:
+    - a lighthouse and its keeper
+    - it is his last night
+    - the light is automated / taken over at the end
+user:
+  answer: The plan looks good — go ahead.
+  steer:
+    - after: seconds:1800
+      say: Add one spoken line at the very end — he says goodbye to the light.
+      check: the last shot has him saying goodbye to the light
+limits: {hours: 4}

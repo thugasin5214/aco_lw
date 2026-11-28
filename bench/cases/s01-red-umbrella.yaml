@@ -1,0 +1,24 @@
+# One character, one place, a mid-run change of mind: consistency, delivery, steering.
+id: s01-red-umbrella
+title: The red umbrella
+brief: |
+  Make a short film (about 30 seconds, vertical 9:16) from this story:
+  Mira, a woman in her late twenties with a black bob and a grey coat, waits at a bus stop in a city.
+  A gust takes a stranger's red umbrella; it rolls to her feet. She picks it up, looks around, and
+  sees no one. She opens it and smiles as the bus arrives.
+  Keep Mira looking the same in every shot.
+target: {episodes: 1, seconds_per_episode: 30, aspect_ratio: "9:16"}
+characters:
+  - {name: Mira}
+expect:
+  must_keep:
+    - Mira waits at a bus stop
+    - a red umbrella rolls to her feet
+    - she opens the umbrella and smiles
+    - the bus arrives at the end
+user:
+  steer:
+    - after: first_video
+      say: Change of plan — make the last shot happen at night in the rain.
+      check: the last shot is at night, in the rain
+limits: {hours: 4}
