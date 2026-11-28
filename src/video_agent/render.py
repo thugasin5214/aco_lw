@@ -78,6 +78,13 @@ def render(t: Template, params: dict, output_prefix: str | None = None) -> dict:
     for name, v in params.items():
         s = t.slots[name]
         g[s.node]["inputs"][s.field] = v
+    dropped = {n for name, s in t.slots.items() if name not in params for n in s.drop_if_unset}
+    for n in dropped:
+        g.pop(n, None)
+    for node in g.values():  # unlink inputs that pointed at a dropped node
+        for field, v in list(node["inputs"].items()):
+            if isinstance(v, list) and v and str(v[0]) in dropped:
+                del node["inputs"][field]
     if output_prefix and t.output_prefix:
         g[t.output_prefix.node]["inputs"][t.output_prefix.field] = output_prefix
     return g

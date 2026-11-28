@@ -114,6 +114,39 @@ def test_multiple_tool_calls_keep_order_and_ids(env):
     assert sent[-4]["tool_calls"][2]["id"] == "C"
 
 
+def test_truncated_tool_call_is_not_run_and_replays_as_valid_json(env):
+    """Output cut off at max_tokens: the half-written call is not executed, the model is told to
+    split the content, and the replayed arguments are "{}" (LM Studio 500s on invalid JSON)."""
+    studio, make, _ = env
+    a, script = make(
+        {"tool_calls": [{"id": "W", "name": "write_file", "arguments": ""}], "truncated": True},
+        {
+            "tool_calls": [{"id": "X", "name": "write_file", "arguments": '{"path": "a.md", "con'}],
+            "truncated": True,
+        },
+        {"text": "ok"},
+    )
+    a.inbound("web", "write a long script", lambda t, b=None: None)
+    run_all(a)
+    # llm_max_tokens = 0 (default): no cap sent, the model's maximum applies
+    assert a.planner.backend.max_tokens is None
+    sent = script.seen[2]
+    tool_msgs = [m for m in sent if m["role"] == "tool"]
+    assert all("cut off" in m["content"] for m in tool_msgs)
+    replayed = [c for m in sent if m["role"] == "assistant" for c in m.get("tool_calls") or []]
+    assert [c["function"]["arguments"] for c in replayed] == ["{}", "{}"]
+    assert last_run(studio)["status"] == "done"
+
+
+def test_old_invalid_arguments_in_history_replay_as_empty_object():
+    from video_agent.agent import _json_args
+
+    assert _json_args("") == "{}"
+    assert _json_args('{"path": "a') == "{}"
+    assert _json_args("[1]") == "{}"
+    assert _json_args('{"a": 1}') == '{"a": 1}'
+
+
 def test_parks_while_video_renders_and_resumes(env):
     studio, make, _ = env
     a, script = make({"text": "answer"})
@@ -405,6 +438,181 @@ def test_parked_message_tells_you_once_and_resumes_when_film_ends(env):
     assert texts[-2].startswith("Memory is free") and texts[-1] == "answer"
 
 
+# ---------------- attachments, loops, tool crashes ----------------
+def test_captionless_photo_is_held_for_the_next_message(env):
+    studio, make, said = env
+    a, script = make({"text": "ok"})
+    a.inbound(
+        "telegram",
+        "(image)",
+        lambda t, b=None: said.append((t, b)),
+        [{"id": "u1", "name": "face.jpg"}],
+    )
+    run_all(a)
+    assert studio.store.runs(None) == [] and "30" in said[-1][0]  # no run for a bare photo
+    a.inbound("telegram", "make a video with this face", lambda t, b=None: None)
+    run_all(a)
+    user = script.seen[0][-1]["content"]
+    assert "[attached image @upload:u1 face.jpg]" in user
+    a.inbound("telegram", "again", lambda t, b=None: None)  # used once only
+    assert studio.store.get_kv("held_media:telegram") is None
+
+
+def test_photo_answering_a_question_carries_its_upload_id(env):
+    studio, make, _ = env
+    a, script = make(
+        {"tool_calls": [call("ask_user", {"question": "Send the photo again?"})]}, {"text": "ok"}
+    )
+    a.inbound("telegram", "make a video", lambda t, b=None: None)
+    run_all(a)
+    a.inbound("telegram", "(image)", lambda t, b=None: None, [{"id": "u2", "name": "clip.mp4"}])
+    run_all(a)
+    answer = json.loads(script.seen[-1][-1]["content"])["answer"]
+    assert "[attached video @upload:u2 clip.mp4]" in answer
+    assert len(studio.store.runs(None)) == 1
+
+
+def test_identical_call_three_times_in_a_row_is_refused(env):
+    studio, make, _ = env
+    same = call("get_round", {"round_id": "nope"})
+    a, script = make(
+        {"tool_calls": [same]},
+        {"tool_calls": [same]},
+        {"tool_calls": [same]},
+        {"text": "giving up"},
+    )
+    a.inbound("web", "loop", lambda t, b=None: None)
+    run_all(a)
+    results = [json.loads(m["content"]) for m in script.seen[-1] if m["role"] == "tool"]
+    assert "not found" in results[1]["error"] and "3 times in a row" in results[2]["error"]
+    assert last_run(studio)["status"] == "done"
+
+
+def test_a_crashing_tool_returns_an_error_instead_of_hanging_the_run(env, monkeypatch):
+    studio, make, _ = env
+    a, script = make({"tool_calls": [call("get_status")]}, {"text": "ok"})
+
+    def boom(ctx, args):
+        raise AttributeError("'str' object has no attribute 'get'")
+
+    monkeypatch.setattr(a.runtime.tools["get_status"], "handler", boom)
+    a.inbound("web", "status", lambda t, b=None: None)
+    run_all(a)
+    assert "AttributeError" in script.seen[-1][-1]["content"]
+    assert last_run(studio)["status"] == "done"
+
+
+def test_comfy_args_sent_as_a_json_string_are_decoded(env, monkeypatch):
+    _studio, make, _ = env
+    a, _ = make(
+        {
+            "tool_calls": [
+                call("comfy", {"tool": "list_local_models", "args": '{"action": "list"}'})
+            ]
+        },
+        {"text": "ok"},
+    )
+    seen = {}
+    import video_agent.comfy_bridge as cb
+
+    monkeypatch.setattr(cb, "classify", lambda tool, args: seen.setdefault("args", args) and "deny")
+    a.inbound("web", "models", lambda t, b=None: None)
+    run_all(a)
+    assert seen["args"] == {"action": "list"}
+
+
+# ---------------- LoRA catalog in the prompt; cost-based approval ----------------
+def test_agent_prompt_lists_installed_loras(env, tmp_path):
+    studio, make, _ = env
+    loras = tmp_path / "ComfyUI" / "models" / "loras"
+    loras.mkdir(parents=True)
+    from test_loras import write_lora
+
+    write_lora(loras / "face.safetensors", {"modelspec.architecture": "Flux.2-klein-4b/lora"})
+    studio.orch.cfg.comfy_output_dir = str(tmp_path / "ComfyUI" / "output")
+    a, script = make({"text": "ok"})
+    a.inbound("web", "hi", lambda t, b=None: None)
+    run_all(a)
+    system = script.seen[0][0]["content"]
+    assert "## LoRAs installed in ComfyUI" in system and "face.safetensors" in system
+
+
+def _measured(studio, tpl, tier, exec_s):
+    t = studio.store.create(
+        template=tpl,
+        template_sha="x",
+        kind="video",
+        tier=tier,
+        params={},
+        params_hash=f"{tier}{exec_s}",
+    )
+    studio.store.update(t["id"], metrics={"exec_s": exec_s})
+    for st in ("validated", "waiting_memory", "submitted", "review"):
+        studio.store.transition(t["id"], st)
+
+
+def test_unmeasured_tier_runs_without_asking_when_within_budget(env):
+    studio, make, said = env
+    _measured(studio, "h3-t2v", "smoke", 300)  # smoke 5 min → smoke-10s scales to ~10 min
+    a, _ = make(
+        {
+            "tool_calls": [
+                call("queue_round", {"template": "h3-t2v", "prompt": "rain", "tier": "smoke-10s"})
+            ]
+        },
+        {"text": "queued"},
+    )
+    a.inbound("web", "a rainy street", lambda t, b=None: None)
+    run_all(a)
+    assert studio.store.rounds()[0]["tier"] == "smoke-10s"
+    assert not any("要跑吗" in t or "Run it?" in t for t, _ in said)
+
+
+def test_unmeasured_tier_over_budget_or_unknown_asks_with_estimate(env):
+    studio, make, said = env
+    _measured(studio, "h3-t2v", "smoke", 300)  # hd-60s scales far above 20 min
+    a, _ = make(
+        {
+            "tool_calls": [
+                call("queue_round", {"template": "h3-t2v", "prompt": "rain", "tier": "hd-60s"})
+            ]
+        },
+    )
+    a.inbound("web", "a rainy street", lambda t, b=None: None)
+    run_all(a)
+    assert last_run(studio)["status"] == "waiting_approval" or studio.store.rounds() == []
+    ask = [t for t, b in said if b][-1]
+    assert "hd-60s" in ask and "?" not in ask.split("约")[-1][:3]
+    # no measurement at all for the template: time unknown → asks, shown as "?"
+    a2, _ = make(
+        {
+            "tool_calls": [
+                call(
+                    "queue_round", {"template": "freevideo-ref", "prompt": "x", "tier": "light-10s"}
+                )
+            ]
+        },
+    )
+    a2.inbound("web", "go", lambda t, b=None: None)
+    run_all(a2)
+    assert "?" in [t for t, b in said if b][-1]
+
+
+def test_zero_max_steps_means_no_limit(env):
+    """agent_max_steps = 0: the step budget never ends a run (the repeat guard still stops loops)."""
+    studio, make, said = env
+    steps = [
+        {"tool_calls": [call("get_status" if i % 2 else "get_project", cid=str(i))]}
+        for i in range(50)
+    ]
+    a, _ = make(*steps, {"text": "all done"})
+    a.runtime.max_steps = 0
+    a.inbound("web", "long task", lambda t, b=None: None)
+    run_all(a)
+    run = last_run(studio)
+    assert run["status"] == "done" and run["steps"] > 40 and said[-1][0] == "all done"
+
+
 def test_run_stage_suspends_the_agent_until_the_stage_stops_running(env, tmp_path):
     """The agent queued a running stage again and again while an adaptation took 12 minutes;
     now it is suspended on the stage and resumed with its result."""
@@ -619,3 +827,22 @@ def test_clear_queue_stops_runs_and_drops_queued_renders(env):
     a.runtime.resolve(f"round:{studio.store.rounds()[0]['id']}", {"state": "review"})
     run_all(a)
     assert last_run(studio)["status"] == "cancelled"
+
+
+def test_local_rules_override(env):
+    studio, make, _ = env
+    a, _ = make()
+    rt = a.runtime
+    default_agent = rt.system_prompt(None, None)
+    default_planner = a.planner.system_prompt(None, None)
+    local = studio.orch.cfg.data_dir / "prompts"
+    local.mkdir(parents=True, exist_ok=True)
+    (local / "agent_rules.md").write_text("MY AGENT RULES\n")
+    (local / "planner_rules.md").write_text("MY PLANNER RULES\n")
+    assert rt.system_prompt(None, None).startswith("MY AGENT RULES")
+    assert a.planner.system_prompt(None, None).startswith("MY PLANNER RULES")
+    assert "## 可用模板" in rt.system_prompt(None, None)  # templates are still appended
+    for f in local.iterdir():
+        f.unlink()
+    assert rt.system_prompt(None, None) == default_agent
+    assert a.planner.system_prompt(None, None) == default_planner

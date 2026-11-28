@@ -1,0 +1,105 @@
+{
+  "1": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "reference.png"
+    }
+  },
+  "2": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "face.png"
+    }
+  },
+  "9": {
+    "class_type": "FreeVideoReference",
+    "inputs": {
+      "image": [
+        "2",
+        0
+      ]
+    }
+  },
+  "5": {
+    "class_type": "FreeVideoReference",
+    "inputs": {
+      "image": [
+        "1",
+        0
+      ],
+      "previous": [
+        "9",
+        0
+      ]
+    }
+  },
+  "6": {
+    "class_type": "FreeVideoLoRA",
+    "inputs": {
+      "lora": "None",
+      "strength": 1.0
+    }
+  },
+  "7": {
+    "class_type": "FreeVideoLoRA",
+    "inputs": {
+      "lora": "None",
+      "strength": 1.0,
+      "previous": [
+        "6",
+        0
+      ]
+    }
+  },
+  "8": {
+    "class_type": "FreeVideoLoRA",
+    "inputs": {
+      "lora": "None",
+      "strength": 1.0,
+      "previous": [
+        "7",
+        0
+      ]
+    }
+  },
+  "3": {
+    "class_type": "FreeVideoGenerate",
+    "inputs": {
+      "text": "integrated_multimodal_description: [Shot 1] The adult woman from the reference image, in her mid-20s, dances in a softly lit studio. Full-body composition. Consistent face and hairstyle throughout.\n\noverall_soundscape: Soft studio ambience.\n\nnon_diegetic_music: Upbeat pop music.",
+      "width": 640,
+      "height": 384,
+      "seconds": 3.0,
+      "seed": 2026112101,
+      "two_pass": true,
+      "base_steps": 8,
+      "refine_steps": 3,
+      "force_regenerate": false,
+      "preview": false,
+      "refine_from": "",
+      "continue_from": "",
+      "frames": 0,
+      "first_frame_reference": false,
+      "voice_reference": false,
+      "hide_tail": false,
+      "step_cache": "none",
+      "upscale_factor": "2",
+      "references": [
+        "5",
+        0
+      ],
+      "loras": [
+        "8",
+        0
+      ]
+    }
+  },
+  "4": {
+    "class_type": "PreviewAny",
+    "inputs": {
+      "source": [
+        "3",
+        1
+      ]
+    }
+  }
+}

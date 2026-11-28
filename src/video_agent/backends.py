@@ -52,6 +52,11 @@ class ChatResult:
         return max(0, int(self.prompt_tokens - self.ttft_s * 360))
 
     @property
+    def truncated(self) -> bool:
+        """Generation stopped at the output cap (tool-call arguments may be cut off mid-JSON)."""
+        return self.finish_reason == "length"
+
+    @property
     def cache_hit(self) -> bool:
         return self.prompt_tokens > 0 and self.cached_tokens_est > self.prompt_tokens * 0.5
 
@@ -301,11 +306,13 @@ class FuncBackend:
 
     def chat(self, messages, schema=None, max_tokens=None, tools=None) -> ChatResult:
         self.calls.append(messages)
+        self.max_tokens = max_tokens
         out = self.fn(messages, schema) if tools is None else self.fn(messages, tools)
         if isinstance(out, dict):  # for tests: {"text": ..., "tool_calls": [...]}
             return ChatResult(
                 text=out.get("text", ""),
                 tool_calls=out.get("tool_calls", []),
+                finish_reason="length" if out.get("truncated") else "",
                 prompt_tokens=sum(len(m.get("content") or "") for m in messages) // 2,
             )
         return ChatResult(
@@ -490,6 +497,7 @@ class AnthropicBackend:
             raw_content=[b.model_dump(exclude_none=True) for b in resp.content],
             cached_tokens=read,
             backend=f"anthropic:{resp.model}",
+            finish_reason="length" if resp.stop_reason == "max_tokens" else "",
         )
 
     def prewarm(self, messages: list[dict], tools: list[dict] | None = None) -> None:

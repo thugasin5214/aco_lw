@@ -1,0 +1,39 @@
+title: 参考图生视频 + H3 LoRA · FreeVideo / MiniMax H3（人物参考 + 镜头 / 动作 / 风格 LoRA）
+kind: video
+model: freevideo-h3
+source: 标准实验室/03-图生视频-首帧驱动-API.json (first frame replaced by a FreeVideoReference, plus a FreeVideoLoRA chain)
+release_after: free
+# The character picture is a reference (identity across the whole clip, not only frame 1).
+# image2 (optional) = a face close-up: a full-body picture alone gives too few face pixels and
+# the face drifts in close-ups. When given it is Picture 1 and `image` is Picture 2.
+# Up to three H3 LoRAs stack (e.g. camera + motion + content); unused ones stay "None".
+# Put each LoRA's trigger words into the prompt yourself.
+slots:
+  prompt:         {node: "3", field: text, type: str}
+  image:          {node: "1", field: image, type: image, required: true}
+  image2:         {node: "2", field: image, type: image, drop_if_unset: ["2", "9"]}
+  lora:           {node: "6", field: lora, type: str, required: true}
+  lora_strength:  {node: "6", field: strength, type: float, min: 0.0, max: 1.5}
+  lora2:          {node: "7", field: lora, type: str}
+  lora2_strength: {node: "7", field: strength, type: float, min: 0.0, max: 1.5}
+  lora3:          {node: "8", field: lora, type: str}
+  lora3_strength: {node: "8", field: strength, type: float, min: 0.0, max: 1.5}
+  seed:           {node: "3", field: seed, type: int, min: 0}
+  width:          {node: "3", field: width, type: int, min: 256, max: 1920, multiple_of: 32}
+  height:         {node: "3", field: height, type: int, min: 256, max: 1920, multiple_of: 32}
+  seconds:        {node: "3", field: seconds, type: float, min: 1.625, max: 15}
+  base_steps:     {node: "3", field: base_steps, type: int, min: 4, max: 16}
+  refine_steps:   {node: "3", field: refine_steps, type: int, min: 0, max: 8}
+  force_regenerate: {node: "3", field: force_regenerate, type: bool}
+  # FreeVideo samples a first pass at size / upscale_factor and refines at full size: the face is
+  # decided in that first pass (576x1024 at factor 2 = a 288x512 first pass). 1.5 / 1.2 start larger.
+  upscale_factor: {node: "3", field: upscale_factor, type: str}
+  two_pass:       {node: "3", field: two_pass, type: bool}
+  first_frame_reference: {node: "3", field: first_frame_reference, type: bool}   # only with continue_from: the previous part's first frame as a reference
+tiers:
+  smoke:          {width: 640, height: 384, seconds: 3, verified: false}
+  smoke-portrait: {width: 384, height: 640, seconds: 5, verified: false}
+  portrait:       {width: 576, height: 1024, seconds: 5, verified: false}
+  hd:             {width: 1280, height: 736, seconds: 5, verified: false}
+  native-portrait: {width: 480, height: 864, seconds: 5, two_pass: false, verified: false}   # H3's native size, one pass: the face is decided at full resolution
+default_tier: smoke-portrait

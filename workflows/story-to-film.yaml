@@ -18,6 +18,8 @@ settings:
   width: 1280
   height: 720
   fps: 24
+  system_role: system       # system | user: "user" sends no system message and puts the prompt at the start of the user message
+  system_override: {}       # {stage id | "*": text} replaces that skill stage's prompt (the JSON output contract is always kept)
 stages:
   - id: source
     title: Sources

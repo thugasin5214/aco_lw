@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 
 import httpx
 
-from . import llm
+from . import docker, llm
 from .memory import snapshot
 from .registry import ModelInfo, Template
 
@@ -157,6 +157,7 @@ class RenderGate:
     actions: list[str] = field(default_factory=list)
     unloaded_llm: bool = False
     last: dict = field(default_factory=dict)
+    docker: dict = field(default_factory=dict)  # Docker's share of unified memory at submit (read-only)
     waited_s: float = 0.0
 
 
@@ -177,11 +178,19 @@ class ResourceManager:
         self.resident_family: str | None = None
         self.listeners: list[Callable[[], None]] = []  # render finished → wake parked LLM jobs
         self.history: collections.deque = collections.deque(maxlen=720)  # about 1 hour (every 5 s)
+        # read-only Docker attribution (visibility only; psutil already counts the VM in avail/used).
+        # Injected like `executors` so tests can supply a fake probe.
+        self.docker_probe: Callable[[], dict] = docker.docker_snapshot
+        self.docker_aware: bool = getattr(cfg, "docker_aware", True)
+        self.docker_poll_s: float = getattr(cfg, "docker_poll_s", 5.0)
+        self._docker_cache: tuple[float, dict] | None = None
         # injected by the orchestrator: cross-process gating asks the executors directly
         self.executors: dict | None = None
         # FreeVideo films being shot (production film stage): they skip prepare_render but hold the
         # memory just the same
         self.films: set[str] = set()
+        # commands the agent runs with a declared memory estimate: {key: {"gib", "exclusive", "label"}}
+        self.commands: dict[str, dict] = {}
 
         self._lock = threading.RLock()
 
@@ -190,13 +199,40 @@ class ResourceManager:
         snap = self.snap()
         with self._lock:
             ra = self.render_active
+        du = self.docker_usage()
         self.history.append(
-            {"t": time.time(), **snap, "render": ra and ra["kind"], "llm": self.llm.in_flight > 0}
+            {
+                "t": time.time(),
+                **snap,
+                "render": ra and ra["kind"],
+                "llm": self.llm.in_flight > 0,
+                "docker_gib": du.get("total_gib", 0.0) if du.get("available") else 0.0,
+            }
         )
 
     @staticmethod
     def snap() -> dict:
         return snapshot()  # looked up at runtime so tests can replace the module-level snapshot
+
+    def docker_usage(self) -> dict:
+        """Read-only, cached: how much unified memory Docker holds, and per container.
+
+        Attribution only — the admission math already sees Docker through psutil's
+        avail/used, so this value is never subtracted again. Never raises; the probe runs
+        at most once per `docker_poll_s`. Returns `docker.DockerSnapshot.as_dict()` shape.
+        """
+        if not self.docker_aware:
+            return {"available": False, "total_gib": 0.0, "containers": [], "error": "disabled"}
+        now = time.monotonic()
+        cached = self._docker_cache
+        if cached and now - cached[0] < self.docker_poll_s:
+            return cached[1]
+        try:
+            usage = self.docker_probe()
+        except Exception as e:  # noqa: BLE001 - a probe failure must never break scheduling
+            usage = {"available": False, "total_gib": 0.0, "containers": [], "error": str(e)}
+        self._docker_cache = (now, usage)
+        return usage
 
     # ---- LLM gate ----
     def exclusive_classes(self) -> set[str]:
@@ -242,6 +278,9 @@ class ResourceManager:
                 return False, f"{ra['kind']} render running ({ra['family']}) — needs the memory"
             if self.films:
                 return False, "FreeVideo film shooting — needs the memory"
+            big = next((c for c in self.commands.values() if c["exclusive"]), None)
+            if big:
+                return False, f"command holds the memory ({big['label']})"
         ext = self.external_exclusive()
         if ext and not self.llm.loaded():
             # an already-loaded LLM is not unloaded here; this only blocks reloading during an
@@ -315,7 +354,9 @@ class ResourceManager:
 
         freed = False
         while True:
-            busy = executor.busy()
+            with self._lock:
+                cmd_busy = any(c["exclusive"] for c in self.commands.values())
+            busy = executor.busy() or cmd_busy
             snap = self.snap()
             res.last = snap
             if not busy and snap["avail_gib"] >= res.required_gib and snap["pressure"] < 4:
@@ -324,7 +365,9 @@ class ResourceManager:
             if time.monotonic() - start > self.cfg.memory_wait_s:
                 res.actions.append("timed out waiting for memory / an idle queue")
                 break
-            if busy:
+            if cmd_busy:
+                self.log("an agent command holds the memory; waiting")
+            elif busy:
                 self.log(f"{executor.name} busy with other work; waiting")
             elif not freed:
                 if executor.release():
@@ -347,6 +390,7 @@ class ResourceManager:
                 continue
             self.sleep(10)
         res.waited_s = round(time.monotonic() - start, 1)
+        res.docker = self.docker_usage()  # read-only attribution recorded at submit time
         if res.ok:
             with self._lock:
                 self.render_active = {
@@ -356,6 +400,85 @@ class ResourceManager:
                     "exclusive": exclusive,
                 }
         return res
+
+    # ---- agent commands with a memory estimate (run_command's memory_gib / exclusive) ----
+    def admit_command(
+        self, key: str, gib: float, exclusive: bool, label: str, timeout_s: float | None = None
+    ) -> dict:
+        """Block (in the tool worker thread) until the command may start: no exclusive render / film,
+        and available memory ≥ estimate + margin. Frees our own idle models when short (idle
+        executors, an idle LLM), never interrupting running work. Registers the command on success;
+        call command_done(key) afterwards. Returns {"ok", "waited_s", "actions", "reason"}."""
+        start = time.monotonic()
+        timeout = self.cfg.memory_wait_s if timeout_s is None else timeout_s
+        need = round(gib + self.cfg.memory_margin_gib, 1) if gib else 0.0
+        actions: list[str] = []
+        freed = unloaded = False
+        while True:
+            with self._lock:
+                ra = self.render_active
+                blocked = (ra and ra["exclusive"] and f"{ra['kind']} render running") or (
+                    self.films and "FreeVideo film shooting"
+                )
+            snap = self.snap()
+            if (
+                not blocked
+                and exclusive
+                and not unloaded
+                and self.llm.loaded()
+                and self.llm.wait_idle(ANSWER_WAIT_S)
+            ):
+                self.llm.unload()
+                unloaded = True
+                actions.append(f"unloaded LLM {self.cfg.llm_model} (exclusive command)")
+                self.log(actions[-1])
+                continue
+            if not blocked and snap["avail_gib"] >= need and snap["pressure"] < 4:
+                with self._lock:
+                    self.commands[key] = {"gib": gib, "exclusive": exclusive, "label": label}
+                return {
+                    "ok": True,
+                    "waited_s": round(time.monotonic() - start, 1),
+                    "actions": actions,
+                    "need_gib": need,
+                    "avail_gib": snap["avail_gib"],
+                }
+            if not blocked and not freed:
+                for ex in (self.executors or {}).values():
+                    if not ex.busy() and ex.release():
+                        actions.append(
+                            f"released {ex.name} models (free {snap['avail_gib']} < {need} GiB)"
+                        )
+                        self.log(actions[-1])
+                freed = True
+                self.sleep(3)
+                continue
+            if not blocked and not unloaded and self.llm.loaded() and self.llm.wait_idle(60):
+                self.llm.unload()
+                unloaded = True
+                actions.append(f"unloaded LLM (free {snap['avail_gib']} < {need} GiB)")
+                self.log(actions[-1])
+                self.sleep(2)
+                continue
+            if time.monotonic() - start > timeout:
+                why = blocked or f"only {snap['avail_gib']} GiB available, needs {need} GiB"
+                return {
+                    "ok": False,
+                    "waited_s": round(time.monotonic() - start, 1),
+                    "actions": actions,
+                    "reason": why,
+                }
+            self.sleep(5)
+
+    def command_done(self, key: str) -> None:
+        with self._lock:
+            gone = self.commands.pop(key, None)
+        if gone and gone["exclusive"]:  # like a render ending: parked LLM jobs may continue
+            for cb in list(self.listeners):
+                try:
+                    cb()
+                except Exception as e:  # noqa: BLE001
+                    self.log(f"resource listener failed: {e}")
 
     def render_done(
         self,
