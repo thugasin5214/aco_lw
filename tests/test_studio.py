@@ -280,6 +280,36 @@ def test_worker_runs_round_and_notifies(studio):
     assert notified and notified[0]["id"] == rnd["id"] and notified[0]["state"] == "review"
 
 
+def test_worker_survives_comfy_offline_at_startup(studio, monkeypatch):
+    """The daemon can start before ComfyUI: a failed startup reconcile is retried,
+    the worker thread must not die."""
+    calls = []
+    real = studio.orch.recover
+
+    def recover():
+        calls.append(1)
+        if len(calls) == 1:
+            raise ConnectionError("Connection refused")
+        return real()
+
+    monkeypatch.setattr(studio.orch, "recover", recover)
+    notified = []
+    stop = threading.Event()
+    w = Worker(studio.orch, studio, notified.append, stop)
+    waits = []
+    real_wait = stop.wait
+    monkeypatch.setattr(stop, "wait", lambda t=None: waits.append(t) or real_wait(0.01))
+    rnd = studio.start_round("flux2-t2i", {"seed": 9})
+    w.start()
+    deadline = time.time() + 10
+    while not notified and time.time() < deadline:
+        time.sleep(0.05)
+    stop.set()
+    w.join(5)
+    assert len(calls) == 2 and waits[0] == 30
+    assert notified and notified[0]["id"] == rnd["id"]
+
+
 def test_video_task_reference_uses_mid_frame(studio, monkeypatch):
     from video_agent.scheduler import Orchestrator
 

@@ -27,18 +27,17 @@ from pathlib import Path
 
 import jsonschema
 
-from .config import ROOT
+from .assets import LoraCatalog
 from .freevideo import FreeVideoError
 from .i18n import tr
 from .mcp_client import MCPError
-from .planner import AGENT_CLIS, ONLINE_APIS
+from .planner import AGENT_CLIS, ONLINE_APIS, load_rules
 from .policy import Policies, classify_round
 from .production import ProductionError
 from .render import ParamError
 from .studio import StudioError
 
 log = logging.getLogger("aco_lw.agent")
-RULES_FILE = ROOT / "prompts" / "agent_rules.md"
 TERMINAL_RUN = {"done", "failed", "cancelled"}
 MAX_RESULT_CHARS = 4000
 FREEVIDEO_ENV = (
@@ -49,6 +48,16 @@ FREEVIDEO_ENV = (
     "decisions, `run_command` / `load_skill` / `mcp_call` for downloads and research. Finish with "
     "a short report: what you made, where it is (FreeVideo library / project) and what to decide next."
 )
+
+
+def _json_args(raw: str | None) -> str:
+    """Tool-call arguments as a JSON object string; anything else becomes "{}" (old truncated calls)."""
+    try:
+        if isinstance(json.loads(raw or ""), dict):
+            return raw
+    except json.JSONDecodeError:
+        pass
+    return "{}"
 
 
 # ---------------- tool definitions ----------------
@@ -90,6 +99,55 @@ def _obj(props: dict, required: list[str] | None = None) -> dict:
 
 S = {"type": "string"}
 I = {"type": "integer"}
+N = {"type": "number"}
+B = {"type": "boolean"}
+
+LLM_CMD = re.compile(r"\b(?:lms\s+load|va\s+llm\s+(?:use|load|reload))\s+([^\s;&|]+)?")
+
+
+def command_estimate(cmd: str, a: dict, need_gib=None) -> dict:
+    """Memory the command will use: the agent's own estimate (memory_gib / exclusive), or — for
+    loading an LLM — the model size (more reliable). `va llm` switches are gated by the daemon itself."""
+    est = {
+        "gib": float(a.get("memory_gib") or 0),
+        "exclusive": bool(a.get("exclusive")),
+        "minutes": a.get("minutes"),
+        "source": "agent" if a.get("memory_gib") or a.get("exclusive") else None,
+        "gate": True,
+    }
+    m = LLM_CMD.search(cmd)
+    if m:
+        if "va" in m.group(0).split()[0]:
+            est["gate"] = False  # LLMControl checks memory, waits for answers, unloads the old one
+        if need_gib and m.group(1):
+            # unknown model: keep the agent's estimate
+            with contextlib.suppress(Exception):
+                est["gib"], est["source"] = need_gib(m.group(1)), "model size"
+    return est
+
+
+def need_gib_fn(rt):
+    ctl = getattr(rt, "llm_control", None)
+    return (lambda name: ctl.need_gib(ctl.resolve(name))) if ctl else None
+
+
+def gated_command(rt, ctx, a, key):
+    """An approved command: wait until resources allow (by its estimate), run it, release."""
+    tb, rm = rt.toolbox, rt.studio.orch.resources
+    timeout = int(a.get("timeout_s") or 600)
+    est = command_estimate(a["command"], a, need_gib_fn(rt))
+    if not est["gate"] or not (est["gib"] or est["exclusive"]):
+        return tb.run_command(ctx["run_id"], a["command"], timeout)
+    label = a["command"].strip().splitlines()[0][:60]
+    gate = rm.admit_command(key, est["gib"], est["exclusive"], label)
+    info = {**{k: v for k, v in est.items() if k != "gate"}, **gate}
+    if not gate["ok"]:
+        return {"error": f"not started: {gate['reason']}", "resources": info}
+    try:
+        out = tb.run_command(ctx["run_id"], a["command"], timeout)
+    finally:
+        rm.command_done(key)
+    return {**out, "resources": info}
 
 
 def _round_view(store, rnd: dict) -> dict:
@@ -115,6 +173,28 @@ def _round_view(store, rnd: dict) -> dict:
             for t in tasks
         ],
     }
+
+
+VIDEO_EXT = (".mp4", ".mov", ".webm", ".mkv", ".m4v")
+
+
+# the same call (same tool, same arguments) in this many assistant turns in a row is refused: a
+# local model can loop on one command until the step budget is gone
+REPEAT_LIMIT = 3
+REPEAT_ERROR = (
+    "not run: you made this exact call 3 times in a row and the result will not change. "
+    "Try a different approach, or tell the user what is missing."
+)
+
+
+def attachment_note(attachments: list[dict] | None) -> str:
+    """How uploads the user attached are shown to the LLM: the exact @upload id to use."""
+    out = ""
+    for a in attachments or []:
+        name = a.get("name", "")
+        kind = "video" if name.lower().endswith(VIDEO_EXT) else "image"
+        out += f"\n[attached {kind} @upload:{a['id']} {name}]"
+    return out
 
 
 def park_reason(why: str) -> str:
@@ -269,15 +349,23 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
 
         rule = rt.policies.approval("queue_round", "unmeasured_video")
         named = explicit_tier(ctx["origin_text"], tier) if tier else False
+        est = studio.orch.resources.estimator.estimate(tpl, tier) if unmeasured else None
+        # no measurement to scale from at all: the time is unknown, so it counts as over budget
+        minutes = est.exec_s * (a.get("n") or 1) / 60 if est and est.source != "default" else 1e9
+        # over_budget: an unmeasured tier only asks when its estimated render time is above the
+        # budget (the estimate is scaled from the measured tiers of the same template)
+        budget = rt.policies.tool("queue_round").get("budget_min", 20)
         if (
             tpl.kind == "video"
             and unmeasured
-            and (rule == "always" or (rule == "unless_named" and not named))
+            and not (rule == "unless_named" and named)
+            and not (rule == "over_budget" and (named or minutes <= budget))
+            and rule != "never"
         ):
             return Pending(
                 "approval",
                 "",
-                tr("agent_tier_approval", t=tier, tpl=tpl.name),
+                tr("agent_tier_approval", t=tier, tpl=tpl.name, m=round(minutes) if minutes < 1e9 else "?"),
                 on_approve={"tool": "queue_round_approved", "args": a},
                 rule=f"round:{tpl.name}",
             )
@@ -450,15 +538,11 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
         )
 
     def run_command_approved(ctx, a):
-        tb = rt.toolbox
         key = f"job:{ctx['run_id']}:{ctx['call_id']}"
-        timeout = int(a.get("timeout_s") or 600)
         return Pending(
             "event",
             key,
-            start=lambda: tb.jobs.start(
-                key, lambda: tb.run_command(ctx["run_id"], a["command"], timeout)
-            ),
+            start=lambda: rt.toolbox.jobs.start(key, lambda: gated_command(rt, ctx, a, key)),
         )
 
     # ---- production pipeline (stage 3): the agent only reads the plan, runs it as planned or
@@ -657,6 +741,13 @@ def build_tools(rt: AgentRuntime) -> dict[str, Tool]:
         from .comfy_bridge import classify, extract_workflow
 
         tool, args = a["tool"], a.get("args") or {}
+        if isinstance(args, str):  # some models send the nested object as a JSON string
+            try:
+                args = json.loads(args)
+            except json.JSONDecodeError as e:
+                return Done({"error": f"args is not a JSON object: {e}"})
+        if not isinstance(args, dict):
+            return Done({"error": "args must be an object"})
         kind = classify(tool, args)
         if kind == "read":
             return Done(_bridge().call(tool, args))
@@ -1038,12 +1129,23 @@ def general_tools(rt: AgentRuntime) -> list[Tool]:
         why = blocked(cmd)
         if why:
             return Done({"error": f"refused: {why}"})
+        a = {**a, "command": cmd}
         if tb().auto_allowed(cmd):
-            return job(
-                ctx,
-                lambda: tb().run_command(ctx["run_id"], cmd, int(a.get("timeout_s") or 600)),
+            key = f"job:{ctx['run_id']}:{ctx['call_id']}"
+            return Pending(
+                "event",
+                key,
+                start=lambda: tb().jobs.start(key, lambda: gated_command(rt, ctx, a, key)),
             )
         reason = f"\n{a['reason']}" if a.get("reason") else ""
+        est = command_estimate(cmd, a, need_gib_fn(rt))
+        if est["gib"] or est["exclusive"]:
+            reason += "\n" + tr(
+                "agent_cmd_estimate",
+                g=round(est["gib"], 1),
+                x=tr("agent_cmd_exclusive") if est["exclusive"] else "",
+                src=est["source"] or "",
+            )
         return Pending(
             "approval",
             "",
@@ -1153,9 +1255,23 @@ def general_tools(rt: AgentRuntime) -> list[Tool]:
             "run_command",
             "Run a shell command (zsh) in this run's own working directory. The user approves "
             "every command (shown verbatim with your reason) unless policy pre-approves it; then "
-            "it runs in the background and you get exit code, output tail and new files. Never "
-            "use it to reach ComfyUI/FreeVideo (use the generation tools) or to manage the LLM.",
-            _obj({"command": S, "reason": S, "timeout_s": I}, ["command", "reason"]),
+            "the orchestrator runs it in the background when resources allow, and you get exit "
+            "code, output tail and new files. For heavy commands give memory_gib (peak unified "
+            "memory you expect it to use) and exclusive=true if nothing else big may run "
+            "alongside (the LLM is unloaded meanwhile); the orchestrator waits for memory before "
+            "starting it. To switch your own local model use `va llm use <name>` (`va llm list` "
+            "shows models). Never use it to reach ComfyUI/FreeVideo (use the generation tools).",
+            _obj(
+                {
+                    "command": S,
+                    "reason": S,
+                    "timeout_s": I,
+                    "memory_gib": N,
+                    "exclusive": B,
+                    "minutes": N,
+                },
+                ["command", "reason"],
+            ),
             "approval",
             run_command,
         ),
@@ -1317,7 +1433,7 @@ class AgentRuntime:
         planner,
         enqueue: Callable[[Callable[[], None]], None],
         say_for: Callable[[str], Callable],
-        max_steps: int = 16,
+        max_steps: int = 0,
     ):
         """enqueue: put a step into the planner queue (single thread); say_for(channel): a function that sends a message to that channel."""
         self.studio, self.planner, self.store = studio, planner, studio.store
@@ -1327,6 +1443,8 @@ class AgentRuntime:
         from .toolbox import Toolbox
 
         self.toolbox = Toolbox(self.cfg, self)
+        self.llm_control = None  # injected by Actions (switching / loading the local LLM)
+        self.loras = LoraCatalog(self.cfg, studio.orch.registry)
         # sending you files (injected per channel by the daemon; by default just a message with the
         # paths)
         self.send_files: Callable[[str, list], None] = lambda ch, items: self.say_for(ch)(
@@ -1341,10 +1459,16 @@ class AgentRuntime:
     def system_prompt(self, project_id: str, session: dict | None) -> str:
         # agent rules + the same template docs, project memory and session summary as the planner
         # (stable prefix)
-        rules = RULES_FILE.read_text().strip()
+        rules = load_rules("agent_rules.md", self.studio.orch.cfg.data_dir)
         skills = self.toolbox.skills_index()
         if skills:
             rules += "\n\n## Skills (load_skill before a task one covers)\n" + skills
+        loras = self.loras.text()
+        if loras:
+            rules += (
+                "\n\n## LoRAs installed in ComfyUI (a LoRA only works with its own base model)\n"
+                + loras
+            )
         mem = self.toolbox.memory_index()
         if mem:
             rules += "\n\n## Your memory index (memory_read for details)\n" + mem
@@ -1365,7 +1489,7 @@ class AgentRuntime:
                     {
                         "id": c["id"],
                         "type": "function",
-                        "function": {"name": c["name"], "arguments": c["arguments"]},
+                        "function": {"name": c["name"], "arguments": _json_args(c["arguments"])},
                     }
                     for c in m["tool_calls"]
                 ]
@@ -1446,9 +1570,7 @@ class AgentRuntime:
         attachments: list[dict] | None = None,
     ) -> dict:
         run = self.store.create_run(project_id, session_id, channel, text)
-        att = "".join(
-            f"\n[attached image @upload:{a['id']} {a.get('name', '')}]" for a in attachments or []
-        )
+        att = attachment_note(attachments)
         live = self.planner.live_state(project_id)
         content = f"## Live state\n{live}\n\n## User\n{text}{att}"
         self.store.add_agent_msg(run["id"], "user", content)
@@ -1520,7 +1642,7 @@ class AgentRuntime:
                 return
             if self._unresolved(run_id):
                 return  # some tool results are still out; wait for the event / approval
-            if run["steps"] >= self.max_steps:
+            if self.max_steps and run["steps"] >= self.max_steps:  # 0: no limit
                 self._finish(run, tr("agent_step_budget", n=self.max_steps), "done")
                 return
             kind, what = self._choose(run)
@@ -1571,7 +1693,7 @@ class AgentRuntime:
             self._log_policy(
                 run, f"local LLM unavailable → this step used {res.backend or backend.name}"
             )
-        calls = res.tool_calls
+        calls = [self._check_args(c, res.truncated) for c in res.tool_calls]
         extra = (
             {"anthropic": res.raw_content} if (res.backend or "").startswith("anthropic") else {}
         )
@@ -1601,8 +1723,30 @@ class AgentRuntime:
         for c in calls:
             if self._cancelled(run_id):
                 break
+            if self._repeats(run_id, c) >= REPEAT_LIMIT:
+                self._tool_done(run, c, {}, {"error": REPEAT_ERROR})
+                continue
             self._execute(run, c, say)
         self._advance(run_id)
+
+    @staticmethod
+    def _call_key(c: dict) -> str:
+        try:
+            args = json.dumps(json.loads(c.get("arguments") or "{}"), sort_keys=True)
+        except (json.JSONDecodeError, TypeError):
+            args = str(c.get("arguments"))
+        return f"{c.get('name')}:{args}"
+
+    def _repeats(self, run_id: str, call: dict) -> int:
+        """How many of the latest assistant turns in a row (this one included) made this same call."""
+        key, n = self._call_key(call), 0
+        for m in reversed(self.store.agent_msgs(run_id)):
+            if m["role"] != "assistant":
+                continue
+            if not any(self._call_key(c) == key for c in m["tool_calls"] or []):
+                break
+            n += 1
+        return n
 
     def _call(self, backend, run: dict, rm):
         inflight = (
@@ -1744,7 +1888,31 @@ class AgentRuntime:
             "call the same tool again to keep waiting",
         }
 
+    def _check_args(self, call: dict, truncated: bool) -> dict:
+        """Arguments that are not valid JSON (usually cut off at max_tokens) are stored as "{}" plus
+        an error, so the history replays cleanly and the tool is not run with missing parameters."""
+        raw = call.get("arguments") or ""
+        if not truncated and not raw.strip():
+            return {**call, "arguments": "{}"}
+        try:
+            if isinstance(json.loads(raw), dict):  # complete even if the turn was cut off later
+                return call
+        except json.JSONDecodeError:
+            pass
+        if truncated:
+            err = (
+                f"output hit the output cap ({self.cfg.llm_max_tokens or 'model maximum'} tokens) "
+                "and the tool call was cut off "
+                f"after {len(raw)} characters of arguments; nothing was run. Split large content "
+                "into several smaller calls (e.g. several smaller files)."
+            )
+        else:
+            err = f"arguments are not valid JSON ({len(raw)} characters); nothing was run"
+        return {**call, "arguments": "{}", "bad_args": err}
+
     def _execute(self, run: dict, call: dict, say) -> None:
+        if call.get("bad_args"):
+            return self._tool_done(run, call, {}, {"error": call["bad_args"]})
         tool = self.tools.get(call["name"])
         ctx = {
             "run_id": run["id"],
@@ -1778,6 +1946,11 @@ class AgentRuntime:
             out = Done({"error": str(e)})
         except jsonschema.ValidationError as e:
             out = Done({"error": f"schema: {e.message}"})
+        # any other bug in a tool handler: report it to the agent instead of killing the step,
+        # which would leave the run stuck in "running" with a call that never gets a result
+        except Exception as e:
+            log.exception("tool %s failed", call["name"])
+            out = Done({"error": f"{type(e).__name__}: {e}"})
         if isinstance(out, Pending) and out.kind == "approval" and out.on_approve:
             how = self.auto_approval(out.rule, out.bypassable)
             # bypass mode or an "always allow" rule you set: do not ask, run the approved action
@@ -2140,11 +2313,14 @@ class AgentRuntime:
         self.resolve(m["meta"]["key"], result)
         return tr("agent_approved")
 
-    def answer_pending_question(self, channel: str, session_id: str, text: str) -> bool:
+    def answer_pending_question(
+        self, channel: str, session_id: str, text: str, attachments: list[dict] | None = None
+    ) -> bool:
+        answer = text + attachment_note(attachments)
         for run in self.store.runs(session_id, "waiting_user", "delegated"):
             if run["channel"] != channel:
                 continue
-            if self.resolve(f"ask:{run['id']}", {"answer": text}):
+            if self.resolve(f"ask:{run['id']}", {"answer": answer}):
                 return True
         return False
 

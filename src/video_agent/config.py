@@ -27,8 +27,9 @@ class Settings:
     # once the last call's prompt exceeds this, compact older messages
     session_summary_tokens: int = 16000
     session_keep_messages: int = 8  # recent messages kept verbatim when compacting
-    # max LLM calls by the agent per request (general tasks take many steps)
-    agent_max_steps: int = 40
+    # max LLM calls by the agent per request; 0 = no limit (the repeat guard still stops a loop of
+    # identical calls)
+    agent_max_steps: int = 0
     # output cap per LLM reply in tokens; 0 = the model's maximum (thinking models spend thousands
     # of tokens before answering — a small cap leaves an empty answer)
     llm_max_tokens: int = 0
@@ -79,6 +80,11 @@ class Settings:
     memory_wait_s: float = 600.0
     poll_interval_s: float = 2.0
     task_timeout_s: float = 5400.0
+    # the resource scheduler attributes Docker's share of unified memory (read-only probe).
+    # Visibility only: on macOS the Docker Desktop VM already counts in psutil used/available,
+    # so this does not change the admission math (that would double-count).
+    docker_aware: bool = True
+    docker_poll_s: float = 5.0  # cache window for the read-only `docker stats` probe
     # use the FreeVideo agent API (character cards, multi-shot films); off in tests
     freevideo_agent: bool = True
     language: str = "en"  # default language of the console / system messages: en | zh
@@ -133,7 +139,7 @@ EDITABLE: list[tuple[str, str, str, str]] = [
     ("llm", "llm_idle_ttl_s", "空闲卸载秒数", "live"),
     ("llm", "llm_restore_after_video", "视频渲染结束后重新加载 LLM", "live"),
     ("llm", "planner_fast", "末尾加 /no_think（思考更少、更快）", "live"),
-    ("agent", "agent_max_steps", "一次请求最多调用 LLM 的次数", "live"),
+    ("agent", "agent_max_steps", "一次请求最多调用 LLM 的次数（0 = 不限）", "live"),
     ("llm", "llm_max_tokens", "单次回复的输出上限（token，0 = 模型最大值）", "live"),
     ("agent", "session_summary_tokens", "超过此 prompt 长度压缩较早消息", "live"),
     ("agent", "session_keep_messages", "压缩时保留的最近原话条数", "live"),
@@ -154,6 +160,7 @@ EDITABLE: list[tuple[str, str, str, str]] = [
     ("render", "round_size", "每轮候选数", "restart"),
     ("render", "memory_margin_gib", "渲染前预留内存（GiB）", "live"),
     ("render", "memory_wait_s", "等内存的最长秒数", "live"),
+    ("render", "docker_aware", "资源曲线计入 Docker 占用（只读）", "live"),
     ("render", "task_timeout_s", "单个任务超时秒数", "live"),
     ("render", "comfy_output_dir", "ComfyUI output 目录（删除产物时连同原图）", "live"),
     ("system", "language", "系统消息语言：en / zh", "live"),

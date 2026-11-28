@@ -237,6 +237,7 @@ class Orchestrator:
                 "actions": gate.actions,
                 "waited_s": gate.waited_s,
                 "at_submit": gate.last,
+                "docker": gate.docker,
             },
         }
         self.store.update(task_id, metrics=metrics)

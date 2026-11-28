@@ -23,21 +23,84 @@
 
 ## 2. 启动与停止
 
-### 启动顺序
-1. **ComfyUI**：确认 http://127.0.0.1:8188 能打开（FreeVideo-local 环境）。
-2. **LM Studio**：应用开着即可；不需要手动加载模型。
-3. **aco_lw**：执行下面的命令。
+### 一共三个服务
+
+| 服务 | 地址 | 作用 |
+|---|---|---|
+| ComfyUI（带 FreeVideo 插件） | http://127.0.0.1:8188 | 出图、出视频。FreeVideo 不是单独的程序，它是 ComfyUI 里的插件，ComfyUI 起来它就在 |
+| LM Studio | http://127.0.0.1:1234 | 本地 LLM（aco 的大脑） |
+| aco（`va daemon`） | http://127.0.0.1:8790 | 编排器 + 控制台 + Telegram |
+
+先开哪个都可以：aco 先起来时会每 30 秒重试连接 ComfyUI，连上之前排队的任务原地等着。
+
+### 1）启动 ComfyUI + FreeVideo
+本机没有装 FreeVideo.app，ComfyUI 用 FreeVideo-local 自带的 Python 直接启动（参数与 FreeVideo 启动器一致，不要改）。
+
+前台运行（开一个终端窗口专门放它，`Ctrl-C` 停止）：
+
+```sh
+cd ~/Documents/ChatGPT/jev/FreeVideo-local/ComfyUI
+../envs/comfyui-630aa60d8624e901/bin/python main.py --listen 127.0.0.1 --port 8188
+```
+
+后台运行（关掉终端也不停）：
+
+```sh
+cd ~/Documents/ChatGPT/jev/FreeVideo-local/ComfyUI
+nohup ../envs/comfyui-630aa60d8624e901/bin/python main.py --listen 127.0.0.1 --port 8188 >/dev/null 2>&1 &
+```
+
+- 约 10–20 秒后就绪（实测 18 s，含 aco 一起启动）。检查：`curl -s http://127.0.0.1:8188/system_stats` 有 JSON 返回；或浏览器打开 http://127.0.0.1:8188 。
+- 打开 FreeVideo 面板：浏览器进 http://127.0.0.1:8188 → **工作流 → 浏览模板 → FreeVideo → FreeVideo-All-in-One**；FreeVideo agent 对话在 **Extensions → FreeVideo**。
+- 日志：FreeVideo 插件把 ComfyUI 输出写到 `~/Documents/ChatGPT/jev/FreeVideo-local/launcher/comfy-runs/connected-<时间>-<pid>/comfy.log`（最新的目录就是这次）。
+- 停止：前台 `Ctrl-C`；后台 `pkill -f "ComfyUI/main.py"`。停之前先确认没有在跑的视频，否则那条会中断。
+- `envs/comfyui-<hash>` 目录名以后 FreeVideo 升级可能变；以 `FreeVideo-local/launcher/comfy-host.json` 里的 `python` 为准。
+
+### 2）启动 LM Studio
+打开 LM Studio 应用即可（或终端 `lms server start`）。不需要手动加载模型：aco 用到时自己加载、空闲时卸载。检查：`curl -s http://127.0.0.1:1234/v1/models`。
+
+### 3）启动 aco
+前台运行（`Ctrl-C` 停止，日志同时写进 `data/daemon.log`）：
 
 ```sh
 cd ~/workplace/video-agent
 uv run va daemon 2>&1 | tee -a data/daemon.log
 ```
 
-看到 `Telegram listener started (whitelist [...])` 与 `Console: http://127.0.0.1:8790` 即就绪。启动时会自动对账（`recover`），只收集已完成的任务，**不会重复提交**。
+后台运行：
+
+```sh
+cd ~/workplace/video-agent
+nohup uv run va daemon --port 8790 >> data/daemon.log 2>&1 &
+```
+
+- 就绪标志：日志出现 `Telegram listener started (whitelist [...])` 和 `Console: http://127.0.0.1:8790`。检查：`curl -s http://127.0.0.1:8790/api/system`，返回里 `comfy.online` 为 `true`、`daemon.alive` 为 `true`。
+- 打开控制台：浏览器进 http://127.0.0.1:8790 ；Telegram 直接给 bot 发消息。
+- 启动时会自动对账（`recover`），只收集已完成的任务，**不会重复提交**。ComfyUI 没开时日志会出现 `Startup reconcile failed (ComfyUI offline?)`，开了 ComfyUI 之后自动继续，不用重启 aco。
+- 看日志：`tail -f data/daemon.log`。
+
+### 一键全开（后台）
+
+```sh
+FV=~/Documents/ChatGPT/jev/FreeVideo-local
+(cd $FV/ComfyUI && nohup ../envs/comfyui-630aa60d8624e901/bin/python main.py --listen 127.0.0.1 --port 8188 >/dev/null 2>&1 &)
+(cd ~/workplace/video-agent && nohup uv run va daemon --port 8790 >> data/daemon.log 2>&1 &)
+```
+
+### 看哪些在运行
+
+```sh
+pgrep -fl "ComfyUI/main.py"; pgrep -fl "va daemon"
+curl -s -o /dev/null -w "ComfyUI %{http_code}\n" http://127.0.0.1:8188/system_stats
+curl -s -o /dev/null -w "aco %{http_code}\n" http://127.0.0.1:8790/api/system
+```
+
+两个都是 `200` 就是正常。
 
 ### 停止
-- 在运行 daemon 的终端按 `Ctrl-C`，或 `pkill -f "va daemon"`。
-- 正在 ComfyUI 里跑的任务**不会被取消**；下次启动 daemon 会按 prompt_id 对账并收回产物。
+- aco：前台 `Ctrl-C`；后台 `pkill -f "va daemon"`。
+- 正在 ComfyUI 里跑的任务**不会因为停 aco 而取消**；下次启动 aco 会按 prompt_id 对账并收回产物。
+- 重启 aco 前先看控制台没有“运行中”的任务、agent 没在回答。
 
 ### 只看不跑
 `uv run va serve`：只开控制台（浏览 + 审阅），不出图。排队任务要等 daemon 起来才执行。
@@ -46,6 +109,7 @@ uv run va daemon 2>&1 | tee -a data/daemon.log
 
 ### 3.1 一次完整的创作循环
 1. **提需求**：控制台「项目与对话」或 Telegram，中英文都可以。例：“同一个金发学院少女，回头看向镜头的半身照，傍晚暖色窗光”。可以**附参考图**（控制台 📎，或在 Telegram 直接发图）并说“参照这张脸”。
+   Telegram 里**只发图、不写说明**时，aco 先回一句“收到”，不开始干活；30 分钟内你的下一条消息会把图带上（例如先发定妆照，再发“用这个定妆生成一个视频”）。agent 问你要图时，直接发图就算回答。
    规划器先秒回“收到”，通常 10–20 s 理解（冷启动多约 15 s 加载）后排队一轮候选（图片默认 4 张，视频 1 条）。
 2. **等出图**：图片约 12 s / 张；视频 640×384×3s 约 5–6 min。完成后控制台「审阅」出现角标，Telegram 收到原图文件 + 按钮。
 3. **审阅**（控制台 `#review` 或 Telegram 按钮，二者等价）：
@@ -88,6 +152,7 @@ uv run va daemon 2>&1 | tee -a data/daemon.log
 | `/memory` · `/memory add 文本` · `/memory del 编号` | 项目记忆 |
 | `/pack` | 当前基准包 |
 | `/model [名字]` | 查看 / 切换 agent 的大脑（本地或在线，见 §3.10） |
+| `/llm` · `/llm use 名称` · `/llm load` · `/llm unload` | 列出本机已下载的模型；切换 aco 用的本地模型（先卸载旧的、检查内存，加载好了告诉你）。命令行等价于 `va llm …` |
 | `/permissions [default\|bypass\|forget 规则\|all]` | 审批模式与“始终允许”规则（见 §3.10） |
 | `/fv 任务` | 把视频任务交给 FreeVideo agent |
 | `/whoami` | 显示 chat_id（任何人可用，用于配置白名单） |
@@ -181,7 +246,7 @@ llm_fallback = ["anthropic", "claude_code", "codex"]  # 依次尝试
 
 | 工具 | 作用 | 审批 |
 |---|---|---|
-| 生成工具（`queue_round`、`wait_for_round`、制片、ComfyUI 探索…） | 出图出视频、审阅、制片 | 未实测的视频档位要批准 |
+| 生成工具（`queue_round`、`wait_for_round`、制片、ComfyUI 探索…） | 出图出视频、审阅、制片 | 未实测的视频档位：估算耗时超过 20 分钟（`policies.yaml` 的 `budget_min`）或估不出来时才要批准；你在消息里点名了档位就不问 |
 | `web_fetch` | 读网页正文（无登录、无 JS） | 不用 |
 | `run_command` | 在本次运行的工作目录 `data/agent-work/<运行ID>/` 里跑 zsh 命令（如 agent-reach、ffmpeg） | **要**（见下面的权限） |
 | `read_file` / `write_file` | 读 `data/` 与 skill 目录；只写工作目录 | 不用 |
@@ -194,7 +259,7 @@ llm_fallback = ["anthropic", "claude_code", "codex"]  # 依次尝试
 | `delegate_freevideo`（`/fv`） | 整个视频任务交给 FreeVideo agent | 要；需 `freevideo_agent_online` |
 - **agent 不轮询。** 所有耗时的工具都会让 agent 挂起，做完后带着结果把它唤醒：渲染（`wait_for_round`）、制片阶段（`run_stage`、`wait_for_stage`）、整个制片（`create_production`、`review_stage` 会一直等到制片需要你处理或已完成；`wait_for_production`）、命令、网页读取、MCP 调用、委派的 agent。挂起期间本地 LLM 空出来专心做事；长篇小说的一个 LLM 阶段可能要 10–20 分钟，显示「运行中」但还没有输出是正常的。
 
-**硬拒绝（任何模式都拒绝）**：直连 ComfyUI `:8188`、读 FreeVideo token、`kill` / `pkill` 结束进程、`lms load|unload`。执行策略在 `policies.yaml`（每个工具的开关、参数上限、MCP 审批规则）。
+**硬拒绝（任何模式都拒绝）**：直连 ComfyUI `:8188`、读 FreeVideo token、`kill` / `pkill` 结束进程。加载 / 切换 LLM（`va llm use`、`lms load`）是普通的需审批命令。命令可带 `memory_gib` / `exclusive` 资源预估：批准后编排器等内存够了才执行（会等视频渲染结束；独占时先卸载 LLM），审批消息里显示预估。执行策略在 `policies.yaml`（每个工具的开关、参数上限、MCP 审批规则）。
 
 **权限模式**（类似 Claude Code 的 permission mode）：
 - `default`（默认）：要审批的动作逐条发按钮：**✅ 同意 / ✅ 始终允许（规则）/ ✕ 不要**。“始终允许”记一条规则，以后同类不再问：命令按程序名（`cmd:ffmpeg`，只对不带管道 / 串联 / 重定向的单条命令）、MCP 按工具（`mcp:exa.web_search_exa`）、委托按对象（`delegate:codex`）、未实测视频档位按模板（`round:h3-t2v`）。
@@ -216,6 +281,26 @@ llm_fallback = ["anthropic", "claude_code", "codex"]  # 依次尝试
 
 ChatGPT 订阅本身不是 API：用订阅走 `codex`；`openai` 走按量计费的 API key。Codex / Claude Code 只拿到 aco_lw 的工具（经 MCP），命令照样受权限模式约束。
 
+### 3.11 人物 LoRA：锁住同一个人
+- **装到哪**：LoRA 文件放进 `FreeVideo-local/ComfyUI/models/loras/`。aco 自动读取文件里记录的底模，列进 agent 的提示词，并写明哪些模板能用它。
+- **写说明（建议）**：在 `data/loras.yaml`（不进 git）给每个 LoRA 写上人物、风格、推荐强度和触发词，例如：
+  ```yaml
+  my-face.safetensors:
+    person: 女主
+    style: photo
+    strength: 0.5
+    trigger: null
+  ```
+  改完不用重启，下一次对话就生效。
+- **模板**：`flux2-lora-t2i`（文生图）和 `flux2-lora-edit`（参考图 + LoRA）。参数 `lora` 必填，`lora_strength` 一般 0.45–0.6。
+- **视频怎么锁人**：
+  - LoRA 是 Klein 4B 的图片 LoRA，不能直接加载到 H3 视频模型里，要先用它出人物图，再交给视频。
+  - agent 会先加载 `character-consistency` skill：用 LoRA 出正脸和每个镜头的首帧，再用 `freevideo-ref` 出视频（不带参考视频，只给两张参考图，脸会贯穿整段）。
+  - 长视频拆成 5–10 秒的镜头，每个镜头用自己的首帧，最后拼接。
+  - `h3n-r2v` 在 Mac 上跑不了（MPS 缺 int8 矩阵乘法）。
+- **H3 视频 LoRA**（镜头、舞蹈 / 动作、画风、成人）：用模板 `h3-lora-ref`。人物图作为参考图贯穿整段，`lora` / `lora2` / `lora3` 最多叠 3 个 LoRA，触发词要写进 prompt。很多社区 LoRA 文件里没记底模，要在 `data/loras.yaml` 写 `base: minimax-h3`，agent 才知道配哪个模板。成人 LoRA 只用于明确成年的虚构角色。
+- **跟你确认**：agent 会用 `propose_memory` 提议「某人物 → 某 LoRA、强度」，你确认后，这个项目以后都会自动用上。
+
 ## 4. 资源与内存策略（自动执行）
 
 | 情况 | 系统行为 |
@@ -235,7 +320,7 @@ ChatGPT 订阅本身不是 API：用订阅走 `codex`；`openai` 走按量计费
 | 现象 | 检查 | 处理 |
 |---|---|---|
 | 顶栏“daemon 未运行” | `pgrep -fl "va daemon"` | 按 §2 启动；排队任务会自动继续 |
-| “ComfyUI 离线” | 打开 http://127.0.0.1:8188 | 启动 FreeVideo-local 的 ComfyUI；aco_lw 不会自己启动它 |
+| “ComfyUI 离线” | 打开 http://127.0.0.1:8188 | 按 §2「启动 ComfyUI + FreeVideo」启动；aco 不会自己启动它，连上后自动继续 |
 | 任务卡在“等待内存” | 顶栏内存 / 压力；ComfyUI 队列 | 关掉占内存的应用，或 `/cancel`；超过 10 min 会标为超时、不提交 |
 | 任务“超时” | `va status <ID>` 看 prompt_id | 生成可能仍在跑：`va recover` 对账收回；不要手动重提 |
 | 任务“失败” | 控制台详情页的错误 / ComfyUI 终端日志 | 改参数后“重做”；失败的任务允许同参数重提 |
