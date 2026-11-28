@@ -16,6 +16,8 @@ import httpx
 
 from .i18n import roles, tr
 
+MEDIA_ONLY = "(image)"  # text of a photo / video sent without a caption
+
 log = logging.getLogger("aco_lw.telegram")
 
 
@@ -184,7 +186,7 @@ class TelegramBot:
             if not text and not attachments:
                 return
             reply = lambda m, b=None: self.api.send(chat, m, b)
-            self.actions.inbound("telegram", text or "(image)", reply, attachments or None)
+            self.actions.inbound("telegram", text or MEDIA_ONLY, reply, attachments or None)
             return
         if "callback_query" in u:
             cq = u["callback_query"]

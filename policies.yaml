@@ -20,6 +20,8 @@ continuation:
 
 # What tools may do. allow: true | false. approval: never | unless_named | always
 #   unless_named = needs your button unless your own message named it (e.g. "use #2", "hd 60s")
+#   over_budget (queue_round.unmeasured_video) = like unless_named, but also runs without asking when
+#     the estimated render time (n × time, scaled from the template's measured tiers) is ≤ budget_min
 execution:
   network: true                        # web_fetch; commands reach the internet only after approval
   tools:
@@ -27,7 +29,7 @@ execution:
     list_templates: {allow: true}
     get_project: {allow: true}
     get_round: {allow: true}
-    queue_round: {allow: true, max_n: 8, unmeasured_video: unless_named}
+    queue_round: {allow: true, max_n: 8, unmeasured_video: over_budget, budget_min: 20}
     queue_pipeline: {allow: true, max_steps: 8}
     wait_for_round: {allow: true}
     redo_round: {allow: true}

@@ -94,7 +94,8 @@ def test_generation_and_llm_side_effects_are_refused_even_before_approval(env): 
     assert "refused" in tool_result(studio, run["id"], "run_command")["error"]
     assert not any(b for _, b in said)  # no approval buttons were sent
     assert blocked("cat ~/x/FreeVideo-local/agent/token")
-    assert blocked("lms unload --all") and blocked("pkill -f ComfyUI")
+    assert blocked("pkill -f ComfyUI")
+    assert blocked("lms unload --all") is None  # LLM load / unload: approved like any command
     assert blocked("ffmpeg -i a.mp4 b.mp4") is None
 
 

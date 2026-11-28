@@ -25,6 +25,8 @@ class Slot(BaseModel):
     max: float | None = None
     multiple_of: int | None = None
     required: bool = False
+    # optional inputs: nodes removed (with every link into them) when the slot is not given
+    drop_if_unset: list[str] = []
 
 
 class Tier(BaseModel):
@@ -71,6 +73,7 @@ class ModelInfo(BaseModel):
     adaptive: bool = False
     resource: Literal["memory", "cpu"] = "memory"  # cpu: skips the memory gate (e.g. FFmpeg)
     exec_s: float | None = None  # default duration when there is no history (estimate)
+    lora_base: list[str] | None = None  # LoRA families this model loads (see assets.base_of)
 
 
 def load_template(dir_: Path, origin: str = "builtin") -> Template:

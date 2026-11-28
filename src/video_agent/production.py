@@ -907,12 +907,17 @@ class Production:
             for name in st.extra_skills
             if name in self.skills.skills
         ]
+        settings = prod["settings"] or {}
+        # system_override: {stage id | "*": text} replaces the skill / reference skills /
+        # instructions part of this stage's system prompt; "" drops it. The output contract is
+        # always kept, since the stage output is parsed as JSON.
+        overrides = settings.get("system_override") or {}
+        override = overrides.get(st.id, overrides.get("*"))
+        body = (override,) if override is not None else (skill.prompt(), *extras, st.instructions.strip())
         system = "\n\n".join(
             p
             for p in (
-                skill.prompt(),
-                *extras,
-                st.instructions.strip(),
+                *body,
                 "## Output contract\nReply with exactly one JSON object (no prose, no code fence) "
                 "that validates against this JSON Schema:\n"
                 + json.dumps(schema, ensure_ascii=False),
@@ -933,9 +938,14 @@ class Production:
             user["revision_request"] = art["note"]
         if extra:
             user.update(extra)
+        user_text = json.dumps(user, ensure_ascii=False, indent=1)
+        # system_role: "system" (default) sends a system message; "user" sends no system message
+        # and puts the same text at the start of the user message (for models tuned without one)
+        if settings.get("system_role", "system") == "user":
+            return [{"role": "user", "content": f"{system}\n\n{user_text}"}]
         return [
             {"role": "system", "content": system},
-            {"role": "user", "content": json.dumps(user, ensure_ascii=False, indent=1)},
+            {"role": "user", "content": user_text},
         ]
 
     def run_skill_job(self, art: dict) -> dict:
