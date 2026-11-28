@@ -1,0 +1,22 @@
+# Motion LoRA use, and a change to the character after the casting image.
+id: s04-rooftop-dance
+title: Rooftop dance
+brief: |
+  A 20-second vertical clip (9:16): a young man in his twenties with curly hair, a white T-shirt and
+  jeans dances alone on a city rooftop at sunset. Show the dance clearly: full body, the moves
+  should look like real dancing, not swaying.
+target: {episodes: 1, seconds_per_episode: 20, aspect_ratio: "9:16"}
+characters:
+  - {name: dancer}
+expect:
+  must_keep:
+    - a man dances on a rooftop at sunset
+    - full body is visible
+    - the motion is recognisable dancing
+  loras: [dance]
+user:
+  steer:
+    - after: first_image
+      say: Make his hair short, not curly.
+      check: the dancer has short hair in the final clip
+limits: {hours: 3}

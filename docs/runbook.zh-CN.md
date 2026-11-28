@@ -335,6 +335,24 @@ story-to-film:
     characters: {on_reject: wait}
 ```
 
+### 3.14 aco-bench：端到端衡量 agent
+`va bench` 让一个故事 brief 在运行中的 aco 上跑一遍，由脚本扮演用户，然后给交付结果和代价打分。用例在 `bench/cases/`（六个小故事：一致性、双人、运镜 / 舞蹈 LoRA、跨场景连贯、从一句话扩写；多数在中途会插一句话）。`va bench import-vahbench` 把 VAHBench 的五个短剧 brief 加到 `data/bench/cases/`。
+
+```sh
+uv sync --extra bench                       # 人脸一致性用的 insightface（首次使用下载约 280 MB 模型）
+uv run va bench cases
+uv run va bench run s03-crash-zoom-reveal --brain local          # 需要 daemon 在运行
+uv run va bench run s03-crash-zoom-reveal --brain claude_code    # 同一个用例，换在线大脑
+uv run va bench report                       # 汇总表：data/bench/report.md
+```
+
+- **模拟用户**：批准请求（安装节点 / 下载模型一律拒绝）、用用例里的话回答提问、通过制片阶段、选候选，并在指定时刻插话（`first_image`、`first_video`、`seconds:N`、`stage:<id>`、`run_done`）。用在线大脑时只在运行期间打开 `allow_online`，结束后恢复大脑、权限模式和 `allow_online`。
+- **取自 aco 自己的记录**：总耗时 / LLM / 渲染时间、每秒成片花的渲染秒数、浪费的渲染时间、内存压力；LLM 轮数、工具调用、被拒的重复调用、连续相同调用、状态查询；`look` 次数、没检查就放大的渲染、没先出小样；没跑起来的渲染；用到的 LoRA 和底模不匹配、预期 LoRA 命中；转向延迟（插话后第一次回复 / 第一次动作）。
+- **人脸一致性**：insightface（ArcFace）比较抽帧和人物参考图（用例给的，否则用第一张定妆图）的相似度，以及帧与帧之间。
+- **在线 judge**：Claude Code（`claude -p`，用你的登录）看小样表、brief、插话和最终汇报，按忠实、一致、合理、画质、表现力打分（1–5，3 = 可用），并检查必保清单、插话是否照做、汇报是否诚实。实测一次评分约 17 秒。
+- **VAHBench**（run / score 加 `--vahbench`）：把运行导出成 VAHBench 的目录格式（`data/bench/export/aco/<brain>/<case>/`），用它的评分器打分（克隆到 `data/bench/VAHBench`，独立虚拟环境；它的 LLM 抽取走 `claude -p`）。论文里的检测器没有公开，所以分数标为 partial，不能和论文直接比。
+- 报告里的 `quality_per_hour` 把 judge 总分和总耗时放在一起：渲染更久不等于更好。
+
 ## 4. 资源与内存策略（自动执行）
 
 | 情况 | 系统行为 |

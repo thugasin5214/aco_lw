@@ -21,6 +21,10 @@ dependencies = [
 [project.scripts]
 va = "video_agent.cli:app"
 
+[project.optional-dependencies]
+# aco-bench face consistency (src/video_agent/bench/faces.py): uv sync --extra bench
+bench = ["insightface>=0.7.3", "onnxruntime>=1.18", "opencv-python-headless>=4.9", "numpy"]
+
 [dependency-groups]
 dev = ["pytest", "ruff"]
 
@@ -32,4 +36,5 @@ build-backend = "hatchling.build"
 line-length = 100
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 pythonpath = ["tests"]

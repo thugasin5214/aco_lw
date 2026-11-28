@@ -354,5 +354,80 @@ def llm_cmd(
     )
 
 
+# ---- aco-bench (src/video_agent/bench) ----
+bench_app = typer.Typer(no_args_is_help=True, help="aco-bench: run story briefs and score them")
+app.add_typer(bench_app, name="bench")
+
+
+def _bench_cases_dir():
+    return config.load().data_dir / "bench" / "cases"
+
+
+@bench_app.command("cases")
+def bench_cases() -> None:
+    """List the cases (bench/cases and imported ones in data/bench/cases)."""
+    from .bench.cases import all_cases
+
+    for c in all_cases(_bench_cases_dir()):
+        t = c.target
+        typer.echo(f"{c.id:28} {c.source:9} {t.episodes}×{t.seconds_per_episode:g}s  {c.title}")
+
+
+@bench_app.command("import-vahbench")
+def bench_import() -> None:
+    """Download VAHBench's five briefs into data/bench/cases."""
+    from .bench import vahbench
+
+    for f in vahbench.import_briefs(_bench_cases_dir()):
+        typer.echo(f)
+
+
+@bench_app.command("run")
+def bench_run(
+    case: str,
+    brain: Annotated[str, typer.Option(help="local | claude_code | codex | anthropic | ...")] = "local",
+    score: Annotated[bool, typer.Option(help="score right after the run")] = True,
+    vahbench: Annotated[bool, typer.Option(help="also run the VAHBench evaluator")] = False,
+) -> None:
+    """Run one case against the running daemon (it must be up), playing the user."""
+    from .bench.cases import load as load_case
+    from .bench.runner import Runner
+
+    run_dir = Runner(load_case(case, _bench_cases_dir()), brain).run()
+    typer.echo(f"run: {run_dir}")
+    if score:
+        bench_score(run_dir.name, vahbench=vahbench)
+
+
+@bench_app.command("score")
+def bench_score(
+    run: str,
+    judge: bool = True,
+    faces: bool = True,
+    vahbench: bool = False,
+    judge_model: Annotated[str | None, typer.Option()] = None,
+) -> None:
+    """Score a run folder (data/bench/runs/RUN): metrics, faces, online judge, VAHBench."""
+    from .bench.score import score as do_score
+
+    cfg = config.load()
+    run_dir = cfg.data_dir / "bench" / "runs" / run
+    m = do_score(run_dir, cfg, judge, faces, vahbench, judge_model)
+    keep = {k: m[k] for k in ("case", "brain", "time", "loops", "self_review", "loras")}
+    keep["judge_overall"] = ((m.get("judge") or {}).get("overall") or {}).get("score")
+    typer.echo(json.dumps(keep, ensure_ascii=False, indent=2))
+
+
+@bench_app.command("report")
+def bench_report() -> None:
+    """One table over all scored runs (also written to data/bench/report.md)."""
+    from .bench.report import build
+
+    cfg = config.load()
+    _, md = build(cfg.data_dir / "bench" / "runs")
+    (cfg.data_dir / "bench" / "report.md").write_text(md + "\n")
+    typer.echo(md)
+
+
 if __name__ == "__main__":
     app()

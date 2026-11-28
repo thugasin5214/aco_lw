@@ -335,6 +335,24 @@ story-to-film:
     characters: {on_reject: wait}
 ```
 
+### 3.14 aco-bench: measure the agent end to end
+`va bench` runs a story brief through the running aco with a scripted user, then scores what was delivered and what it cost. Cases are in `bench/cases/` (six short stories: consistency, two characters, camera / dance LoRAs, continuity across places, expanding a one-line idea; most send a steering message mid-run). `va bench import-vahbench` adds VAHBench's five short-drama briefs to `data/bench/cases/`.
+
+```sh
+uv sync --extra bench                       # insightface for face consistency (model ~280 MB on first use)
+uv run va bench cases
+uv run va bench run s03-crash-zoom-reveal --brain local          # the daemon must be running
+uv run va bench run s03-crash-zoom-reveal --brain claude_code    # same case, an online brain
+uv run va bench report                       # one table: data/bench/report.md
+```
+
+- **The scripted user** approves (installs / downloads are declined), answers questions with the case's answer, approves production stages, picks candidates, and sends the case's steering messages at their moment (`first_image`, `first_video`, `seconds:N`, `stage:<id>`, `run_done`). For an online brain, `allow_online` is on only during the run; brain, permission mode and `allow_online` are restored afterwards.
+- **Measured from aco's own records**: wall / LLM / render time, render seconds per delivered second, wasted render time, memory pressure; LLM turns, tool calls, refused repeats, the same call in a row, status reads; `look` calls, renders scaled up without a check, no draft first; renders that never ran; LoRAs used and base-model mismatches, expected LoRAs hit; steering latency (first turn / first action after the message).
+- **Face consistency**: insightface (ArcFace) similarity of sampled frames to the character reference (the case's, else the first casting image) and between frames.
+- **Online judge**: Claude Code (`claude -p`, your login) reads contact sheets with the brief, the steering messages and the final report, and scores fidelity, consistency, plausibility, quality, expressiveness (1–5, 3 = usable), the must-keep list, steering compliance and honesty. Measured on one clip: about 17 s per judgment.
+- **VAHBench** (`--vahbench` on run / score): the run is exported to VAHBench's layout (`data/bench/export/aco/<brain>/<case>/`) and scored by its evaluator (cloned into `data/bench/VAHBench`, its own virtualenv; its LLM extraction goes through `claude -p`). Its paper's detectors are not public, so scores are "partial" and not comparable with the paper.
+- `quality_per_hour` in the report puts the judge's overall score next to the wall time: a longer render is not a better one.
+
 ## 4. Resources and memory policy (automatic)
 
 | Situation | What the system does |

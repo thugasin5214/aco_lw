@@ -1,0 +1,22 @@
+# Two characters who must not blend into each other in shared shots.
+id: s02-two-friends
+title: Two friends, one chess board
+brief: |
+  A 40-second film (16:9). Two old friends in their sixties play chess in a park:
+  Tomas, tall, bald, with a white beard and a green cardigan; and Ines, small, with long silver
+  hair in a braid and a red scarf. Tomas makes a move and grins; Ines studies the board, then
+  checkmates him with one move. They both laugh. Include at least one shot with both of them.
+target: {episodes: 1, seconds_per_episode: 40, aspect_ratio: "16:9"}
+characters:
+  - {name: Tomas}
+  - {name: Ines}
+expect:
+  must_keep:
+    - two people play chess in a park
+    - Tomas has a white beard and a green cardigan
+    - Ines has a silver braid and a red scarf
+    - Ines wins with one move
+    - both laugh in the same shot
+user:
+  answer: Your call — go ahead.
+limits: {hours: 4}
